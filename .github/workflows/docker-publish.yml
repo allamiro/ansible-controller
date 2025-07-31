@@ -29,12 +29,16 @@ jobs:
         with:
           images: docker.io/${{ secrets.DOCKERHUB_USERNAME }}/ansible-controller
           tags: |
+            # branch builds
             type=ref,event=branch,branch=main
-            type=ref,event=tag
+            # latest for default branch
+            type=raw,value=latest,enable={{is_default_branch}}
+            # semver fan-out on tags vX.Y.Z
+            type=semver,pattern={{version}},enable={{is_tag}}
+            type=semver,pattern={{major}}.{{minor}},enable={{is_tag}}
+            type=semver,pattern={{major}},enable={{is_tag}}
+            # commit tag
             type=sha
-          flavor: |
-            latest=auto
-
       - name: Login to Docker Hub
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
