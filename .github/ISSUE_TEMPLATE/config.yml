@@ -1,0 +1,11 @@
+mkdir -p .github/ISSUE_TEMPLATE
+cat > .github/ISSUE_TEMPLATE/config.yml <<'YAML'
+blank_issues_enabled: false
+contact_links:
+  - name: Ask a question / usage discussion
+    url: https://github.com/allamiro/ansible-controller/discussions
+    about: Use Discussions for open-ended questions or how-to help
+YAML
+git add .github/ISSUE_TEMPLATE/config.yml
+git commit -m "chore: issue template config with Discussions link"
+git push

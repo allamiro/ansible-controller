@@ -1,0 +1,21 @@
+name: Bug report
+description: File a bug
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Steps to reproduce and what you expected to happen
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Image/Tag
+      placeholder: ansible-controller:0.1.0
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      render: shell
