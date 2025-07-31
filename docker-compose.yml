@@ -1,0 +1,14 @@
+version: "3.9"
+services:
+  ansible:
+    build:
+      context: ./docker
+    container_name: ansible-controller
+    ports:
+      - "2222:22"
+    volumes:
+      - ./configs:/configs:rw           # user cfg + inventory + playbooks
+      - ./logs:/var/log/ansible:rw      # ansible logs
+      - ./ssh/authorized_keys:/home/ansible/.ssh/authorized_keys:ro
+    tty: true
+    stdin_open: true
