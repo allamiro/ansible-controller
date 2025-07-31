@@ -13,11 +13,6 @@ RUN printf 'Defaults:ansible !requiretty\nansible ALL=(ALL) NOPASSWD: ALL\n' > /
  && chmod 440 /etc/sudoers.d/99-ansible
 
 RUN ssh-keygen -A
-
-# Image default cfg (used only if no host cfg is mounted)
-COPY ./ansible.cfg /etc/ansible/ansible.cfg
-RUN chown -R ansible:ansible /etc/ansible
-
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
