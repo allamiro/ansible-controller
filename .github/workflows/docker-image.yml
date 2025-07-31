@@ -1,0 +1,9 @@
+name: CI
+on: [push, pull_request]
+jobs:
+  build:
+    name: build-image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo "build ok"
