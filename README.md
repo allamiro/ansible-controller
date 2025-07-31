@@ -1,3 +1,5 @@
+[![Build](https://github.com/allamiro/ansible-controller/actions/workflows/docker-publish.yml/badge.svg?branch=main)](https://github.com/allamiro/ansible-controller/actions/workflows/docker-publish.yml)
+
 # Ansible Controller (Docker)
 
 Ubuntu-based Docker image for running Ansible playbooks with support for SSH, sudo, and external inventory mounts.
