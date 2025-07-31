@@ -3,9 +3,10 @@ name: Build & Publish (Docker Hub)
 on:
   push:
     branches: [ "main" ]
-    tags: [ "v*.*.*" ]   # publish versioned tags
+    tags: [ "v*.*.*" ]
   pull_request:
     branches: [ "main" ]
+  workflow_dispatch: {}
 
 jobs:
   docker:
@@ -14,31 +15,24 @@ jobs:
       contents: read
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up QEMU (multi-arch)
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
 
       - name: Docker metadata (tags, labels)
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: docker.io/${{ secrets.DOCKERHUB_USERNAME }}/ansible-controller
+          flavor: |
+            latest=auto
           tags: |
-            # branch builds
             type=ref,event=branch,branch=main
-            # latest for default branch
-            type=raw,value=latest,enable={{is_default_branch}}
-            # semver fan-out on tags vX.Y.Z
-            type=semver,pattern={{version}},enable={{is_tag}}
-            type=semver,pattern={{major}}.{{minor}},enable={{is_tag}}
-            type=semver,pattern={{major}},enable={{is_tag}}
-            # commit tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
             type=sha
+
       - name: Login to Docker Hub
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
@@ -50,7 +44,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ./docker/Dockerfile     
+          file: ./docker/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
