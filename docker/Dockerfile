@@ -6,7 +6,7 @@ LABEL org.opencontainers.image.authors="Tamir Suliman <tsuliman@linuxvaults.com>
 RUN apt-get  update 
 RUN apt-get  upgrade -y
 RUN apt-get install ansible -y
-RUN apt-get install net-tools tcpdump openssh-server git vim nano openssh-* python3-pip git sudo -y
+RUN apt-get install openssh-server git vim python3-pip python3 sudo -y
 
 # ---- user, dirs, ssh host keys ----
 RUN useradd -u 1000 -m -s /bin/bash ansible \
