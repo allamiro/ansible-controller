@@ -84,3 +84,6 @@ ansible-playbook /control/playbooks/site.yml
 * The ansible user exists inside the container; add more users only if you extend the entrypoint.
 
 * ```PermitRootLogin no```, key-only auth via mounted ```ssh/authorized_keys```.
+
+## Dockerhub Image
+* https://hub.docker.com/r/allamiro1/ansible-controller
