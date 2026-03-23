@@ -24,14 +24,13 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: docker.io/${{ secrets.DOCKERHUB_USERNAME }}/ansible-controller
-          flavor: |
-            latest=auto
           tags: |
-            type=ref,event=branch,branch=main
+            type=ref,event=branch
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=sha-
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-            type=sha
 
       - name: Login to Docker Hub
         if: github.event_name != 'pull_request'
