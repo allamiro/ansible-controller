@@ -3,10 +3,16 @@ LABEL org.opencontainers.image.title="Ansible Controller"
 LABEL org.opencontainers.image.authors="Tamir Suliman <tsuliman@linuxvaults.com>"
 
 # ---- packages ----
-RUN apt-get  update 
-RUN apt-get  upgrade -y
-RUN apt-get install ansible -y
-RUN apt-get install openssh-server git vim python3-pip python3 sudo -y
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      ansible \
+      openssh-server \
+      git \
+      vim \
+      python3 \
+      python3-pip \
+      sudo \
+ && rm -rf /var/lib/apt/lists/*
 
 # ---- user, dirs, ssh host keys ----
 RUN useradd -u 1000 -m -s /bin/bash ansible \
