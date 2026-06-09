@@ -78,61 +78,98 @@ Host machine                        Container
     id_ed25519                        id_ed25519  (used to reach remote hosts)
 ```
 
-Add your playbook directory to `docker-compose.yml` under `volumes`:
-
-```yaml
-volumes:
-  - ./configs:/configs:rw               # ansible.cfg and inventory
-  - ./playbooks:/configs/playbooks:ro   # your playbooks and roles
-  - ./logs:/var/log/ansible:rw
-  - ./ssh:/home/ansible/.ssh:ro
-```
+The `docker-compose.yml` included in the repo already has all four mounts configured. If you add playbooks outside the `playbooks/` directory, add an extra volume entry for that path.
 
 ---
 
 ## Quick start
 
-### 1 — Prepare host directories
+### 1 — Clone the repo
 
 ```bash
-mkdir -p configs/inventory logs ssh
-
-# Place your SSH public key
-cp ~/.ssh/id_ed25519.pub ssh/authorized_keys
-
-# Required permissions (OpenSSH StrictModes)
-chmod 700 ssh
-chmod 600 ssh/authorized_keys
+git clone https://github.com/allamiro/ansible-controller.git
+cd ansible-controller
 ```
 
-### 2 — Start with Docker Compose
+The repo already includes the full directory structure, `docker-compose.yml`, `ansible.cfg`, and example playbooks in `playbooks/`. Nothing to create manually.
+
+### 2 — Add your servers to the inventory
+
+```bash
+# Edit configs/inventory/hosts.ini and list your servers
+cat > configs/inventory/hosts.ini << 'EOF'
+[all]
+192.168.1.10
+192.168.1.11
+192.168.1.12
+
+[webservers]
+192.168.1.10
+192.168.1.11
+
+[databases]
+192.168.1.12
+EOF
+```
+
+### 3 — Generate an SSH key and copy it to your servers
+
+```bash
+# Generate a key pair into ssh/
+ssh-keygen -t ed25519 -C "ansible-controller" -f ssh/id_ed25519 -N ""
+chmod 600 ssh/id_ed25519
+
+# Copy the public key to every server
+ssh-copy-id -i ssh/id_ed25519.pub user@192.168.1.10
+ssh-copy-id -i ssh/id_ed25519.pub user@192.168.1.11
+ssh-copy-id -i ssh/id_ed25519.pub user@192.168.1.12
+```
+
+### 4 — Start the container
 
 ```bash
 docker compose up -d
 ```
 
-### 3 — Run a playbook
+### 5 — Test connectivity
 
 ```bash
-# Via Makefile
-make run PLAYBOOK=site.yml
-
-# Or directly
-docker exec -it ansible-controller ansible-playbook /configs/playbooks/site.yml
+# Run the included ping playbook against all servers
+docker exec -it ansible-controller \
+  ansible-playbook /configs/playbooks/ping.yml
 ```
 
-### 4 — Open a shell
+All hosts should return `pong`. If they do, Ansible can reach your servers.
+
+### 6 — Add your own playbooks and run them
+
+Drop your playbooks into the `playbooks/` directory on the host:
+
+```bash
+# Example: create a simple playbook
+cat > playbooks/deploy.yml << 'EOF'
+---
+- name: Deploy application
+  hosts: webservers
+  tasks:
+    - name: Ensure nginx is installed
+      ansible.builtin.apt:
+        name: nginx
+        state: present
+      become: true
+EOF
+
+# Run it
+docker exec -it ansible-controller \
+  ansible-playbook /configs/playbooks/deploy.yml
+```
+
+### 7 — Open a shell inside the container (optional)
 
 ```bash
 make shell
 # or
 docker exec -it ansible-controller bash
-```
-
-### 5 — SSH in (optional)
-
-```bash
-ssh -p 2222 ansible@localhost
 ```
 
 ---
