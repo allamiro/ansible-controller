@@ -4,6 +4,10 @@
 
 # Ansible Controller (Docker)
 
+<p align="center">
+  <img src="assets/ansible-controller.png" alt="Ansible Controller" width="400"/>
+</p>
+
 Ubuntu 24.04-based Docker image for running Ansible playbooks with support for SSH, sudo, and external inventory mounts.
 
 ## Pull the image
