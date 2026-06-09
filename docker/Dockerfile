@@ -2,6 +2,8 @@ FROM ubuntu:22.04
 LABEL org.opencontainers.image.title="Ansible Controller"
 LABEL org.opencontainers.image.authors="Tamir Suliman <tsuliman@linuxvaults.com>"
 
+ENV DEBIAN_FRONTEND=noninteractive
+
 # ---- packages ----
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
