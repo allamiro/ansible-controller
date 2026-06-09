@@ -1,0 +1,18 @@
+# Ansible cache — persisted on host via volume mount, not tracked in git
+configs/.facts_cache/*
+!configs/.facts_cache/.gitkeep
+configs/.inventory_cache/*
+!configs/.inventory_cache/.gitkeep
+
+# Ansible logs
+logs/*
+!logs/.gitkeep
+
+# SSH keys — never commit private keys
+ssh/id_*
+ssh/authorized_keys
+
+# Python
+__pycache__/
+*.pyc
+.venv/
