@@ -2,34 +2,91 @@
 [![Build & Publish](https://github.com/allamiro/ansible-controller/actions/workflows/docker-publish.yml/badge.svg?branch=main)](https://github.com/allamiro/ansible-controller/actions/workflows/docker-publish.yml)
 [![Last commit](https://img.shields.io/github/last-commit/allamiro/ansible-controller)](https://github.com/allamiro/ansible-controller)
 
-# Ansible Controller (Docker)
+<div align="center">
+  <img src="assets/ansible-controller.png" alt="Ansible Controller" width="350"/>
+  <h1>Ansible Controller</h1>
+  <p><strong>Run Ansible playbooks from any machine — no local Ansible installation required.</strong></p>
 
-<p align="center">
-  <img src="assets/ansible-controller.png" alt="Ansible Controller" width="400"/>
-</p>
+  [![Docker Pulls](https://img.shields.io/docker/pulls/allamiro1/ansible-controller)](https://hub.docker.com/r/allamiro1/ansible-controller)
+  [![Image Size](https://img.shields.io/docker/image-size/allamiro1/ansible-controller/latest)](https://hub.docker.com/r/allamiro1/ansible-controller)
+  [![License](https://img.shields.io/github/license/allamiro/ansible-controller)](LICENSE)
+  [![Latest Release](https://img.shields.io/github/v/release/allamiro/ansible-controller)](https://github.com/allamiro/ansible-controller/releases)
+</div>
 
-Ubuntu 24.04-based Docker image for running Ansible playbooks with support for SSH, sudo, and external inventory mounts.
+---
 
-## Pull the image
+Ubuntu 24.04-based Docker image that packages Ansible, OpenSSH, and everything needed to manage remote infrastructure. Write your playbooks on the host, mount them into the container, and run — no need to install Ansible locally.
 
-**Docker Hub**
-```bash
-docker pull allamiro1/ansible-controller:latest
+## Features
+
+- **Zero local dependencies** — only Docker required on the host
+- **SSH built-in** — connect into the controller or out to managed hosts
+- **Mount-based workflow** — playbooks, inventory, and SSH keys live on the host; no rebuild needed to change them
+- **Multi-platform** — ships `linux/amd64` and `linux/arm64` (Apple Silicon, AWS Graviton)
+- **Auto-versioned** — every push to `main` is automatically tagged via conventional commits
+- **Published to two registries** — Docker Hub and GitHub Container Registry (GHCR)
+- **Security hardened** — non-root `ansible` user, `PermitRootLogin no`, pip-upgraded CVE packages
+
+---
+
+## Table of Contents
+
+- [Prerequisites](#prerequisites)
+- [How it works](#how-it-works)
+- [Quick start](#quick-start)
+- [Pull the image](#pull-the-image)
+- [Makefile targets](#makefile-targets)
+- [Running playbooks](#running-playbooks)
+- [Ad-hoc commands](#ad-hoc-commands)
+- [Build from source](#build-from-source)
+- [Run with Docker (manual)](#run-with-docker-manual)
+- [Dynamic inventory](#dynamic-inventory)
+- [SSH keys for managed hosts](#ssh-keys-for-managed-hosts)
+- [SSH agent forwarding](#ssh-agent-forwarding-optional)
+- [Logs](#logs)
+- [Versioning and releases](#versioning-and-releases)
+- [Contributing](#contributing)
+- [License](#license)
+- [Notes](#notes)
+
+---
+
+## Prerequisites
+
+| Requirement | Minimum version | Notes |
+|-------------|----------------|-------|
+| Docker Engine | 20.10+ | [Install guide](https://docs.docker.com/engine/install/) |
+| Docker Compose | V2 (`docker compose`) | Included with Docker Desktop |
+
+No other tools required. Ansible runs entirely inside the container.
+
+---
+
+## How it works
+
+You write and store your playbooks on your host machine. The container provides Ansible and SSH. You mount your playbook directory into the container and tell Ansible where to find it.
+
+```
+Host machine                        Container
+──────────────────────────────      ────────────────────────────────
+~/my-project/
+  playbooks/        ──mount──→      /configs/
+    site.yml                          playbooks/site.yml
+    roles/                            roles/
+  inventory/        ──mount──→        inventory/hosts.ini
+  ssh/              ──mount──→      /home/ansible/.ssh/
+    id_ed25519                        id_ed25519  (used to reach remote hosts)
 ```
 
-**GitHub Container Registry (GHCR)**
-```bash
-docker pull ghcr.io/allamiro/ansible-controller:latest
+Add your playbook directory to `docker-compose.yml` under `volumes`:
+
+```yaml
+volumes:
+  - ./configs:/configs:rw               # ansible.cfg and inventory
+  - ./playbooks:/configs/playbooks:ro   # your playbooks and roles
+  - ./logs:/var/log/ansible:rw
+  - ./ssh:/home/ansible/.ssh:ro
 ```
-
-### Image tags
-
-| Tag | Description |
-|-----|-------------|
-| `latest` | Most recent successful build from `main` |
-| `sha-XXXXXXX` | Immutable pointer to a specific commit — use for pinned/reproducible deployments |
-| `v1.2.3` | Semantic version — published when a `v*` git tag is pushed |
-| `main` | Tracks the `main` branch |
 
 ---
 
@@ -61,7 +118,7 @@ docker compose up -d
 make run PLAYBOOK=site.yml
 
 # Or directly
-docker exec -it ansible-controller ansible-playbook /configs/site.yml
+docker exec -it ansible-controller ansible-playbook /configs/playbooks/site.yml
 ```
 
 ### 4 — Open a shell
@@ -80,46 +137,39 @@ ssh -p 2222 ansible@localhost
 
 ---
 
+## Pull the image
+
+**Docker Hub**
+```bash
+docker pull allamiro1/ansible-controller:latest
+```
+
+**GitHub Container Registry (GHCR)**
+```bash
+docker pull ghcr.io/allamiro/ansible-controller:latest
+```
+
+### Image tags
+
+| Tag | Description |
+|-----|-------------|
+| `latest` | Most recent successful build from `main` |
+| `sha-XXXXXXX` | Immutable pointer to a specific commit — use for pinned/reproducible deployments |
+| `v1.2.3` | Semantic version — published when a `v*` git tag is pushed |
+| `main` | Tracks the `main` branch |
+
+---
+
 ## Makefile targets
 
 | Target | Description |
 |--------|-------------|
-| `make build` | Build the Docker image |
+| `make build` | Build the Docker image locally |
 | `make up` | Start the container in the background |
 | `make down` | Stop and remove the container |
 | `make shell` | Open an interactive bash shell inside the container |
 | `make run PLAYBOOK=site.yml` | Run an Ansible playbook |
 | `make logs` | Tail container logs |
-
----
-
-## How this works — no Ansible installation needed
-
-You write and store your playbooks on your host machine. The container provides Ansible and SSH. You mount your playbook directory into the container and tell Ansible where to find it.
-
-```
-Host machine                        Container
-──────────────────────────────      ────────────────────────────────
-~/my-project/
-  playbooks/        ──mount──→      /configs/
-    site.yml                          playbooks/site.yml
-    roles/                            roles/
-  inventory/        ──mount──→        inventory/hosts.ini
-  ssh/              ──mount──→      /home/ansible/.ssh/
-    id_ed25519                        id_ed25519  (used to reach remote hosts)
-```
-
-Add your playbook directory to `docker-compose.yml` under `volumes`:
-
-```yaml
-volumes:
-  - ./configs:/configs:rw          # ansible.cfg and inventory
-  - ./playbooks:/configs/playbooks:ro   # your playbooks and roles
-  - ./logs:/var/log/ansible:rw
-  - ./ssh:/home/ansible/.ssh:ro
-```
-
-Or if your playbooks already live inside `configs/`, no change needed.
 
 ---
 
@@ -171,12 +221,11 @@ docker exec -it ansible-controller \
 Roles must be reachable from inside the container. If your project layout is:
 
 ```
-configs/
-  playbooks/
-    site.yml
-    roles/
-      webserver/
-      database/
+playbooks/
+  site.yml
+  roles/
+    webserver/
+    database/
 ```
 
 They are already available at `/configs/playbooks/roles/` inside the container. Reference them normally in your playbook:
@@ -188,7 +237,7 @@ They are already available at `/configs/playbooks/roles/` inside the container. 
     - database
 ```
 
-Or if roles live in a separate directory, mount them and set `roles_path` in `ansible.cfg`:
+If roles live in a separate directory, mount them and set `roles_path` in `configs/ansible.cfg`:
 
 ```ini
 [defaults]
@@ -255,6 +304,7 @@ docker build -t ansible-controller:local -f docker/Dockerfile .
 docker run -d --name ansible-controller \
   -p 2222:22 \
   -v "$PWD/configs":/configs:rw \
+  -v "$PWD/playbooks":/configs/playbooks:ro \
   -v "$PWD/logs":/var/log/ansible:rw \
   -v "$PWD/ssh":/home/ansible/.ssh:ro \
   ansible-controller:latest
@@ -284,7 +334,8 @@ A dynamic inventory script is included at `configs/inventory/inventory.py`. It r
 
 **Use it:**
 ```bash
-ansible-playbook -i /configs/inventory/inventory.py /configs/site.yml
+docker exec -it ansible-controller \
+  ansible-playbook -i /configs/inventory/inventory.py /configs/playbooks/site.yml
 ```
 
 ---
@@ -328,11 +379,25 @@ environment:
   - SSH_AUTH_SOCK=/run/host-services/ssh-auth.sock
 ```
 
+Make sure your key is loaded on the host first:
+
+```bash
+ssh-add ~/.ssh/id_ed25519
+```
+
 ---
 
 ## Logs
 
 Ansible logs are written to `/var/log/ansible/ansible.log` inside the container and persisted to `./logs/ansible.log` on the host via the volume mount.
+
+```bash
+# Tail logs from the host
+tail -f logs/ansible.log
+
+# Or from inside the container
+docker exec -it ansible-controller tail -f /var/log/ansible/ansible.log
+```
 
 ---
 
@@ -346,9 +411,28 @@ Every push to `main` is automatically tagged based on [conventional commit](http
 | `feat:` | minor | `v1.0.0` → `v1.1.0` |
 | `feat!:` / `BREAKING CHANGE` | major | `v1.0.0` → `v2.0.0` |
 
-The new git tag then triggers the publish workflow which:
+The new git tag triggers the publish workflow which:
 - Builds and pushes `v1.2.3`, `v1.2`, `v1`, `latest` tags to both Docker Hub and GHCR
 - Creates a GitHub Release with auto-generated changelog
+
+---
+
+## Contributing
+
+Contributions are welcome. Please open an issue before submitting a pull request so the change can be discussed first.
+
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feat/my-feature`
+3. Commit using [conventional commits](https://www.conventionalcommits.org/): `feat:`, `fix:`, `docs:` etc.
+4. Push and open a pull request against `main`
+
+Bug reports, feature requests, and documentation improvements are all appreciated.
+
+---
+
+## License
+
+This project is licensed under the [Apache License 2.0](LICENSE).
 
 ---
 
@@ -362,7 +446,6 @@ The new git tag then triggers the publish workflow which:
 
 ---
 
-## Links
-
-- Docker Hub: https://hub.docker.com/r/allamiro1/ansible-controller
-- GHCR: https://ghcr.io/allamiro/ansible-controller
+<div align="center">
+  <sub>Built with care · <a href="https://hub.docker.com/r/allamiro1/ansible-controller">Docker Hub</a> · <a href="https://ghcr.io/allamiro/ansible-controller">GHCR</a></sub>
+</div>
