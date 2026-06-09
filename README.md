@@ -178,6 +178,7 @@ The new git tag then triggers the publish workflow which:
 
 ## Notes
 
+- **Base image:** Ubuntu 24.04 LTS (Noble Numbat) — standard security support until April 2029, extended to 2034 with Ubuntu Pro.
 - If `configs/ansible.cfg` exists on the host it is used automatically; otherwise the image default applies.
 - The `ansible` user (uid 1000) is the only user inside the container. `PermitRootLogin no` is enforced.
 - SSH host keys are generated at image build time (`ssh-keygen -A`).
