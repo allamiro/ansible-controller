@@ -38,7 +38,7 @@ jobs:
 
       - name: Docker metadata (tags, labels)
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: |
             docker.io/${{ secrets.DOCKERHUB_USERNAME }}/ansible-controller
