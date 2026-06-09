@@ -1,9 +1,57 @@
 name: CI
-on: [push, pull_request]
+
+on:
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "docker/**"
+      - "docker-compose.yml"
+      - ".github/workflows/docker-image.yml"
+  push:
+    branches: ["main"]
+    paths:
+      - "docker/**"
+      - "docker-compose.yml"
+
 jobs:
-  build:
-    name: build-image
+  lint:
+    name: Lint Dockerfile
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
-      - run: echo "build ok"
+      - uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: docker/Dockerfile
+          failure-threshold: error
+
+  build-and-test:
+    name: Build and smoke-test (amd64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: lint
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./docker/Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: ansible-controller:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Smoke test
+        run: |
+          docker run -d --name ci-smoke ansible-controller:ci
+          sleep 5
+          docker exec ci-smoke ansible --version
+          docker exec ci-smoke pgrep sshd
+          docker rm -f ci-smoke
