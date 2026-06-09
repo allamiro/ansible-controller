@@ -3,14 +3,36 @@ description: Propose an idea
 labels: [enhancement]
 body:
   - type: textarea
+    id: use-case
+    attributes:
+      label: Use case / motivation
+      description: What workflow or problem drives this request?
+    validations:
+      required: true
+
+  - type: textarea
     id: problem
     attributes:
       label: Problem to solve
+      description: What is currently missing or not working well?
     validations:
       required: true
+
   - type: textarea
     id: proposal
     attributes:
       label: Proposed solution
-      description: CLI flags, env vars, examples, etc.
-      placeholder: Describe how the image or entrypoint would change
+      description: How would you like to see this implemented? Volume mounts, env vars, entrypoint changes, new files, etc.
+      placeholder: Describe the change you would like to see
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What other approaches did you consider, and why did you rule them out?
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Screenshots, diagrams, links to related issues or docs
