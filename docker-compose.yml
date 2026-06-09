@@ -2,13 +2,14 @@ version: "3.9"
 services:
   ansible:
     build:
-      context: ./docker
+      context: .
+      dockerfile: docker/Dockerfile
     container_name: ansible-controller
     ports:
       - "2222:22"
     volumes:
       - ./configs:/configs:rw           # user cfg + inventory + playbooks
       - ./logs:/var/log/ansible:rw      # ansible logs
-      - ./ssh/authorized_keys:/home/ansible/.ssh/authorized_keys:ro
+      - ./ssh:/home/ansible/.ssh:ro     # entire .ssh dir; host must: chmod 700 ./ssh && chmod 600 ./ssh/authorized_keys
     tty: true
     stdin_open: true
