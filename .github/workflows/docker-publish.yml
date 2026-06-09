@@ -71,7 +71,7 @@ jobs:
 
       - name: Scan published image for CVEs (Trivy)
         if: github.event_name != 'pull_request'
-        uses: aquasecurity/trivy-action@v0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: docker.io/${{ secrets.DOCKERHUB_USERNAME }}/ansible-controller@${{ steps.build.outputs.digest }}
           format: table
