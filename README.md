@@ -119,10 +119,13 @@ EOF
 ssh-keygen -t ed25519 -C "ansible-controller" -f ssh/id_ed25519 -N ""
 chmod 600 ssh/id_ed25519
 
-# Copy the public key to every server
-ssh-copy-id -i ssh/id_ed25519.pub user@192.168.1.10
-ssh-copy-id -i ssh/id_ed25519.pub user@192.168.1.11
-ssh-copy-id -i ssh/id_ed25519.pub user@192.168.1.12
+# Copy the public key to every unique host in the inventory
+for host in $(grep -v '^\[' configs/inventory/hosts.ini \
+             | grep -v '^#' \
+             | grep -v '^$' \
+             | sort -u); do
+  ssh-copy-id -i ssh/id_ed25519.pub user@$host
+done
 ```
 
 ### 4 — Start the container
