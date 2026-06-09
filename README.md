@@ -141,6 +141,34 @@ ansible-playbook -i /configs/inventory/inventory.py /configs/site.yml
 
 ---
 
+## SSH keys for managed hosts
+
+To allow the controller to connect passwordlessly to your managed servers, generate a key pair on the host and let the container pick it up via the volume mount.
+
+```bash
+# Generate the key pair into the ssh/ directory
+ssh-keygen -t ed25519 -C "ansible-controller" -f ssh/id_ed25519 -N ""
+chmod 600 ssh/id_ed25519
+```
+
+Copy the public key to every server you want Ansible to manage:
+
+```bash
+ssh-copy-id -i ssh/id_ed25519.pub user@server1
+ssh-copy-id -i ssh/id_ed25519.pub user@server2
+```
+
+Tell Ansible to use the key by adding this to `configs/ansible.cfg`:
+
+```ini
+[defaults]
+private_key_file = /home/ansible/.ssh/id_ed25519
+```
+
+The private key is available inside the container at `/home/ansible/.ssh/id_ed25519` via the volume mount. Restart the container after adding the key if it was already running.
+
+---
+
 ## SSH agent forwarding (optional)
 
 To use your host SSH keys inside the container without copying them to disk, uncomment the volume and environment entries in `docker-compose.yml`:
