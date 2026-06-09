@@ -27,7 +27,7 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # Skip QEMU on PRs — amd64-only build is sufficient for validation
       - uses: docker/setup-qemu-action@v3
