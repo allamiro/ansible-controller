@@ -1,0 +1,19 @@
+---
+# Connectivity test — run this first to verify Ansible can reach all hosts
+#
+# Usage:
+#   docker exec -it ansible-controller ansible-playbook /configs/playbooks/ping.yml
+#   docker exec -it ansible-controller ansible-playbook /configs/playbooks/ping.yml --limit webservers
+#   docker exec -it ansible-controller ansible-playbook /configs/playbooks/ping.yml -u deploy
+
+- name: Connectivity test
+  hosts: all
+  gather_facts: false
+
+  tasks:
+    - name: Ping all hosts
+      ansible.builtin.ping:
+
+    - name: Print host info
+      ansible.builtin.debug:
+        msg: "Reached {{ inventory_hostname }} ({{ ansible_host | default(inventory_hostname) }})"

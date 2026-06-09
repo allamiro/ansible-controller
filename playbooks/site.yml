@@ -1,0 +1,11 @@
+---
+# Main site playbook — import all plays in order
+# Add your own playbooks below following the same pattern
+#
+# Usage:
+#   docker exec -it ansible-controller ansible-playbook /configs/playbooks/site.yml
+#   docker exec -it ansible-controller ansible-playbook /configs/playbooks/site.yml --limit webservers
+#   docker exec -it ansible-controller ansible-playbook /configs/playbooks/site.yml -u deploy -e "env=production"
+
+- name: Verify connectivity
+  import_playbook: ping.yml

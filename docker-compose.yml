@@ -1,4 +1,3 @@
-version: "3.9"
 services:
   ansible:
     build:
@@ -8,9 +7,10 @@ services:
     ports:
       - "2222:22"
     volumes:
-      - ./configs:/configs:rw           # user cfg + inventory + playbooks
-      - ./logs:/var/log/ansible:rw      # ansible logs
-      - ./ssh:/home/ansible/.ssh:ro     # entire .ssh dir; host must: chmod 700 ./ssh && chmod 600 ./ssh/authorized_keys
+      - ./configs:/configs:rw              # ansible.cfg and inventory
+      - ./playbooks:/configs/playbooks:ro  # playbooks and roles (host-managed)
+      - ./logs:/var/log/ansible:rw         # ansible logs
+      - ./ssh:/home/ansible/.ssh:ro        # SSH keys; host must: chmod 700 ./ssh && chmod 600 ./ssh/authorized_keys
       # SSH agent forwarding (optional): set SSH_AUTH_SOCK on the host then uncomment below
       # - ${SSH_AUTH_SOCK}:/run/host-services/ssh-auth.sock
     # environment:
