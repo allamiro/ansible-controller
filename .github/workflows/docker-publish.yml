@@ -2,21 +2,37 @@ name: Build & Publish (Docker Hub)
 
 on:
   push:
-    branches: [ "main" ]
-    tags: [ "v*.*.*" ]
+    branches: ["main"]
+    tags: ["v*.*.*"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
   workflow_dispatch: {}
 
 jobs:
   docker:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
 
     steps:
+      - name: Validate required secrets
+        if: github.event_name != 'pull_request'
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -z "$DOCKERHUB_USERNAME" ] || [ -z "$DOCKERHUB_TOKEN" ]; then
+            echo "::error::DOCKERHUB_USERNAME or DOCKERHUB_TOKEN secret is not configured"
+            exit 1
+          fi
+
       - uses: actions/checkout@v4
+
+      # Skip QEMU on PRs — amd64-only build is sufficient for validation
       - uses: docker/setup-qemu-action@v3
+        if: github.event_name != 'pull_request'
+
       - uses: docker/setup-buildx-action@v3
 
       - name: Docker metadata (tags, labels)
@@ -40,13 +56,25 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./docker/Dockerfile
-          platforms: linux/amd64,linux/arm64
+          # Full multi-platform only on push/tag; amd64-only on PRs saves ~2 min
+          platforms: ${{ github.event_name != 'pull_request' && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Scan published image for CVEs (Trivy)
+        if: github.event_name != 'pull_request'
+        uses: aquasecurity/trivy-action@v0.28.0
+        with:
+          image-ref: docker.io/${{ secrets.DOCKERHUB_USERNAME }}/ansible-controller@${{ steps.build.outputs.digest }}
+          format: table
+          exit-code: 0
+          severity: CRITICAL,HIGH
+          timeout: 10m0s
