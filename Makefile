@@ -1,16 +1,23 @@
 IMAGE ?= ansible-controller:latest
+PLAYBOOK ?= site.yml
 
 build:
-\tdocker compose build
+	docker compose build
 
 up:
-\tdocker compose up -d
+	docker compose up -d
 
 down:
-\tdocker compose down
+	docker compose down
 
-sh:
-\tdocker exec -it ansible-controller bash
+shell:
+	docker exec -it ansible-controller bash
+
+# Drop into the container (alias kept for backward compat)
+sh: shell
+
+run:
+	docker exec -it ansible-controller ansible-playbook /configs/$(PLAYBOOK)
 
 logs:
-\tdocker logs -f ansible-controller
+	docker logs -f ansible-controller

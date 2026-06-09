@@ -27,5 +27,7 @@ RUN ssh-keygen -A
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD bash -c 'exec 6<>/dev/tcp/127.0.0.1/22'
+
 EXPOSE 22
 CMD ["/usr/local/bin/entrypoint.sh"]
