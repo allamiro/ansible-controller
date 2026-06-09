@@ -16,6 +16,19 @@ RUN apt-get update \
       sudo \
  && rm -rf /var/lib/apt/lists/*
 
+# ---- upgrade vulnerable Python packages pulled in by apt ----
+# apt pins these to old Ubuntu 22.04 versions with known HIGH CVEs.
+# Upgrading via pip gets current patched releases while keeping apt's
+# Ansible install intact.
+RUN pip3 install --upgrade --no-cache-dir \
+      pip \
+      setuptools \
+      wheel \
+      cryptography \
+      babel \
+      pycryptodome \
+      jinja2
+
 # ---- user, dirs, ssh host keys ----
 RUN useradd -u 1000 -m -s /bin/bash ansible \
  && mkdir -p /home/ansible/.ssh /configs /var/log/ansible /var/run/sshd \
