@@ -89,40 +89,106 @@ ssh -p 2222 ansible@localhost
 
 ---
 
+## How this works — no Ansible installation needed
+
+You write and store your playbooks on your host machine. The container provides Ansible and SSH. You mount your playbook directory into the container and tell Ansible where to find it.
+
+```
+Host machine                        Container
+──────────────────────────────      ────────────────────────────────
+~/my-project/
+  playbooks/        ──mount──→      /configs/
+    site.yml                          playbooks/site.yml
+    roles/                            roles/
+  inventory/        ──mount──→        inventory/hosts.ini
+  ssh/              ──mount──→      /home/ansible/.ssh/
+    id_ed25519                        id_ed25519  (used to reach remote hosts)
+```
+
+Add your playbook directory to `docker-compose.yml` under `volumes`:
+
+```yaml
+volumes:
+  - ./configs:/configs:rw          # ansible.cfg and inventory
+  - ./playbooks:/configs/playbooks:ro   # your playbooks and roles
+  - ./logs:/var/log/ansible:rw
+  - ./ssh:/home/ansible/.ssh:ro
+```
+
+Or if your playbooks already live inside `configs/`, no change needed.
+
+---
+
 ## Running playbooks
 
 ```bash
-# Basic run
-docker exec -it ansible-controller ansible-playbook /configs/site.yml
+# Basic run against the default inventory in ansible.cfg
+docker exec -it ansible-controller \
+  ansible-playbook /configs/playbooks/site.yml
 
-# Specific inventory file
-docker exec -it ansible-controller ansible-playbook \
-  -i /configs/inventory/hosts.ini /configs/site.yml
+# Specify a user to connect as on the remote hosts
+docker exec -it ansible-controller \
+  ansible-playbook /configs/playbooks/site.yml -u deploy
 
-# Dynamic inventory
-docker exec -it ansible-controller ansible-playbook \
-  -i /configs/inventory/inventory.py /configs/site.yml
+# Specify a different inventory file
+docker exec -it ansible-controller \
+  ansible-playbook /configs/playbooks/site.yml \
+  -i /configs/inventory/hosts.ini
 
-# Limit to a specific host or group
-docker exec -it ansible-controller ansible-playbook /configs/site.yml \
-  --limit webservers
+# Run against a single host
+docker exec -it ansible-controller \
+  ansible-playbook /configs/playbooks/site.yml \
+  -i "192.168.1.10," -u deploy
+
+# Limit to a specific group or host from inventory
+docker exec -it ansible-controller \
+  ansible-playbook /configs/playbooks/site.yml --limit webservers
 
 # Pass extra variables
-docker exec -it ansible-controller ansible-playbook /configs/site.yml \
+docker exec -it ansible-controller \
+  ansible-playbook /configs/playbooks/site.yml \
   -e "env=production version=1.2.3"
 
 # Run only tasks with specific tags
-docker exec -it ansible-controller ansible-playbook /configs/site.yml \
-  --tags "install,configure"
+docker exec -it ansible-controller \
+  ansible-playbook /configs/playbooks/site.yml --tags "install,configure"
 
 # Dry run — show what would change without applying it
-docker exec -it ansible-controller ansible-playbook /configs/site.yml --check
+docker exec -it ansible-controller \
+  ansible-playbook /configs/playbooks/site.yml --check --diff
 
-# Dry run with diff — show file content changes
-docker exec -it ansible-controller ansible-playbook /configs/site.yml --check --diff
+# Increase verbosity for troubleshooting
+docker exec -it ansible-controller \
+  ansible-playbook /configs/playbooks/site.yml -vv
+```
 
-# Increase verbosity (-v through -vvvv)
-docker exec -it ansible-controller ansible-playbook /configs/site.yml -v
+### With roles
+
+Roles must be reachable from inside the container. If your project layout is:
+
+```
+configs/
+  playbooks/
+    site.yml
+    roles/
+      webserver/
+      database/
+```
+
+They are already available at `/configs/playbooks/roles/` inside the container. Reference them normally in your playbook:
+
+```yaml
+- hosts: webservers
+  roles:
+    - webserver
+    - database
+```
+
+Or if roles live in a separate directory, mount them and set `roles_path` in `ansible.cfg`:
+
+```ini
+[defaults]
+roles_path = /configs/roles:/configs/playbooks/roles
 ```
 
 ---
