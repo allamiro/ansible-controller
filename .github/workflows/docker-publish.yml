@@ -1,4 +1,4 @@
-name: Build & Publish (Docker Hub)
+name: Build & Publish (Docker Hub + GHCR)
 
 on:
   push:
@@ -14,6 +14,7 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+      packages: write   # required to push to ghcr.io
 
     steps:
       - name: Validate required secrets
@@ -39,7 +40,9 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: docker.io/${{ secrets.DOCKERHUB_USERNAME }}/ansible-controller
+          images: |
+            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/ansible-controller
+            ghcr.io/${{ github.repository_owner }}/ansible-controller
           tags: |
             type=ref,event=branch
             type=raw,value=latest,enable={{is_default_branch}}
@@ -54,6 +57,14 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Login to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push
         id: build
