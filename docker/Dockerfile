@@ -31,7 +31,9 @@ RUN pip3 install --upgrade --no-cache-dir --break-system-packages --ignore-insta
       jinja2
 
 # ---- user, dirs, ssh host keys ----
-RUN useradd -u 1000 -m -s /bin/bash ansible \
+# ubuntu:24.04 base ships a pre-created 'ubuntu' user at UID 1000; remove it first.
+RUN userdel -r ubuntu \
+ && useradd -u 1000 -m -s /bin/bash ansible \
  && mkdir -p /home/ansible/.ssh /configs /var/log/ansible /var/run/sshd \
  && chown -R ansible:ansible /home/ansible /configs /var/log/ansible
 
