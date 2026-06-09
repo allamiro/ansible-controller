@@ -1,4 +1,4 @@
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 LABEL org.opencontainers.image.title="Ansible Controller"
 LABEL org.opencontainers.image.authors="Tamir Suliman <tsuliman@linuxvaults.com>"
 
@@ -17,10 +17,9 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 # ---- upgrade vulnerable Python packages pulled in by apt ----
-# apt pins these to old Ubuntu 22.04 versions with known HIGH CVEs.
-# Upgrading via pip gets current patched releases while keeping apt's
-# Ansible install intact.
-RUN pip3 install --upgrade --no-cache-dir \
+# apt pins these to Ubuntu 24.04 repo versions; pip gets current patched releases.
+# --break-system-packages is required on Ubuntu 24.04 (Python 3.12 / PEP 668).
+RUN pip3 install --upgrade --no-cache-dir --break-system-packages \
       pip \
       setuptools \
       wheel \

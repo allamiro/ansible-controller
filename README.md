@@ -4,7 +4,7 @@
 
 # Ansible Controller (Docker)
 
-Ubuntu-based Docker image for running Ansible playbooks with support for SSH, sudo, and external inventory mounts.
+Ubuntu 24.04-based Docker image for running Ansible playbooks with support for SSH, sudo, and external inventory mounts.
 
 ## Pull the image
 
@@ -162,15 +162,16 @@ Ansible logs are written to `/var/log/ansible/ansible.log` inside the container 
 
 ## Versioning and releases
 
-Every successful push to `main` updates the `latest` and `sha-XXXXXXX` image tags automatically. To publish a versioned release:
+Every push to `main` is automatically tagged based on [conventional commit](https://www.conventionalcommits.org/) prefixes:
 
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
+| Commit prefix | Version bump | Example |
+|---------------|--------------|---------|
+| `fix:` / `perf:` / `refactor:` | patch | `v1.0.0` → `v1.0.1` |
+| `feat:` | minor | `v1.0.0` → `v1.1.0` |
+| `feat!:` / `BREAKING CHANGE` | major | `v1.0.0` → `v2.0.0` |
 
-This triggers the publish workflow which:
-- Builds and pushes `v1.0.0`, `v1.0`, `v1` tags to both Docker Hub and GHCR
+The new git tag then triggers the publish workflow which:
+- Builds and pushes `v1.2.3`, `v1.2`, `v1`, `latest` tags to both Docker Hub and GHCR
 - Creates a GitHub Release with auto-generated changelog
 
 ---
