@@ -11,5 +11,9 @@ services:
       - ./configs:/configs:rw           # user cfg + inventory + playbooks
       - ./logs:/var/log/ansible:rw      # ansible logs
       - ./ssh:/home/ansible/.ssh:ro     # entire .ssh dir; host must: chmod 700 ./ssh && chmod 600 ./ssh/authorized_keys
+      # SSH agent forwarding (optional): set SSH_AUTH_SOCK on the host then uncomment below
+      # - ${SSH_AUTH_SOCK}:/run/host-services/ssh-auth.sock
+    # environment:
+    #   - SSH_AUTH_SOCK=/run/host-services/ssh-auth.sock
     tty: true
     stdin_open: true
