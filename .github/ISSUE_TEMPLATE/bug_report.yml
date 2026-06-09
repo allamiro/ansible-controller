@@ -2,18 +2,65 @@ name: Bug report
 description: File a bug
 labels: [bug]
 body:
-  - type: textarea
-    id: what-happened
-    attributes:
-      label: What happened?
-      description: Steps to reproduce and what you expected to happen
-    validations:
-      required: true
   - type: input
     id: version
     attributes:
       label: Image/Tag
-      placeholder: ansible-controller:0.1.0
+      placeholder: "ansible-controller:0.1.0  or  sha-abc1234"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform / Architecture
+      options:
+        - linux/amd64
+        - linux/arm64
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Host OS
+      placeholder: "macOS 14, Ubuntu 22.04, Windows 11 + WSL2 ..."
+    validations:
+      required: true
+
+  - type: input
+    id: docker-version
+    attributes:
+      label: Docker version
+      placeholder: "docker version 25.0.3"
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Exact commands you ran
+      placeholder: |
+        1. docker compose up -d
+        2. ssh ansible@localhost -p 2222
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+    validations:
+      required: true
+
   - type: textarea
     id: logs
     attributes:
