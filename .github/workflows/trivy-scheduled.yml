@@ -14,14 +14,21 @@ jobs:
       contents: read
       security-events: write
     steps:
-      - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@v0.28.0
-        with:
-          image-ref: docker.io/${{ secrets.DOCKERHUB_USERNAME }}/ansible-controller:latest
-          format: sarif
-          output: trivy-results.sarif
-          severity: CRITICAL,HIGH
-          timeout: 10m0s
+      - name: Install Trivy
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+            | sh -s -- -b /usr/local/bin
+
+      - name: Scan image and write SARIF
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          trivy image \
+            --severity CRITICAL,HIGH \
+            --format sarif \
+            --output trivy-results.sarif \
+            --timeout 10m \
+            "docker.io/${DOCKERHUB_USERNAME}/ansible-controller:latest"
 
       - name: Upload results to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v3
