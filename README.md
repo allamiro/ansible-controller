@@ -89,6 +89,84 @@ ssh -p 2222 ansible@localhost
 
 ---
 
+## Running playbooks
+
+```bash
+# Basic run
+docker exec -it ansible-controller ansible-playbook /configs/site.yml
+
+# Specific inventory file
+docker exec -it ansible-controller ansible-playbook \
+  -i /configs/inventory/hosts.ini /configs/site.yml
+
+# Dynamic inventory
+docker exec -it ansible-controller ansible-playbook \
+  -i /configs/inventory/inventory.py /configs/site.yml
+
+# Limit to a specific host or group
+docker exec -it ansible-controller ansible-playbook /configs/site.yml \
+  --limit webservers
+
+# Pass extra variables
+docker exec -it ansible-controller ansible-playbook /configs/site.yml \
+  -e "env=production version=1.2.3"
+
+# Run only tasks with specific tags
+docker exec -it ansible-controller ansible-playbook /configs/site.yml \
+  --tags "install,configure"
+
+# Dry run — show what would change without applying it
+docker exec -it ansible-controller ansible-playbook /configs/site.yml --check
+
+# Dry run with diff — show file content changes
+docker exec -it ansible-controller ansible-playbook /configs/site.yml --check --diff
+
+# Increase verbosity (-v through -vvvv)
+docker exec -it ansible-controller ansible-playbook /configs/site.yml -v
+```
+
+---
+
+## Ad-hoc commands
+
+```bash
+# Ping all hosts to verify connectivity
+docker exec -it ansible-controller ansible all -m ping
+
+# Ping a specific group
+docker exec -it ansible-controller ansible webservers -m ping
+
+# Run a shell command on all hosts
+docker exec -it ansible-controller ansible all -m shell -a "uptime"
+
+# Check disk space
+docker exec -it ansible-controller ansible all -m shell -a "df -h"
+
+# Gather all facts from a host
+docker exec -it ansible-controller ansible server1 -m setup
+
+# Gather a specific fact
+docker exec -it ansible-controller ansible all -m setup \
+  -a "filter=ansible_os_family"
+
+# Copy a file to all hosts
+docker exec -it ansible-controller ansible all -m copy \
+  -a "src=/configs/file.txt dest=/tmp/file.txt"
+
+# Install a package (requires become)
+docker exec -it ansible-controller ansible all -m apt \
+  -a "name=nginx state=present" --become
+
+# Restart a service
+docker exec -it ansible-controller ansible all -m service \
+  -a "name=nginx state=restarted" --become
+
+# Reboot all hosts and wait for them to come back
+docker exec -it ansible-controller ansible all -m reboot --become
+```
+
+---
+
 ## Build from source
 
 ```bash
