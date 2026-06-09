@@ -18,8 +18,10 @@ RUN apt-get update \
 
 # ---- upgrade vulnerable Python packages pulled in by apt ----
 # apt pins these to Ubuntu 24.04 repo versions; pip gets current patched releases.
-# --break-system-packages is required on Ubuntu 24.04 (Python 3.12 / PEP 668).
-RUN pip3 install --upgrade --no-cache-dir --break-system-packages \
+# --break-system-packages: required by PEP 668 (Python 3.12 marks system env as externally managed).
+# --ignore-installed: apt packages have no pip RECORD file, so pip cannot uninstall them;
+#   this skips the uninstall step and writes the new version to /usr/local/lib (higher sys.path priority).
+RUN pip3 install --upgrade --no-cache-dir --break-system-packages --ignore-installed \
       pip \
       setuptools \
       wheel \
