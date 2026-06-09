@@ -17,7 +17,7 @@ shell:
 sh: shell
 
 run:
-	docker exec -it ansible-controller ansible-playbook /configs/$(PLAYBOOK)
+	docker exec -it ansible-controller ansible-playbook /configs/playbooks/$(PLAYBOOK)
 
 logs:
 	docker logs -f ansible-controller
