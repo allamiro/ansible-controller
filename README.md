@@ -10,7 +10,7 @@
   [![Docker Pulls](https://img.shields.io/docker/pulls/allamiro1/ansible-controller)](https://hub.docker.com/r/allamiro1/ansible-controller)
   [![Image Size](https://img.shields.io/docker/image-size/allamiro1/ansible-controller/latest)](https://hub.docker.com/r/allamiro1/ansible-controller)
   [![License](https://img.shields.io/github/license/allamiro/ansible-controller)](LICENSE)
-  [![Latest Release](https://img.shields.io/github/v/release/allamiro/ansible-controller)](https://github.com/allamiro/ansible-controller/releases)
+  [![Latest Tag](https://img.shields.io/github/v/tag/allamiro/ansible-controller?label=version)](https://github.com/allamiro/ansible-controller/releases)
 </div>
 
 ---
