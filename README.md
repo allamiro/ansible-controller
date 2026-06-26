@@ -37,6 +37,8 @@ Ubuntu 24.04-based Docker image that packages Ansible, OpenSSH, and everything n
 - [Pull the image](#pull-the-image)
 - [Makefile targets](#makefile-targets)
 - [Running playbooks](#running-playbooks)
+- [Adding roles from a GitHub repository](#adding-roles-from-a-github-repository)
+- [Adding roles from Ansible Galaxy](#adding-roles-from-ansible-galaxy)
 - [Ad-hoc commands](#ad-hoc-commands)
 - [Build from source](#build-from-source)
 - [Run with Docker (manual)](#run-with-docker-manual)
@@ -209,6 +211,8 @@ docker pull ghcr.io/allamiro/ansible-controller:latest
 | `make down` | Stop and remove the container |
 | `make shell` | Open an interactive bash shell inside the container |
 | `make run PLAYBOOK=site.yml` | Run an Ansible playbook |
+| `make galaxy` | Install roles and collections from `configs/requirements.yml` |
+| `make galaxy-force` | Re-install / update Galaxy content to the pinned versions |
 | `make logs` | Tail container logs |
 
 ---
@@ -283,6 +287,98 @@ If roles live in a separate directory, mount them and set `roles_path` in `confi
 [defaults]
 roles_path = /configs/roles:/configs/playbooks/roles
 ```
+
+---
+
+## Adding roles from a GitHub repository
+
+Any role published as a git repository can be installed directly — useful for roles that aren't on Galaxy, forks, or a version pinned to a specific branch/tag/commit.
+
+Roles are declared in `configs/requirements.yml` and installed with `make galaxy` into `configs/.galaxy/` on the host (a read-write mount), so they persist across restarts and need no image rebuild. `configs/ansible.cfg` already points `roles_path` there, so installed roles resolve automatically.
+
+### 1 — Declare the role
+
+Add a git source to `configs/requirements.yml`. For example, to install [geerlingguy/ansible-role-nginx](https://github.com/geerlingguy/ansible-role-nginx):
+
+```yaml
+---
+roles:
+  - src: https://github.com/geerlingguy/ansible-role-nginx
+    name: nginx          # directory name the role installs as — reference this in playbooks
+    version: master      # branch, tag, or commit SHA to pin to
+```
+
+### 2 — Install it
+
+```bash
+make up        # the container must be running
+make galaxy    # installs everything declared in requirements.yml
+```
+
+Use `make galaxy-force` later to update an already-installed role to the version in the file.
+
+### 3 — Use it in a playbook
+
+Reference the role by the `name` you set above:
+
+```yaml
+- name: Configure web servers
+  hosts: webservers
+  roles:
+    - nginx
+```
+
+```bash
+make run PLAYBOOK=site.yml
+```
+
+---
+
+## Adding roles from Ansible Galaxy
+
+When a role is published on [Ansible Galaxy](https://galaxy.ansible.com/), reference it by its Galaxy name (`namespace.role`) instead of a git URL. Galaxy also resolves the role's dependencies automatically.
+
+### 1 — Declare the role (and any collections)
+
+```yaml
+---
+roles:
+  - name: geerlingguy.nginx
+  - name: geerlingguy.docker
+    version: 7.4.2          # optional version pin
+
+collections:
+  - name: community.general
+  - name: ansible.posix
+```
+
+### 2 — Install it
+
+```bash
+make galaxy
+```
+
+Both `roles_path` and `collections_path` in `configs/ansible.cfg` already point at `/configs/.galaxy/`, so installed content is found automatically.
+
+### 3 — Use it in a playbook
+
+```yaml
+- name: Install Docker
+  hosts: all
+  roles:
+    - geerlingguy.docker
+```
+
+```bash
+make run PLAYBOOK=site.yml
+```
+
+> **Tip:** Inspect installed content from inside the container:
+> ```bash
+> make shell
+> ansible-galaxy list                          # installed roles + versions
+> ansible-galaxy role info geerlingguy.nginx   # details for a Galaxy role
+> ```
 
 ---
 

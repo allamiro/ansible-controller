@@ -30,6 +30,15 @@ RUN pip3 install --upgrade --no-cache-dir --break-system-packages --ignore-insta
       pycryptodome \
       jinja2
 
+# ---- (optional) bake Galaxy roles/collections into the image ----
+# By default, Galaxy content is installed at runtime via `make galaxy` into the
+# /configs rw mount (see configs/requirements.yml) — no rebuild needed. Uncomment
+# the block below instead if you want a self-contained image with roles preinstalled.
+# COPY configs/requirements.yml /tmp/requirements.yml
+# RUN ansible-galaxy install -r /tmp/requirements.yml -p /usr/share/ansible/roles \
+#  && ansible-galaxy collection install -r /tmp/requirements.yml -p /usr/share/ansible/collections \
+#  && rm -f /tmp/requirements.yml
+
 # ---- user, dirs, ssh host keys ----
 # ubuntu:24.04 base ships a pre-created 'ubuntu' user at UID 1000; remove it first.
 RUN userdel -r ubuntu \
