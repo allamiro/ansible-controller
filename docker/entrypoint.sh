@@ -6,12 +6,23 @@ set -eu
 mkdir -p /etc/ssh/host_keys
 for t in rsa ecdsa ed25519; do
   key="/etc/ssh/host_keys/ssh_host_${t}_key"
-  # -y validates the key is readable/usable, not merely present: a stale volume
-  # may hold a zero-byte or truncated key that would keep sshd from starting
-  if ! ssh-keygen -y -f "$key" >/dev/null 2>&1; then
-    rm -f "$key" "${key}.pub"
-    ssh-keygen -q -N '' -t "$t" -f "$key"
-  fi
+  case "$t" in
+    rsa)     want="ssh-rsa " ;;
+    ecdsa)   want="ecdsa-sha2-" ;;
+    ed25519) want="ssh-ed25519 " ;;
+  esac
+  # Trust a persisted key only if it parses AND matches the expected algorithm:
+  # a stale volume may hold a truncated key or one of the wrong type, either of
+  # which would keep sshd from starting. </dev/null so a passphrase-protected
+  # key fails fast instead of prompting on a TTY.
+  pub="$(ssh-keygen -y -f "$key" </dev/null 2>/dev/null || true)"
+  case "$pub" in
+    "$want"*) ;;
+    *)
+      rm -f "$key" "${key}.pub"
+      ssh-keygen -q -N '' -t "$t" -f "$key"
+      ;;
+  esac
 done
 
 # Prefer host-provided cfg/inventory if mounted under /configs
