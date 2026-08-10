@@ -1,4 +1,16 @@
+# Build context only needs docker/ (Dockerfile + entrypoint.sh).
+# Everything else just slows context upload and can invalidate caches.
+.git
+.github
+.claude
+assets
+configs
+logs
+playbooks
+ssh
+*.md
+LICENSE
+Makefile
+docker-compose.yml
 **/.venv
 **/__pycache__/
-logs/*
-!logs/.gitkeep

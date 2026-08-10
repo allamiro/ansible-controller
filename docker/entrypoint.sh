@@ -33,6 +33,20 @@ fi
 mkdir -p /var/log/ansible || true
 chown -R ansible:ansible /var/log/ansible || true
 
+# Auto-install Galaxy roles/collections declared in /configs/requirements.yml
+# into /configs/.galaxy (host-persisted rw mount, so installs survive container
+# recreation). Runs in the background so sshd startup is never delayed and an
+# offline host is not fatal; see /var/log/ansible/galaxy-install.log for output.
+if [ -f /configs/requirements.yml ]; then
+  (
+    ansible-galaxy role install -r /configs/requirements.yml \
+      --roles-path /configs/.galaxy/roles || true
+    ansible-galaxy collection install -r /configs/requirements.yml \
+      -p /configs/.galaxy/collections || true
+    chown -R ansible:ansible /configs/.galaxy || true
+  ) >>/var/log/ansible/galaxy-install.log 2>&1 &
+fi
+
 # Lock down SSH; root login disabled
 sed -i 's/^#\?PermitRootLogin .*/PermitRootLogin no/' /etc/ssh/sshd_config
 
