@@ -43,6 +43,9 @@ Ubuntu 24.04-based Docker image that packages Ansible, OpenSSH, and everything n
 - [Build from source](#build-from-source)
 - [Run with Docker (manual)](#run-with-docker-manual)
 - [Dynamic inventory](#dynamic-inventory)
+- [Cloud dynamic inventory (AWS / Azure / GCP)](#cloud-dynamic-inventory-aws--azure--gcp)
+- [Managing Windows hosts (WinRM)](#managing-windows-hosts-winrm)
+- [Ansible Vault](#ansible-vault)
 - [SSH keys for managed hosts](#ssh-keys-for-managed-hosts)
 - [SSH agent forwarding](#ssh-agent-forwarding-optional)
 - [Logs](#logs)
@@ -213,6 +216,7 @@ docker pull ghcr.io/allamiro/ansible-controller:latest
 | `make run PLAYBOOK=site.yml` | Run an Ansible playbook |
 | `make galaxy` | Install roles and collections from `configs/requirements.yml` |
 | `make galaxy-force` | Re-install / update Galaxy content to the pinned versions |
+| `make pip` | Install extra Python packages from `configs/pip-requirements.txt` |
 | `make logs` | Tail container logs |
 
 ---
@@ -474,6 +478,123 @@ A dynamic inventory script is included at `configs/inventory/inventory.py`. It r
 ```bash
 docker exec -it ansible-controller \
   ansible-playbook -i /configs/inventory/inventory.py /configs/playbooks/site.yml
+```
+
+---
+
+## Cloud dynamic inventory (AWS / Azure / GCP)
+
+Pull live inventory from your cloud provider instead of maintaining a static hosts file. Each provider needs its **collection** (declared in `configs/requirements.yml`) and its **Python SDK** (declared in `configs/pip-requirements.txt`) — both are installed automatically when the container starts, or on demand with `make galaxy` and `make pip`.
+
+| Provider | Collection (`requirements.yml`) | SDK (`pip-requirements.txt`) | Inventory plugin |
+|----------|--------------------------------|------------------------------|------------------|
+| AWS | `amazon.aws` | `boto3` | `amazon.aws.aws_ec2` |
+| Azure | `azure.azcollection` | `azure-identity`, `azure-mgmt-*` | `azure.azcollection.azure_rm` |
+| GCP | `google.cloud` | `google-auth`, `requests` | `google.cloud.gcp_compute` |
+
+Commented, version-pinned entries for all three providers ship in both files. In `pip-requirements.txt` simply uncomment the lines; in `requirements.yml` replace the empty `collections: []` list at the bottom with a `collections:` block containing the entries you need (the commented example block shows the exact syntax). Example AWS setup:
+
+```yaml
+# configs/requirements.yml
+collections:
+  - name: amazon.aws
+    version: ">=9.0.0,<10.0.0"
+```
+
+```
+# configs/pip-requirements.txt
+boto3>=1.34,<2
+```
+
+```yaml
+# configs/inventory/aws_ec2.yml — filename must end in aws_ec2.yml
+plugin: amazon.aws.aws_ec2
+regions:
+  - us-east-1
+keyed_groups:
+  - key: tags.Role
+    prefix: role
+```
+
+```bash
+make up && make galaxy && make pip   # galaxy/pip also wait for the startup installs
+docker exec -it ansible-controller \
+  ansible-inventory -i /configs/inventory/aws_ec2.yml --graph
+```
+
+Provide cloud credentials the usual way (environment variables on the container, or credential files mounted under `configs/` and referenced from the inventory file).
+
+---
+
+## Managing Windows hosts (WinRM)
+
+`pywinrm` (with NTLM support) is baked into the image, so Windows hosts work out of the box over WinRM:
+
+```ini
+# configs/inventory/hosts.ini
+[windows]
+win-server1 ansible_host=192.168.1.20
+
+[windows:vars]
+ansible_connection=winrm
+ansible_user=Administrator
+ansible_winrm_transport=ntlm
+ansible_port=5986
+# the sudo become defaults in ansible.cfg don't apply to Windows
+ansible_become=false
+# 'ignore' is for labs only — validate certs in production
+# (note: INI inventory values keep trailing text, so comments must stay on their own line)
+ansible_winrm_server_cert_validation=ignore
+```
+
+```bash
+docker exec -it ansible-controller ansible windows -m ansible.windows.win_ping
+```
+
+The `ansible.windows` collection is not baked in — declare it (pinned) in `configs/requirements.yml`. The Kerberos transport compiles against native libraries that don't survive container recreation, so bake it into a small derived image instead of installing at runtime:
+
+```dockerfile
+# Dockerfile.kerberos
+FROM allamiro1/ansible-controller:latest
+USER root
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends gcc python3-dev libkrb5-dev krb5-user \
+ && pip3 install --no-cache-dir --break-system-packages 'pyspnego[kerberos]>=0.10,<1' \
+ && apt-get purge -y --auto-remove gcc python3-dev libkrb5-dev \
+ && rm -rf /var/lib/apt/lists/*
+```
+
+```bash
+docker build -f Dockerfile.kerberos -t ansible-controller:kerberos .
+# then use this tag in docker-compose.yml / docker run
+```
+
+---
+
+## Ansible Vault
+
+Two ways to supply the vault password — pick one:
+
+**Option A — password file (simplest).** Drop the password in `configs/.vault_pass` (the path is gitignored so it can't be committed):
+
+```bash
+echo 'my-vault-password' > configs/.vault_pass
+chmod 600 configs/.vault_pass
+```
+
+**Option B — environment variable (no file on the host).** Export `ANSIBLE_VAULT_PASSWORD` and uncomment the matching line in `docker-compose.yml`; the entrypoint writes it to a file readable only by the `ansible` user inside the container.
+
+Either way the entrypoint copies the password to a file readable only by the `ansible` user and exports `ANSIBLE_VAULT_PASSWORD_FILE` to **all SSH sessions** — interactive logins and one-shot `ssh host command` runs alike (via `pam_env`) — so vaulted content just works:
+
+```bash
+docker exec -it ansible-controller ansible-vault encrypt_string 'secret123' --name db_password
+ssh -p 2222 ansible@localhost ansible-playbook /configs/playbooks/site.yml   # vault decrypts automatically
+```
+
+For `docker exec` (which bypasses PAM), run through `bash -lc` or pass `--vault-password-file` explicitly:
+
+```bash
+docker exec -it ansible-controller bash -lc 'ansible-playbook /configs/playbooks/site.yml'
 ```
 
 ---

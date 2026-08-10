@@ -1,0 +1,24 @@
+# Extra controller-side Python packages, installed automatically when the
+# container starts (logged to logs/pip-install.log) or on demand with:
+#     make pip
+#
+# Installs go into the container's Python environment, so they do NOT persist
+# across container recreation — this file is re-applied on every start.
+# Pin versions so installs are reproducible.
+#
+# Cloud dynamic inventory SDKs (pair each with its collection in
+# requirements.yml — amazon.aws, azure.azcollection, google.cloud):
+#
+# boto3>=1.34,<2               # AWS (amazon.aws.aws_ec2 inventory)
+# azure-identity>=1.16,<2      # Azure (azure.azcollection.azure_rm inventory)
+# azure-mgmt-compute>=31,<35
+# azure-mgmt-network>=25,<29
+# azure-mgmt-resource>=23,<25
+# google-auth>=2.29,<3         # GCP (google.cloud.gcp_compute inventory)
+# requests>=2.31,<3
+#
+# WinRM Kerberos transport: NOT installable from this file — the Kerberos
+# bindings compile against system libraries that this image doesn't ship and
+# that would be lost on every container recreation (breaking the startup
+# re-install of this file). Build a small derived image instead — see
+# "Managing Windows hosts (WinRM)" in the README.
