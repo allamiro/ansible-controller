@@ -52,6 +52,14 @@ RUN pip3 install --upgrade --no-cache-dir --break-system-packages --ignore-insta
       ansible-lint \
       "mitogen>=0.3.50"
 
+# ---- Mitogen strategy plugin on Ansible's default search path ----
+# Symlinking into /usr/share/ansible/plugins/strategy (searched by default)
+# means enabling Mitogen is just `strategy = mitogen_linear` in ansible.cfg —
+# no interpreter-version-specific path to hardcode anywhere.
+RUN mkdir -p /usr/share/ansible/plugins \
+ && ln -s "$(python3 -c 'import ansible_mitogen, os; print(os.path.join(os.path.dirname(ansible_mitogen.__file__), "plugins", "strategy"))')" \
+      /usr/share/ansible/plugins/strategy
+
 # ---- baked Galaxy collections ----
 # Only the essentials most playbooks touch; everything else is declared in
 # configs/requirements.yml and lands in /configs/.galaxy at container start

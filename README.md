@@ -608,20 +608,19 @@ docker exec -it ansible-controller bash -lc 'ansible-playbook /configs/playbooks
 
 ```bash
 make lint                                    # lints everything under playbooks/
-# or lint a single file:
-docker exec -it ansible-controller ansible-lint /configs/playbooks/site.yml
+# or lint a single file (run from the playbooks dir so config discovery works):
+docker exec -it ansible-controller sh -c 'cd /configs/playbooks && ansible-lint site.yml'
 ```
 
-Add a `.ansible-lint` config file next to your playbooks (under `playbooks/`) to customize rules.
+Customize rules with a `.ansible-lint` file in the `playbooks/` directory — both commands run from there, which is where ansible-lint looks for its configuration.
 
 ---
 
 ## Faster runs with Mitogen
 
-[Mitogen](https://mitogen.networkgenomics.com/ansible_detailed.html) is baked into the image (disabled by default). It multiplexes SSH connections and can cut playbook runtime substantially on large inventories. Enable it by uncommenting the two `strategy` lines in `configs/ansible.cfg`:
+[Mitogen](https://mitogen.networkgenomics.com/ansible_detailed.html) is baked into the image (disabled by default) with its strategy plugin already on Ansible's default search path. It multiplexes SSH connections and can cut playbook runtime substantially on large inventories. Enable it by uncommenting one line in `configs/ansible.cfg`:
 
 ```ini
-strategy_plugins = /usr/local/lib/python3.12/dist-packages/ansible_mitogen/plugins/strategy
 strategy = mitogen_linear
 ```
 
