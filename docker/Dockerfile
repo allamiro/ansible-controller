@@ -35,6 +35,8 @@ RUN apt-get update \
 # password_hash) that the apt ansible bundle used to pull in as hard dependencies.
 # pywinrm/requests-ntlm: manage Windows hosts over WinRM (kerberos transport
 # needs extra system libs — declare via configs/pip-requirements.txt instead).
+# ansible-lint: `make lint` / lint playbooks in place.
+# mitogen: opt-in fast strategy plugin (see the commented block in ansible.cfg).
 RUN pip3 install --upgrade --no-cache-dir --break-system-packages --ignore-installed \
       pip \
       setuptools \
@@ -46,7 +48,9 @@ RUN pip3 install --upgrade --no-cache-dir --break-system-packages --ignore-insta
       jmespath \
       passlib \
       pywinrm \
-      requests-ntlm
+      requests-ntlm \
+      ansible-lint \
+      "mitogen>=0.3.50"
 
 # ---- baked Galaxy collections ----
 # Only the essentials most playbooks touch; everything else is declared in

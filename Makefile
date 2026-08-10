@@ -39,5 +39,9 @@ galaxy-force:
 	docker exec -i ansible-controller sh -c 'mkdir -p /configs/.galaxy && flock /configs/.galaxy/.install.lock ansible-galaxy install -r /configs/requirements.yml --roles-path /configs/.galaxy/roles --force'
 	docker exec -i ansible-controller sh -c 'mkdir -p /configs/.galaxy && flock /configs/.galaxy/.install.lock ansible-galaxy collection install -r /configs/requirements.yml -p /configs/.galaxy/collections --force'
 
+# Lint playbooks with ansible-lint (baked into the image)
+lint:
+	docker exec -i ansible-controller sh -c 'cd /configs && ansible-lint playbooks'
+
 logs:
 	docker logs -f ansible-controller

@@ -46,6 +46,8 @@ Ubuntu 24.04-based Docker image that packages Ansible, OpenSSH, and everything n
 - [Cloud dynamic inventory (AWS / Azure / GCP)](#cloud-dynamic-inventory-aws--azure--gcp)
 - [Managing Windows hosts (WinRM)](#managing-windows-hosts-winrm)
 - [Ansible Vault](#ansible-vault)
+- [Linting playbooks](#linting-playbooks)
+- [Faster runs with Mitogen](#faster-runs-with-mitogen)
 - [SSH keys for managed hosts](#ssh-keys-for-managed-hosts)
 - [SSH agent forwarding](#ssh-agent-forwarding-optional)
 - [Logs](#logs)
@@ -217,6 +219,7 @@ docker pull ghcr.io/allamiro/ansible-controller:latest
 | `make galaxy` | Install roles and collections from `configs/requirements.yml` |
 | `make galaxy-force` | Re-install / update Galaxy content to the pinned versions |
 | `make pip` | Install extra Python packages from `configs/pip-requirements.txt` |
+| `make lint` | Lint everything under `playbooks/` with ansible-lint |
 | `make logs` | Tail container logs |
 
 ---
@@ -596,6 +599,33 @@ For `docker exec` (which bypasses PAM), run through `bash -lc` or pass `--vault-
 ```bash
 docker exec -it ansible-controller bash -lc 'ansible-playbook /configs/playbooks/site.yml'
 ```
+
+---
+
+## Linting playbooks
+
+[ansible-lint](https://ansible-lint.readthedocs.io/) is baked into the image:
+
+```bash
+make lint                                    # lints everything under playbooks/
+# or lint a single file:
+docker exec -it ansible-controller ansible-lint /configs/playbooks/site.yml
+```
+
+Add a `.ansible-lint` config file next to your playbooks (under `playbooks/`) to customize rules.
+
+---
+
+## Faster runs with Mitogen
+
+[Mitogen](https://mitogen.networkgenomics.com/ansible_detailed.html) is baked into the image (disabled by default). It multiplexes SSH connections and can cut playbook runtime substantially on large inventories. Enable it by uncommenting the two `strategy` lines in `configs/ansible.cfg`:
+
+```ini
+strategy_plugins = /usr/local/lib/python3.12/dist-packages/ansible_mitogen/plugins/strategy
+strategy = mitogen_linear
+```
+
+Leave it disabled if you depend on the `free` strategy or strategy-sensitive plugins — Mitogen replaces the linear strategy wholesale.
 
 ---
 
