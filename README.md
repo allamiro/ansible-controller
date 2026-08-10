@@ -540,6 +540,7 @@ ansible_connection=winrm
 ansible_user=Administrator
 ansible_winrm_transport=ntlm
 ansible_port=5986
+ansible_become=false   # the sudo become defaults in ansible.cfg don't apply to Windows
 ansible_winrm_server_cert_validation=ignore   # lab only — validate certs in production
 ```
 
@@ -547,13 +548,22 @@ ansible_winrm_server_cert_validation=ignore   # lab only — validate certs in p
 docker exec -it ansible-controller ansible windows -m ansible.windows.win_ping
 ```
 
-The `ansible.windows` collection is not baked in — declare it (pinned) in `configs/requirements.yml`. The Kerberos transport needs native libraries compiled first — install them as root, then enable the pip package:
+The `ansible.windows` collection is not baked in — declare it (pinned) in `configs/requirements.yml`. The Kerberos transport compiles against native libraries that don't survive container recreation, so bake it into a small derived image instead of installing at runtime:
+
+```dockerfile
+# Dockerfile.kerberos
+FROM allamiro1/ansible-controller:latest
+USER root
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends gcc python3-dev libkrb5-dev krb5-user \
+ && pip3 install --no-cache-dir --break-system-packages 'pyspnego[kerberos]>=0.10,<1' \
+ && apt-get purge -y --auto-remove gcc python3-dev libkrb5-dev \
+ && rm -rf /var/lib/apt/lists/*
+```
 
 ```bash
-docker exec -u root -i ansible-controller sh -c \
-  'apt-get update && apt-get install -y --no-install-recommends gcc python3-dev libkrb5-dev krb5-user && rm -rf /var/lib/apt/lists/*'
-# uncomment pyspnego[kerberos] in configs/pip-requirements.txt, then:
-make pip
+docker build -f Dockerfile.kerberos -t ansible-controller:kerberos .
+# then use this tag in docker-compose.yml / docker run
 ```
 
 ---
