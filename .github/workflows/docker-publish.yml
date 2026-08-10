@@ -31,7 +31,7 @@ jobs:
       - uses: actions/checkout@v4
 
       # Skip QEMU on PRs — amd64-only build is sufficient for validation
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@v4
         if: github.event_name != 'pull_request'
 
       - uses: docker/setup-buildx-action@v3
