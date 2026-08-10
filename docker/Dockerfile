@@ -30,12 +30,19 @@ RUN apt-get update \
 # --break-system-packages: required by PEP 668 (Python 3.12 marks system env as externally managed).
 # --ignore-installed: apt packages have no pip RECORD file, so pip cannot uninstall them;
 #   this skips the uninstall step and writes the new version to /usr/local/lib (higher sys.path priority).
+# dnspython/netaddr/jmespath/passlib: controller-side deps of common plugins in
+# the baked collections (community.general.dig, json_query, ipaddr-style filters,
+# password_hash) that the apt ansible bundle used to pull in as hard dependencies.
 RUN pip3 install --upgrade --no-cache-dir --break-system-packages --ignore-installed \
       pip \
       setuptools \
       wheel \
       ansible-core \
-      "cryptography>=50.0.0"
+      "cryptography>=50.0.0" \
+      dnspython \
+      netaddr \
+      jmespath \
+      passlib
 
 # ---- baked Galaxy collections ----
 # Only the essentials most playbooks touch; everything else is declared in
