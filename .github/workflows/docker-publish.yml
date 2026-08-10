@@ -118,6 +118,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write   # keyless cosign signing via GitHub OIDC
 
     steps:
       - name: Download digests
@@ -171,6 +172,22 @@ jobs:
             # $tags and the digest list are intentionally word-split
             # shellcheck disable=SC2046,SC2086
             docker buildx imagetools create $tags $(printf "${image}@sha256:%s " *)
+          done
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign published manifests (keyless OIDC)
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          tag="sha-$(echo "$GITHUB_SHA" | cut -c1-7)"
+          for image in \
+            "docker.io/${DOCKERHUB_USERNAME}/ansible-controller" \
+            "ghcr.io/${{ github.repository_owner }}/ansible-controller"; do
+            digest=$(docker buildx imagetools inspect "${image}:${tag}" \
+              --format '{{json .Manifest}}' | jq -r '.digest')
+            cosign sign --yes "${image}@${digest}"
           done
 
       - name: Scan published image for CVEs (Trivy)
