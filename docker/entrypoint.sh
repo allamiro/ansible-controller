@@ -5,8 +5,13 @@ set -eu
 # tracking the image.
 mkdir -p /etc/ssh/host_keys
 for t in rsa ecdsa ed25519; do
-  test -f "/etc/ssh/host_keys/ssh_host_${t}_key" \
-    || ssh-keygen -q -N '' -t "$t" -f "/etc/ssh/host_keys/ssh_host_${t}_key"
+  key="/etc/ssh/host_keys/ssh_host_${t}_key"
+  # -y validates the key is readable/usable, not merely present: a stale volume
+  # may hold a zero-byte or truncated key that would keep sshd from starting
+  if ! ssh-keygen -y -f "$key" >/dev/null 2>&1; then
+    rm -f "$key" "${key}.pub"
+    ssh-keygen -q -N '' -t "$t" -f "$key"
+  fi
 done
 
 # Prefer host-provided cfg/inventory if mounted under /configs
