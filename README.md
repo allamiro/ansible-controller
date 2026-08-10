@@ -540,8 +540,11 @@ ansible_connection=winrm
 ansible_user=Administrator
 ansible_winrm_transport=ntlm
 ansible_port=5986
-ansible_become=false   # the sudo become defaults in ansible.cfg don't apply to Windows
-ansible_winrm_server_cert_validation=ignore   # lab only — validate certs in production
+# the sudo become defaults in ansible.cfg don't apply to Windows
+ansible_become=false
+# 'ignore' is for labs only — validate certs in production
+# (note: INI inventory values keep trailing text, so comments must stay on their own line)
+ansible_winrm_server_cert_validation=ignore
 ```
 
 ```bash
