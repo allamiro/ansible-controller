@@ -93,6 +93,14 @@ if [ -n "$vault_src" ]; then
   printf 'export ANSIBLE_VAULT_PASSWORD_FILE=%s\n' "$vault_pass_file" \
     > /etc/profile.d/ansible-vault.sh
   chmod 644 /etc/profile.d/ansible-vault.sh
+else
+  # Vault deconfigured (env var unset / file removed) — on a docker restart the
+  # container filesystem survives, so revoke state written by an earlier start
+  # or sessions would keep decrypting with the old password.
+  rm -f /home/ansible/.vault_pass /etc/profile.d/ansible-vault.sh
+  if [ -f /etc/environment ]; then
+    sed -i '/^ANSIBLE_VAULT_PASSWORD_FILE=/d' /etc/environment
+  fi
 fi
 
 # Lock down SSH; root login disabled

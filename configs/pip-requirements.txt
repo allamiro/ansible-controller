@@ -17,5 +17,10 @@
 # google-auth>=2.29,<3         # GCP (google.cloud.gcp_compute inventory)
 # requests>=2.31,<3
 #
-# WinRM Kerberos transport (NTLM is already baked into the image):
+# WinRM Kerberos transport (NTLM is already baked into the image).
+# The Kerberos bindings compile against system libraries, so install those
+# first (one-time, as root inside the container):
+#   docker exec -u root -i ansible-controller sh -c \
+#     'apt-get update && apt-get install -y --no-install-recommends gcc python3-dev libkrb5-dev krb5-user && rm -rf /var/lib/apt/lists/*'
+# then uncomment and run `make pip`:
 # pyspnego[kerberos]>=0.10,<1

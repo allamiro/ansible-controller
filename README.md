@@ -547,7 +547,14 @@ ansible_winrm_server_cert_validation=ignore   # lab only — validate certs in p
 docker exec -it ansible-controller ansible windows -m ansible.windows.win_ping
 ```
 
-The `ansible.windows` collection is not baked in — declare it (pinned) in `configs/requirements.yml`. For the Kerberos transport, uncomment `pyspnego[kerberos]` in `configs/pip-requirements.txt`.
+The `ansible.windows` collection is not baked in — declare it (pinned) in `configs/requirements.yml`. The Kerberos transport needs native libraries compiled first — install them as root, then enable the pip package:
+
+```bash
+docker exec -u root -i ansible-controller sh -c \
+  'apt-get update && apt-get install -y --no-install-recommends gcc python3-dev libkrb5-dev krb5-user && rm -rf /var/lib/apt/lists/*'
+# uncomment pyspnego[kerberos] in configs/pip-requirements.txt, then:
+make pip
+```
 
 ---
 
