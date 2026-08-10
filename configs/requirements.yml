@@ -1,0 +1,41 @@
+---
+# Ansible Galaxy requirements — roles and collections to install into the controller.
+#
+# Everything declared here is installed automatically when the container starts
+# (logged to logs/galaxy-install.log), or on demand with:
+#     make up        # container must be running
+#     make galaxy
+#
+# Content is downloaded into /configs/.galaxy/ (a read-write volume mount), so it
+# persists on the host and survives container restarts. No image rebuild needed.
+# After editing this file, restart the container or re-run `make galaxy` (use
+# `make galaxy-force` to update already-installed content to the pinned versions).
+#
+# Pin every entry (role tag/commit, collection version range) so installs are
+# reproducible — an unpinned entry resolves to whatever is latest at install time.
+#
+# NOTE: ansible.posix and community.general are already baked into the image;
+# declare them here (pinned) only if you need a different version than shipped.
+#
+# To declare content, DELETE the matching empty list at the bottom of this file
+# and put a full block in its place, for example:
+#
+# roles:
+#   # DISA STIG hardening role (RedHatOfficial), from Galaxy:
+#   - name: RedHatOfficial.rhel9_stig
+#     version: "1.1.0"
+#   # Example community role, pinned to a released tag:
+#   - name: geerlingguy.haproxy
+#     version: "1.4.1"
+#   # Straight from a git repo (`name` sets the installed directory name,
+#   # `version` is a tag or commit SHA):
+#   - src: https://github.com/RedHatOfficial/ansible-role-rhel9-stig
+#     name: RedHatOfficial.rhel9_stig
+#     version: v1.1.0
+#
+# collections:
+#   - name: community.docker
+#     version: ">=4.0.0,<5.0.0"
+
+roles: []
+collections: []

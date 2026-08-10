@@ -4,6 +4,9 @@ configs/.facts_cache/*
 configs/.inventory_cache/*
 !configs/.inventory_cache/.gitkeep
 
+# Ansible Galaxy content — installed via `make galaxy`, not tracked in git
+configs/.galaxy/
+
 # Ansible logs
 logs/*
 !logs/.gitkeep
