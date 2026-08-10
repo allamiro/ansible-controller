@@ -294,7 +294,7 @@ roles_path = /configs/roles:/configs/playbooks/roles
 
 Any role published as a git repository can be installed directly — useful for roles that aren't on Galaxy, forks, or a version pinned to a specific branch/tag/commit.
 
-Roles are declared in `configs/requirements.yml` and installed into `configs/.galaxy/` on the host (a read-write mount), so they persist across restarts and need no image rebuild. Everything declared there is installed **automatically when the container starts** (logged to `logs/galaxy-install.log`); use `make galaxy` to install immediately without a restart. `configs/ansible.cfg` already points `roles_path` there, so installed roles resolve automatically.
+Roles are declared in `configs/requirements.yml` and installed into `configs/.galaxy/` on the host (a read-write mount), so they persist across restarts and need no image rebuild. Everything declared there is installed **automatically when the container starts**, in the background (logged to `logs/galaxy-install.log`); run `make galaxy` after `make up` to install on demand — it shares a lock with the startup installer, so it also blocks until any in-flight startup install has finished, guaranteeing content is ready before you run playbooks. `configs/ansible.cfg` already points `roles_path` there, so installed roles resolve automatically.
 
 ### 1 — Declare the role
 
