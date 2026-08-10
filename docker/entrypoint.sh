@@ -64,22 +64,32 @@ if [ -f /configs/pip-requirements.txt ]; then
   ) 9>>/configs/.pip-install.lock >>/var/log/ansible/pip-install.log 2>&1 &
 fi
 
-# Ansible Vault password: set the ANSIBLE_VAULT_PASSWORD env var (written to a
-# file only the ansible user can read) or drop a password file at
-# /configs/.vault_pass. Either way ANSIBLE_VAULT_PASSWORD_FILE is exported to
-# SSH login sessions via /etc/profile.d; for non-login shells (docker exec) run
-# ansible through `bash -lc` or pass --vault-password-file explicitly.
-vault_pass_file=""
+# Ansible Vault password: set the ANSIBLE_VAULT_PASSWORD env var or drop a
+# password file at /configs/.vault_pass. Either source is copied to a file only
+# the ansible user can read (a bind-mounted file's host ownership may not match
+# uid 1000, and root can always read the source). The path is exported to SSH
+# sessions — including one-shot `ssh host cmd` runs, which skip profile files —
+# via pam_env's /etc/environment, and to `bash -lc` docker-exec shells via
+# /etc/profile.d.
+vault_src=""
 if [ -n "${ANSIBLE_VAULT_PASSWORD:-}" ]; then
+  vault_src=env
+elif [ -f /configs/.vault_pass ]; then
+  vault_src=file
+fi
+if [ -n "$vault_src" ]; then
   vault_pass_file=/home/ansible/.vault_pass
   umask 077
-  printf '%s\n' "$ANSIBLE_VAULT_PASSWORD" > "$vault_pass_file"
+  if [ "$vault_src" = env ]; then
+    printf '%s\n' "$ANSIBLE_VAULT_PASSWORD" > "$vault_pass_file"
+  else
+    cat /configs/.vault_pass > "$vault_pass_file"
+  fi
   umask 022
   chown ansible:ansible "$vault_pass_file"
-elif [ -f /configs/.vault_pass ]; then
-  vault_pass_file=/configs/.vault_pass
-fi
-if [ -n "$vault_pass_file" ]; then
+  touch /etc/environment
+  sed -i '/^ANSIBLE_VAULT_PASSWORD_FILE=/d' /etc/environment
+  echo "ANSIBLE_VAULT_PASSWORD_FILE=$vault_pass_file" >> /etc/environment
   printf 'export ANSIBLE_VAULT_PASSWORD_FILE=%s\n' "$vault_pass_file" \
     > /etc/profile.d/ansible-vault.sh
   chmod 644 /etc/profile.d/ansible-vault.sh

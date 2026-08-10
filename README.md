@@ -492,7 +492,7 @@ Pull live inventory from your cloud provider instead of maintaining a static hos
 | Azure | `azure.azcollection` | `azure-identity`, `azure-mgmt-*` | `azure.azcollection.azure_rm` |
 | GCP | `google.cloud` | `google-auth`, `requests` | `google.cloud.gcp_compute` |
 
-Commented, version-pinned entries for all three providers already exist in both files — uncomment what you need. Example AWS setup:
+Commented, version-pinned entries for all three providers ship in both files. In `pip-requirements.txt` simply uncomment the lines; in `requirements.yml` replace the empty `collections: []` list at the bottom with a `collections:` block containing the entries you need (the commented example block shows the exact syntax). Example AWS setup:
 
 ```yaml
 # configs/requirements.yml
@@ -564,14 +564,14 @@ chmod 600 configs/.vault_pass
 
 **Option B — environment variable (no file on the host).** Export `ANSIBLE_VAULT_PASSWORD` and uncomment the matching line in `docker-compose.yml`; the entrypoint writes it to a file readable only by the `ansible` user inside the container.
 
-Either way the entrypoint exports `ANSIBLE_VAULT_PASSWORD_FILE` to SSH sessions, so vaulted content just works:
+Either way the entrypoint copies the password to a file readable only by the `ansible` user and exports `ANSIBLE_VAULT_PASSWORD_FILE` to **all SSH sessions** — interactive logins and one-shot `ssh host command` runs alike (via `pam_env`) — so vaulted content just works:
 
 ```bash
 docker exec -it ansible-controller ansible-vault encrypt_string 'secret123' --name db_password
 ssh -p 2222 ansible@localhost ansible-playbook /configs/playbooks/site.yml   # vault decrypts automatically
 ```
 
-For non-login shells (`docker exec`), run through `bash -lc` or pass `--vault-password-file` explicitly:
+For `docker exec` (which bypasses PAM), run through `bash -lc` or pass `--vault-password-file` explicitly:
 
 ```bash
 docker exec -it ansible-controller bash -lc 'ansible-playbook /configs/playbooks/site.yml'
