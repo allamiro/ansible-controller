@@ -15,7 +15,7 @@
 
 ---
 
-Ubuntu 24.04-based Docker image that packages Ansible, OpenSSH, and everything needed to manage remote infrastructure. Write your playbooks on the host, mount them into the container, and run — no need to install Ansible locally.
+Ubuntu 26.04-based Docker image that packages Ansible, OpenSSH, and everything needed to manage remote infrastructure. Write your playbooks on the host, mount them into the container, and run — no need to install Ansible locally.
 
 ## Features
 
@@ -739,7 +739,7 @@ This project is licensed under the [Apache License 2.0](LICENSE).
 
 ## Notes
 
-- **Base image:** Ubuntu 24.04 LTS (Noble Numbat) — standard security support until April 2029, extended to 2034 with Ubuntu Pro.
+- **Base image:** Ubuntu 26.04 LTS — standard security support until 2031, extended further with Ubuntu Pro.
 - **Ansible:** the image ships the current `ansible-core` (via pip) plus the `ansible.posix` and `community.general` collections — not the ~280 MiB `ansible` community bundle. Declare any additional collections or roles in `configs/requirements.yml`; they are installed automatically at container start (or on demand with `make galaxy`) into the host-persisted `configs/.galaxy/` directory, no rebuild needed.
 - If `configs/ansible.cfg` exists on the host it is used automatically; otherwise the image default applies.
 - The `ansible` user (uid 1000) is the only user inside the container. `PermitRootLogin no` is enforced.

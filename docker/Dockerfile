@@ -1,4 +1,4 @@
-FROM ubuntu:24.04
+FROM ubuntu:26.04
 LABEL org.opencontainers.image.title="Ansible Controller"
 LABEL org.opencontainers.image.authors="Tamir Suliman <tsuliman@linuxvaults.com>"
 
@@ -27,7 +27,7 @@ RUN apt-get update \
 # pip ships the current patched ansible-core (~8 MiB vs apt ansible's ~280 MiB) and
 # its deps (jinja2, PyYAML, ...) at current releases instead of Ubuntu's 2024 pins.
 # cryptography floor covers CVE-2026-69247 / CVE-2026-69249 / GHSA-537c-gmf6-5ccf.
-# --break-system-packages: required by PEP 668 (Python 3.12 marks system env as externally managed).
+# --break-system-packages: required by PEP 668 (Python 3.14 marks system env as externally managed).
 # --ignore-installed: apt packages have no pip RECORD file, so pip cannot uninstall them;
 #   this skips the uninstall step and writes the new version to /usr/local/lib (higher sys.path priority).
 # dnspython/netaddr/jmespath/passlib: controller-side deps of common plugins in
@@ -69,7 +69,7 @@ RUN ansible-galaxy collection install ansible.posix community.general \
       -p /usr/share/ansible/collections
 
 # ---- user, dirs, ssh host keys ----
-# ubuntu:24.04 base ships a pre-created 'ubuntu' user at UID 1000; remove it first.
+# ubuntu:26.04 base ships a pre-created 'ubuntu' user at UID 1000; remove it first.
 RUN userdel -r ubuntu \
  && useradd -u 1000 -m -s /bin/bash ansible \
  && mkdir -p /home/ansible/.ssh /configs /var/log/ansible /var/run/sshd \
