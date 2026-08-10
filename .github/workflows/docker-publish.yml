@@ -186,7 +186,7 @@ jobs:
             "docker.io/${DOCKERHUB_USERNAME}/ansible-controller" \
             "ghcr.io/${{ github.repository_owner }}/ansible-controller"; do
             digest=$(docker buildx imagetools inspect "${image}:${tag}" \
-              --format '{{json .Manifest}}' | jq -r '.digest')
+              --format '{{.Manifest.Digest}}')
             cosign sign --yes "${image}@${digest}"
           done
 
