@@ -41,7 +41,7 @@ jobs:
 
       - uses: actions/checkout@v7
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       - name: Docker metadata (labels)
         id: meta
@@ -128,7 +128,7 @@ jobs:
           pattern: digests-*
           merge-multiple: true
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       - name: Docker metadata (tags, labels)
         id: meta
