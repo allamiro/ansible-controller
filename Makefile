@@ -41,8 +41,11 @@ galaxy-force:
 
 # Lint playbooks with ansible-lint (baked into the image).
 # Runs from /configs/playbooks so a .ansible-lint config there is discovered.
+# ANSIBLE_CONFIG: docker exec doesn't inherit the entrypoint's export, and the
+# custom roles/collections paths are needed for resolution during linting.
+# XDG_CACHE_HOME: the playbooks mount is read-only; keep caches writable.
 lint:
-	docker exec -i ansible-controller sh -c 'cd /configs/playbooks && ansible-lint'
+	docker exec -i -e ANSIBLE_CONFIG=/configs/ansible.cfg -e XDG_CACHE_HOME=/tmp/.cache ansible-controller sh -c 'cd /configs/playbooks && ansible-lint'
 
 logs:
 	docker logs -f ansible-controller
