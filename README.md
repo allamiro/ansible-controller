@@ -553,6 +553,19 @@ The new git tag triggers the publish workflow which:
 - Builds and pushes `v1.2.3`, `v1.2`, `v1`, `latest` tags to both Docker Hub and GHCR
 - Creates a GitHub Release with auto-generated changelog
 
+### Image signing (cosign)
+
+Every published multi-arch manifest is signed with [cosign](https://docs.sigstore.dev/cosign/signing/overview/) using keyless GitHub OIDC — no long-lived signing keys exist. Verify a pulled image before running it:
+
+```bash
+cosign verify \
+  --certificate-identity-regexp 'https://github\.com/allamiro/ansible-controller/\.github/workflows/docker-publish\.yml@.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  ghcr.io/allamiro/ansible-controller:latest
+```
+
+The same works against `docker.io/allamiro1/ansible-controller`. A valid signature proves the image was built and published by this repository's GitHub Actions workflow, not tampered with in transit or on the registry.
+
 ---
 
 ## Contributing
