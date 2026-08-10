@@ -11,9 +11,14 @@ services:
       - ./playbooks:/configs/playbooks:ro  # playbooks and roles (host-managed)
       - ./logs:/var/log/ansible:rw         # ansible logs
       - ./ssh:/home/ansible/.ssh:ro        # SSH keys; host must: chmod 700 ./ssh && chmod 600 ./ssh/authorized_keys
+      - ssh-host-keys:/etc/ssh/host_keys   # persist SSH host keys (generated on first start) across recreations;
+                                           # scoped to keys only so sshd_config/moduli keep tracking the image
       # SSH agent forwarding (optional): set SSH_AUTH_SOCK on the host then uncomment below
       # - ${SSH_AUTH_SOCK}:/run/host-services/ssh-auth.sock
     # environment:
     #   - SSH_AUTH_SOCK=/run/host-services/ssh-auth.sock
     tty: true
     stdin_open: true
+
+volumes:
+  ssh-host-keys:

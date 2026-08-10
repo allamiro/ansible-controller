@@ -1,6 +1,29 @@
 #!/bin/sh
 set -eu
-test -f /etc/ssh/ssh_host_rsa_key || ssh-keygen -A
+# Generate host keys on first start into /etc/ssh/host_keys (see sshd_config.d
+# drop-in). Only this directory is volume-persisted so sshd_config/moduli keep
+# tracking the image.
+mkdir -p /etc/ssh/host_keys
+for t in rsa ecdsa ed25519; do
+  key="/etc/ssh/host_keys/ssh_host_${t}_key"
+  case "$t" in
+    rsa)     want="ssh-rsa " ;;
+    ecdsa)   want="ecdsa-sha2-" ;;
+    ed25519) want="ssh-ed25519 " ;;
+  esac
+  # Trust a persisted key only if it parses AND matches the expected algorithm:
+  # a stale volume may hold a truncated key or one of the wrong type, either of
+  # which would keep sshd from starting. </dev/null so a passphrase-protected
+  # key fails fast instead of prompting on a TTY.
+  pub="$(ssh-keygen -y -f "$key" </dev/null 2>/dev/null || true)"
+  case "$pub" in
+    "$want"*) ;;
+    *)
+      rm -f "$key" "${key}.pub"
+      ssh-keygen -q -N '' -t "$t" -f "$key"
+      ;;
+  esac
+done
 
 # Prefer host-provided cfg/inventory if mounted under /configs
 if [ -f /configs/ansible.cfg ]; then
