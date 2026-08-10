@@ -28,6 +28,12 @@ galaxy:
 	docker exec -i ansible-controller sh -c 'mkdir -p /configs/.galaxy && flock /configs/.galaxy/.install.lock ansible-galaxy install -r /configs/requirements.yml --roles-path /configs/.galaxy/roles'
 	docker exec -i ansible-controller sh -c 'mkdir -p /configs/.galaxy && flock /configs/.galaxy/.install.lock ansible-galaxy collection install -r /configs/requirements.yml -p /configs/.galaxy/collections'
 
+# Install extra Python packages declared in configs/pip-requirements.txt.
+# Shares a lock with the startup auto-install, so it also waits for an
+# in-flight startup install to finish.
+pip:
+	docker exec -i ansible-controller sh -c 'flock /configs/.pip-install.lock pip3 install --no-cache-dir --break-system-packages -r /configs/pip-requirements.txt'
+
 # Force re-install / update Galaxy content to the versions in requirements.yml
 galaxy-force:
 	docker exec -i ansible-controller sh -c 'mkdir -p /configs/.galaxy && flock /configs/.galaxy/.install.lock ansible-galaxy install -r /configs/requirements.yml --roles-path /configs/.galaxy/roles --force'

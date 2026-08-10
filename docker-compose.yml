@@ -17,6 +17,9 @@ services:
       # - ${SSH_AUTH_SOCK}:/run/host-services/ssh-auth.sock
     # environment:
     #   - SSH_AUTH_SOCK=/run/host-services/ssh-auth.sock
+    #   # Ansible Vault password (alternative: drop a file at configs/.vault_pass).
+    #   # Prefer indirection from the host env over a literal here:
+    #   - ANSIBLE_VAULT_PASSWORD=${ANSIBLE_VAULT_PASSWORD}
     tty: true
     stdin_open: true
 

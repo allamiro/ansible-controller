@@ -7,6 +7,10 @@ configs/.inventory_cache/*
 # Ansible Galaxy content — installed via `make galaxy`, not tracked in git
 configs/.galaxy/
 
+# Vault password and install locks — never track secrets
+configs/.vault_pass
+configs/.pip-install.lock
+
 # Ansible logs
 logs/*
 !logs/.gitkeep

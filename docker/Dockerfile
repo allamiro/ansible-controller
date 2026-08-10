@@ -33,6 +33,8 @@ RUN apt-get update \
 # dnspython/netaddr/jmespath/passlib: controller-side deps of common plugins in
 # the baked collections (community.general.dig, json_query, ipaddr-style filters,
 # password_hash) that the apt ansible bundle used to pull in as hard dependencies.
+# pywinrm/requests-ntlm: manage Windows hosts over WinRM (kerberos transport
+# needs extra system libs — declare via configs/pip-requirements.txt instead).
 RUN pip3 install --upgrade --no-cache-dir --break-system-packages --ignore-installed \
       pip \
       setuptools \
@@ -42,7 +44,9 @@ RUN pip3 install --upgrade --no-cache-dir --break-system-packages --ignore-insta
       dnspython \
       netaddr \
       jmespath \
-      passlib
+      passlib \
+      pywinrm \
+      requests-ntlm
 
 # ---- baked Galaxy collections ----
 # Only the essentials most playbooks touch; everything else is declared in

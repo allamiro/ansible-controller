@@ -52,6 +52,39 @@ if [ -f /configs/requirements.yml ]; then
   ) 9>>/configs/.galaxy/.install.lock >>/var/log/ansible/galaxy-install.log 2>&1 &
 fi
 
+# Extra controller-side Python packages (cloud SDKs for dynamic inventory,
+# alternative WinRM transports, ...) declared in /configs/pip-requirements.txt
+# are installed at startup. Same background+lock pattern as Galaxy content;
+# `make pip` installs on demand and waits for an in-flight install.
+if [ -f /configs/pip-requirements.txt ]; then
+  (
+    flock 9
+    pip3 install --no-cache-dir --break-system-packages \
+      -r /configs/pip-requirements.txt || true
+  ) 9>>/configs/.pip-install.lock >>/var/log/ansible/pip-install.log 2>&1 &
+fi
+
+# Ansible Vault password: set the ANSIBLE_VAULT_PASSWORD env var (written to a
+# file only the ansible user can read) or drop a password file at
+# /configs/.vault_pass. Either way ANSIBLE_VAULT_PASSWORD_FILE is exported to
+# SSH login sessions via /etc/profile.d; for non-login shells (docker exec) run
+# ansible through `bash -lc` or pass --vault-password-file explicitly.
+vault_pass_file=""
+if [ -n "${ANSIBLE_VAULT_PASSWORD:-}" ]; then
+  vault_pass_file=/home/ansible/.vault_pass
+  umask 077
+  printf '%s\n' "$ANSIBLE_VAULT_PASSWORD" > "$vault_pass_file"
+  umask 022
+  chown ansible:ansible "$vault_pass_file"
+elif [ -f /configs/.vault_pass ]; then
+  vault_pass_file=/configs/.vault_pass
+fi
+if [ -n "$vault_pass_file" ]; then
+  printf 'export ANSIBLE_VAULT_PASSWORD_FILE=%s\n' "$vault_pass_file" \
+    > /etc/profile.d/ansible-vault.sh
+  chmod 644 /etc/profile.d/ansible-vault.sh
+fi
+
 # Lock down SSH; root login disabled
 sed -i 's/^#\?PermitRootLogin .*/PermitRootLogin no/' /etc/ssh/sshd_config
 
