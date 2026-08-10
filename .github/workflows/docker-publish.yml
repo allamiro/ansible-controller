@@ -40,8 +40,11 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
+          # Docker Hub image only on non-PR events (push, tag, manual dispatch):
+          # PR runs (Dependabot, forks) have no secrets, and an empty username
+          # yields an invalid "docker.io//..." tag
           images: |
-            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/ansible-controller
+            ${{ github.event_name != 'pull_request' && format('docker.io/{0}/ansible-controller', secrets.DOCKERHUB_USERNAME) || '' }}
             ghcr.io/${{ github.repository_owner }}/ansible-controller
           tags: |
             type=ref,event=branch
