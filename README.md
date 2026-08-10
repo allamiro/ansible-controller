@@ -344,18 +344,20 @@ When a role is published on [Ansible Galaxy](https://galaxy.ansible.com/), refer
 ---
 roles:
   - name: geerlingguy.nginx
+    version: 3.2.0          # pin so installs are reproducible
   - name: geerlingguy.docker
-    version: 7.4.2          # optional version pin
+    version: 7.4.2
 
 collections:
-  - name: community.general
-  - name: ansible.posix
+  - name: community.docker  # ansible.posix and community.general ship in the image
+    version: ">=4.0.0,<5.0.0"
 ```
 
 ### 2 — Install it
 
 ```bash
-make galaxy
+make up        # the container must be running
+make galaxy    # installs everything declared in requirements.yml
 ```
 
 Both `roles_path` and `collections_path` in `configs/ansible.cfg` already point at `/configs/.galaxy/`, so installed content is found automatically.
