@@ -1,6 +1,13 @@
 #!/bin/sh
 set -eu
-test -f /etc/ssh/ssh_host_rsa_key || ssh-keygen -A
+# Generate host keys on first start into /etc/ssh/host_keys (see sshd_config.d
+# drop-in). Only this directory is volume-persisted so sshd_config/moduli keep
+# tracking the image.
+mkdir -p /etc/ssh/host_keys
+for t in rsa ecdsa ed25519; do
+  test -f "/etc/ssh/host_keys/ssh_host_${t}_key" \
+    || ssh-keygen -q -N '' -t "$t" -f "/etc/ssh/host_keys/ssh_host_${t}_key"
+done
 
 # Prefer host-provided cfg/inventory if mounted under /configs
 if [ -f /configs/ansible.cfg ]; then

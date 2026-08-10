@@ -481,7 +481,7 @@ This project is licensed under the [Apache License 2.0](LICENSE).
 - **Base image:** Ubuntu 24.04 LTS (Noble Numbat) — standard security support until April 2029, extended to 2034 with Ubuntu Pro.
 - If `configs/ansible.cfg` exists on the host it is used automatically; otherwise the image default applies.
 - The `ansible` user (uid 1000) is the only user inside the container. `PermitRootLogin no` is enforced.
-- SSH host keys are generated on first container start (not baked into the image, so every deployment gets unique keys). The compose file persists them in the `ssh-host-keys` volume so they survive container recreation; without a volume on `/etc/ssh`, recreating the container generates new keys and SSH clients will warn about a changed host key.
+- SSH host keys are generated on first container start (not baked into the image, so every deployment gets unique keys). Keys live in `/etc/ssh/host_keys`, and the compose file persists that directory in the `ssh-host-keys` volume so they survive container recreation (only the keys are persisted — `sshd_config` and `moduli` keep tracking the image). Without a volume on `/etc/ssh/host_keys`, recreating the container generates new keys and SSH clients will warn about a changed host key.
 - A `HEALTHCHECK` verifies sshd is listening on port 22. Check container health with `docker ps`.
 
 ---

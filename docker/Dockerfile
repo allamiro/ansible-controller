@@ -47,7 +47,12 @@ RUN printf 'Defaults:ansible !requiretty\nansible ALL=(ALL) NOPASSWD: ALL\n' > /
 
 # ---- entrypoint and runtime ---
 # SSH host keys are intentionally NOT generated here — entrypoint.sh creates them
-# on first start so each deployment gets unique keys (mount /etc/ssh to persist)
+# on first start so each deployment gets unique keys. They live in
+# /etc/ssh/host_keys (a dedicated dir the compose file persists as a volume)
+# so sshd_config and moduli keep tracking the image across updates.
+RUN mkdir -p /etc/ssh/host_keys /etc/ssh/sshd_config.d \
+ && printf 'HostKey /etc/ssh/host_keys/ssh_host_rsa_key\nHostKey /etc/ssh/host_keys/ssh_host_ecdsa_key\nHostKey /etc/ssh/host_keys/ssh_host_ed25519_key\n' \
+      > /etc/ssh/sshd_config.d/10-host-keys.conf
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
