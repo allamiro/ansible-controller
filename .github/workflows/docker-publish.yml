@@ -38,7 +38,7 @@ jobs:
 
       - name: Docker metadata (tags, labels)
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           # Docker Hub image only on non-PR events (push, tag, manual dispatch):
           # PR runs (Dependabot, forks) have no secrets, and an empty username
