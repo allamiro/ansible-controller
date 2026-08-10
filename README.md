@@ -46,6 +46,8 @@ Ubuntu 24.04-based Docker image that packages Ansible, OpenSSH, and everything n
 - [Cloud dynamic inventory (AWS / Azure / GCP)](#cloud-dynamic-inventory-aws--azure--gcp)
 - [Managing Windows hosts (WinRM)](#managing-windows-hosts-winrm)
 - [Ansible Vault](#ansible-vault)
+- [Linting playbooks](#linting-playbooks)
+- [Faster runs with Mitogen](#faster-runs-with-mitogen)
 - [SSH keys for managed hosts](#ssh-keys-for-managed-hosts)
 - [SSH agent forwarding](#ssh-agent-forwarding-optional)
 - [Logs](#logs)
@@ -217,6 +219,7 @@ docker pull ghcr.io/allamiro/ansible-controller:latest
 | `make galaxy` | Install roles and collections from `configs/requirements.yml` |
 | `make galaxy-force` | Re-install / update Galaxy content to the pinned versions |
 | `make pip` | Install extra Python packages from `configs/pip-requirements.txt` |
+| `make lint` | Lint everything under `playbooks/` with ansible-lint |
 | `make logs` | Tail container logs |
 
 ---
@@ -596,6 +599,32 @@ For `docker exec` (which bypasses PAM), run through `bash -lc` or pass `--vault-
 ```bash
 docker exec -it ansible-controller bash -lc 'ansible-playbook /configs/playbooks/site.yml'
 ```
+
+---
+
+## Linting playbooks
+
+[ansible-lint](https://ansible-lint.readthedocs.io/) is baked into the image:
+
+```bash
+make lint                                    # lints everything under playbooks/
+# or lint a single file (run from the playbooks dir so config discovery works):
+docker exec -it ansible-controller sh -c 'cd /configs/playbooks && ansible-lint site.yml'
+```
+
+Customize rules with a `.ansible-lint` file in the `playbooks/` directory — both commands run from there, which is where ansible-lint looks for its configuration.
+
+---
+
+## Faster runs with Mitogen
+
+[Mitogen](https://mitogen.networkgenomics.com/ansible_detailed.html) is baked into the image (disabled by default) with its strategy plugin already on Ansible's default search path. It multiplexes SSH connections and can cut playbook runtime substantially on large inventories. Enable it by uncommenting one line in `configs/ansible.cfg`:
+
+```ini
+strategy = mitogen_linear
+```
+
+Leave it disabled if you depend on the `free` strategy or strategy-sensitive plugins — Mitogen replaces the linear strategy wholesale.
 
 ---
 

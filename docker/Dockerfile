@@ -35,6 +35,8 @@ RUN apt-get update \
 # password_hash) that the apt ansible bundle used to pull in as hard dependencies.
 # pywinrm/requests-ntlm: manage Windows hosts over WinRM (kerberos transport
 # needs extra system libs — declare via configs/pip-requirements.txt instead).
+# ansible-lint: `make lint` / lint playbooks in place.
+# mitogen: opt-in fast strategy plugin (see the commented block in ansible.cfg).
 RUN pip3 install --upgrade --no-cache-dir --break-system-packages --ignore-installed \
       pip \
       setuptools \
@@ -46,7 +48,18 @@ RUN pip3 install --upgrade --no-cache-dir --break-system-packages --ignore-insta
       jmespath \
       passlib \
       pywinrm \
-      requests-ntlm
+      requests-ntlm \
+      ansible-lint \
+      "mitogen>=0.3.50"
+
+# ---- Mitogen strategy plugin on Ansible's default search path ----
+# Symlinking into /usr/share/ansible/plugins/strategy (searched by default)
+# means enabling Mitogen is just `strategy = mitogen_linear` in ansible.cfg —
+# no interpreter-version-specific path to hardcode anywhere.
+RUN mkdir -p /usr/share/ansible/plugins \
+ && target="$(python3 -c 'import ansible_mitogen, os; print(os.path.join(os.path.dirname(ansible_mitogen.__file__), "plugins", "strategy"))')" \
+ && test -d "$target" \
+ && ln -s "$target" /usr/share/ansible/plugins/strategy
 
 # ---- baked Galaxy collections ----
 # Only the essentials most playbooks touch; everything else is declared in
