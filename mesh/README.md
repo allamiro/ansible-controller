@@ -33,11 +33,11 @@ an operator opts in.
 
 | # | Guarantee | Enforced by |
 |---|-----------|-------------|
-| 1 | Root `docker-compose.yml`, `Makefile` direct targets, and the **published `controller` image** stay identical | Mesh code lives in `mesh/`; orchestration deps live in a *separate* `orchestrator` target (never `controller`); controller proven byte/scan‑identical (see [§9.1](#91-non-disruption-checks-run-every-mesh-pr)) |
+| 1 | Root `docker-compose.yml`, `Makefile` direct targets, and the **controller image** stay identical | `docker/Dockerfile` is **untouched**; mesh images build from a separate `docker/mesh/Dockerfile` `FROM` the controller and never modify it; controller proven byte/scan‑identical (see [§9.1](#91-non-disruption-checks-run-every-mesh-pr)) |
 | 2 | `make up` / `make down` / `make run` behave exactly as today | Sidecar and nodes are **Compose‑profile‑gated** (`--profile mesh`); default `up` never starts them |
 | 3 | The controller build context is unchanged | `mesh/` is excluded via `.dockerignore` |
 | 4 | The release pipeline (#54–#57: cosign, semver, Trivy gate) is untouched | Node/relay images are **not** added to `docker-publish.yml` until a deliberate later phase |
-| 5 | The CVE posture stays clean | Shared runtime carries the existing pip‑vendor patch + pebble removal; every mesh image is scanned by the same gate before it can publish |
+| 5 | The CVE posture stays clean | Mesh images build `FROM` the controller, inheriting its pip‑vendor patch + pebble removal automatically; every mesh image is scanned by the same gate before it can publish |
 
 **Rule:** any mesh PR whose CI shows a change to the controller image scan (still 0
 CRITICAL/HIGH) or a failing controller smoke test is rejected, not merged.
@@ -172,46 +172,60 @@ Hold these from the first mesh commit even in the single‑orchestrator build:
 | Execution nodes peer to a **list** of ingress addresses (even a list of one) | Tier 1 becomes "add controller‑B to the list" | ~0 |
 | CA private key **never** on a runtime container | CA is not a runtime SPOF; signing is offline | ~0 |
 
+**PKI material is never committed to git.** The CA, certs, keys, and CSRs all live
+under `mesh/secrets/` on shared storage and are distributed by the signing workflow
+([§6 Phase 6](#6-phased-implementation-plan)); public certs are shared the same way,
+not tracked in the repo. "Shared config+PKI" above means shared *storage*, not the
+repository.
+
 ---
 
 ## 5. Directory layout
 
-Everything mesh-specific lives under `mesh/`. **All image builds stay in one
-`docker/Dockerfile`** as multi-stage targets, so the CVE remediation
-(`patch-pip-vendor.py`, the pebble removal) has a single home and every `FROM`
-resolves inside the same file:
+Everything mesh-specific lives under `mesh/`. **The existing `docker/Dockerfile`
+is left unchanged** — it stays the single-stage controller build, so a build with
+no `--target` still produces today's controller. The mesh images build from a
+*separate* `docker/mesh/Dockerfile` that starts `FROM` the finished controller, so
+they inherit its exact runtime (and its CVE remediation) with zero dependency drift
+and zero change to the controller:
 
 ```text
-FROM ubuntu:26.04      AS ansible-runtime   # ONLY today's controller deps
-                                            #   (python, ansible-core, collections,
-                                            #    ssh client, WinRM libs)
-  ├── AS controller       # = today's image, byte-identical, the PUBLISHED image
-  ├── AS orchestrator     # controller + ansible-runner + receptorctl   [mesh-only]
-  └── AS execution-node   # ansible-runtime + receptor, no sshd/port 22 [mesh-only]
+docker/Dockerfile        →  controller        # UNCHANGED; the PUBLISHED image and
+                                              #   the default (no-target) build
+
+docker/mesh/Dockerfile:
+  ARG BASE=<controller image>
+  FROM ${BASE} AS orchestrator      # controller + ansible-runner + receptorctl
+  FROM ${BASE} AS execution-node    # controller + receptor; entrypoint runs
+                                    #   receptor, NOT sshd (port 22 never exposed;
+                                    #   the inherited sshd is a later slimming target)
 ```
 
-The **published `controller` image never gains orchestration packages** — those
-live in the separate `orchestrator` target that only mesh users build, so the
-byte-identical guarantee stays literally true. Consequently
-`mesh/images/execution-node/` holds only an entrypoint: the image *stage* lives in
-`docker/Dockerfile`, because a `FROM ansible-runtime` in a separate file cannot see
-a stage defined in another file.
+Why not a shared `ansible-runtime` base stage inside `docker/Dockerfile`? Two
+review findings ruled it out: (a) declaring `execution-node` as a later stage makes
+it the *default* build target, so the existing pipeline — which sets no `target:` —
+would publish a mesh image under the controller name; and (b) putting orchestration
+packages in a shared base leaks them into the published controller, breaking the
+byte-identical guarantee. Building the mesh images `FROM` the finished controller
+sidesteps both: the controller build is untouched, and the mesh images are explicit,
+never-default `--target` builds. Their build inputs (entrypoints) live under
+`docker/mesh/` — inside the build context — so the top-level `mesh/` tree stays
+`.dockerignore`d and contributes nothing to any image.
 
 ```text
 ansible-controller/
 ├── docker/
-│   └── Dockerfile              # targets: ansible-runtime → {controller,
-│                               #   orchestrator, execution-node}; controller unchanged
+│   ├── Dockerfile              # UNCHANGED single-stage controller (default build)
+│   └── mesh/                   # mesh image builds — FROM the controller image
+│       ├── Dockerfile          #   targets: orchestrator, execution-node
+│       ├── orchestrator-entrypoint.sh
+│       └── node-entrypoint.sh  # renders receptor node config from env
 ├── docker-compose.yml          # UNCHANGED — controller only
 ├── Makefile                    # existing targets untouched; mesh targets appended
 │
 └── mesh/                       # ← the whole subsystem, isolated
     ├── README.md               # this document
     ├── compose.mesh.yml        # overlay: sidecar + local exec-node, profile-gated
-    ├── images/
-    │   └── execution-node/
-    │       └── entrypoint.sh    # renders receptor node config from env
-    │                            #   (the image STAGE lives in docker/Dockerfile)
     ├── config/
     │   ├── zones.yml            # inventory group / network → zone (local | net20…)
     │   ├── pools.yml            # zone → [node_id, node_id]  (HA membership)
@@ -239,10 +253,10 @@ risk column; anything that touches it must pass [§9.1](#91-non-disruption-check
 | Ph | Goal | Touches controller image? | Guardrail before merge |
 |----|------|---------------------------|------------------------|
 | 0 | SSH hardening: add managed `known_hosts` / strict path, label dev override; **do not flip default** | Config only, opt‑in | Existing direct run still works with current default |
-| 1 | Dockerfile refactor: introduce `ansible-runtime` base; `controller` target = today | Build only, output identical | Smoke test + Trivy = 0, both arches ([§9.1](#91-non-disruption-checks-run-every-mesh-pr)) |
-| 2 | Add an `orchestrator` target (`controller` + `ansible-runner` + `receptorctl`) — a **separate mesh image**; the published `controller` is untouched | No — separate target | `controller` digest/scan unchanged; `orchestrator` scan 0 |
+| 1 | Add `docker/mesh/Dockerfile` scaffold (`FROM` controller); **`docker/Dockerfile` untouched** | No — controller build unchanged | Controller smoke + Trivy = 0 unchanged, both arches ([§9.1](#91-non-disruption-checks-run-every-mesh-pr)) |
+| 2 | `orchestrator` target in `docker/mesh/Dockerfile` (`FROM` controller + `ansible-runner` + `receptorctl`) | No — separate image, explicit `--target` | Controller digest unchanged; `orchestrator` scan 0 |
 | 3 | `receptor-controller` sidecar + shared socket volume, **profile‑gated** | No (opt‑in) | `make up` unchanged |
-| 4 | `execution-node` target in `docker/Dockerfile` (+ node entrypoint in `mesh/`) + test lab, **no TLS (dev only)** | No | Local build only; never published |
+| 4 | `execution-node` target in `docker/mesh/Dockerfile` (`FROM` controller + `receptor`; entrypoint runs receptor, not sshd) + test lab, **no TLS (dev only)** | No | Local build only; never published |
 | 5 | Prove `transmit → work submit → worker → process` across the mesh | No | Positive tests [§9.2](#92-positive-distributed-execution-tests) |
 | 6 | PKI scripts + **mandatory mTLS** + **Tier‑1** (2nd receptor sidecar, orchestrator control‑socket failover, node multi‑peer) | No | Negative mTLS + Tier‑1 tests [§9.3](#93-negative-mtls-tests)/[§9.7](#97-control-plane-tier-1-ingress-redundancy) |
 | 7 | Target SSH credential handling + artifacts + per-job `meta.json` | No | SSH‑negative test [§9.4](#94-target-ssh-negative-test) |
@@ -261,14 +275,15 @@ risk column; anything that touches it must pass [§9.1](#91-non-disruption-check
 - [ ] Clearly label the existing lax settings as **dev‑only** override
 - [ ] Document; do **not** change the current default (flip only at a major bump)
 
-### Phase 1 — runtime base stage
-- [ ] Split `docker/Dockerfile` into `ansible-runtime` → `controller`
-- [ ] Move pip‑vendor patch + pebble removal into `ansible-runtime`
-- [ ] Prove controller image smoke + Trivy = 0 on amd64 **and** arm64
+### Phase 1 — mesh build scaffold (controller Dockerfile untouched)
+- [ ] Add `docker/mesh/Dockerfile` with `ARG BASE` and `orchestrator`/`execution-node` targets `FROM ${BASE}`
+- [ ] Leave `docker/Dockerfile` unchanged; confirm the default (no-target) build is still the controller
+- [ ] Prove controller image smoke + Trivy = 0 on amd64 **and** arm64 (unchanged)
 
-### Phase 2 — controller orchestration deps
-- [ ] `pip install ansible-runner receptorctl` in the runtime stage
-- [ ] Confirm no entrypoint/sshd behaviour change; scan still 0
+### Phase 2 — orchestrator image (separate, FROM controller)
+- [ ] `orchestrator` target = `FROM ${BASE}` + `pip install ansible-runner receptorctl`
+- [ ] Build only via explicit `--target orchestrator`; the published controller is never rebuilt
+- [ ] `orchestrator` scan 0; controller digest unchanged
 
 ### Phase 3 — controller receptor sidecar
 - [ ] `mesh/config/receptor/controller.yml` (v2, Unix control socket, no TCP control)
@@ -277,8 +292,8 @@ risk column; anything that touches it must pass [§9.1](#91-non-disruption-check
 - [ ] Verify `make up` still starts controller **only**
 
 ### Phase 4 — execution node + dev lab
-- [ ] Add `execution-node` target to `docker/Dockerfile` (`FROM ansible-runtime`, no sshd)
-- [ ] `mesh/images/execution-node/entrypoint.sh` (render node config from env)
+- [ ] `execution-node` target = `FROM ${BASE}` + `receptor`; entrypoint runs receptor (not sshd)
+- [ ] `docker/mesh/node-entrypoint.sh` (render node config from env)
 - [ ] `mesh/tests/` multi‑network compose lab (controller cannot reach targets)
 - [ ] **No‑TLS** dev mesh to prove wiring (never in a production compose file)
 
@@ -325,7 +340,7 @@ risk column; anything that touches it must pass [§9.1](#91-non-disruption-check
 | UC1 | **Local scan** via colocated local execution node | Runs on `exec-local-*`, not on the controller |
 | UC2 | **Network scan** into segmented `net20` | Runs on `exec-net20-*`; controller has no route to the target |
 | UC3 | **Execution‑node failover** — `exec-net20-a` down at dispatch | `exec-net20-b` serves; job succeeds |
-| UC4 | **Concurrency** — many jobs across zones at once | Isolated PDDs/artifacts; **one `meta.json` per UUID** (no shared-file race); per‑node cap respected |
+| UC4 | **Concurrency** — many jobs across zones at once | Isolated PDDs/artifacts; **one `meta.json` per UUID** (no shared-file race); per‑node cap enforced by an atomic `flock` reservation (not a check-then-act race) |
 | UC5 | **Control‑plane ingress failover (Tier 1)** — one receptor sidecar down | Orchestrator fails its control socket over to the 2nd sidecar; nodes reconnect via it; new dispatch works. (Losing the orchestrator *host* is Tier 2.) |
 | UC6 | **Third‑party node (future)** — external team runs `exec-partner-*` | mTLS admits it (your CA signed it); work‑signing means it *executes* but cannot *submit* |
 | UC7 | **Direct legacy mode** — `make run PLAYBOOK=ping.yml` | Unchanged; does **not** traverse Receptor |
@@ -397,7 +412,11 @@ Proves Receptor identity and target SSH identity are separate.
 - Assert unique PDDs, unique artifact dirs, no work-unit id collision.
 - Assert all N per-job meta.json files survive (one file per UUID; no shared-file
   corruption or lost entries).
-- Assert per-node concurrency cap holds (extra jobs queue, not overrun).
+- Per-node cap is enforced by an ATOMIC reservation: select+submit hold an `flock`
+  on a per-node slot file (on shared storage), so the cap is not a check-then-act
+  race on `receptorctl work list`.
+- Assert the cap holds under a burst where every dispatcher sees a "free" slot at
+  once — the surplus queues on the lock; they do not all submit to the same node.
 ```
 
 ### 9.7 Control‑plane Tier 1 (ingress redundancy)
