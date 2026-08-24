@@ -740,6 +740,8 @@ ssh-keygen -lf "$kh_new"
 #    chmod means a first-ever pin is readable by the container's uid 1000 even
 #    under a restrictive host umask like 077 (known_hosts holds public keys;
 #    0644 is what OpenSSH itself creates).
+ok=1   # reset up front: a stale ok=0 from an earlier paste in the same shell
+       # would otherwise let the hashing step below run after a failed re-run
 missing=
 for h in server1 server2 '[server3]:2222'; do
   ssh-keygen -F "$h" -f "$kh_new" >/dev/null || missing="$missing $h"
