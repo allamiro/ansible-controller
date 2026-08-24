@@ -700,7 +700,10 @@ ssh-keyscan server1 server2 > /tmp/known_hosts.new
 #    own /etc/ssh/ssh_host_*_key.pub obtained over a channel you already trust:
 ssh-keygen -lf /tmp/known_hosts.new
 
-# 3. Only after the fingerprints match, add them:
+# 3. Only after the fingerprints match, install them. Remove any superseded entry
+#    for each host first — otherwise a rekeyed/rebuilt host's OLD key stays in the
+#    file and OpenSSH keeps trusting it (a match on ANY entry passes):
+for h in server1 server2; do ssh-keygen -R "$h" -f configs/known_hosts 2>/dev/null; done
 cat /tmp/known_hosts.new >> configs/known_hosts
 
 # 4. (optional) hash the hostnames at rest once pinned:
