@@ -656,6 +656,52 @@ The private key is available inside the container at `/home/ansible/.ssh/id_ed25
 
 ---
 
+## SSH host-key checking
+
+By default the shipped `configs/ansible.cfg` **disables** SSH host-key checking:
+
+```ini
+[defaults]
+host_key_checking = False
+
+[ssh_connection]
+ssh_args = -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no
+```
+
+This is a **development convenience** — it avoids host-key prompts against lab
+hosts whose keys change often — but it is **not production-safe**: it disables
+SSH man-in-the-middle protection, so a spoofed or hijacked host is trusted
+silently. The insecure default is kept for backward compatibility and is slated
+to flip to strict in a future major release.
+
+**For production, enable strict checking with a managed `known_hosts`:**
+
+```ini
+[defaults]
+host_key_checking = True
+
+[ssh_connection]
+ssh_args = -o UserKnownHostsFile=/configs/known_hosts -o StrictHostKeyChecking=yes
+```
+
+Pre-populate the `known_hosts` file on the host (it persists via the `./configs`
+mount):
+
+```bash
+ssh-keyscan -H server1 server2 >> configs/known_hosts
+```
+
+If you prefer trust-on-first-use over pre-pinning every host, use
+`StrictHostKeyChecking=accept-new`: Ansible records each host key the first time
+it connects and then fails if a key later changes. That still catches
+key-substitution attacks after the first contact, unlike the `=no` default.
+
+> The distributed execution mesh (see [`mesh/`](mesh/README.md)) will use strict,
+> managed host-key checking as its default from the start — this relaxed setting
+> is scoped to the existing direct controller only.
+
+---
+
 ## SSH agent forwarding (optional)
 
 To use your host SSH keys inside the container without copying them to disk, uncomment the volume and environment entries in `docker-compose.yml`:
