@@ -702,6 +702,12 @@ ssh-keyscan server1 server2 > /tmp/known_hosts.new
 #    host even though its key was verified:
 ssh-keyscan -p 2222 server3 >> /tmp/known_hosts.new
 
+#    Scan the address Ansible actually CONNECTS to, which is `ansible_host` when
+#    the inventory sets one and the inventory name otherwise. OpenSSH looks the
+#    key up under the address it dials, so a key pinned under an inventory alias
+#    is never found and strict checking rejects the host:
+#      web01 ansible_host=10.0.0.5   ->   ssh-keyscan 10.0.0.5   (not web01)
+
 # 2. Compare each fingerprint against a TRUSTED source before pinning — the host
 #    console, the cloud provider's API, a config-management fact, or the host's
 #    own /etc/ssh/ssh_host_*_key.pub obtained over a channel you already trust:
