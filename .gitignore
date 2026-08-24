@@ -23,3 +23,7 @@ ssh/authorized_keys
 __pycache__/
 *.pyc
 .venv/
+
+# Claude Code local agent config — developer-local, not part of the image
+.claude/
+CLAUDE.local.md
