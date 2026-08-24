@@ -724,7 +724,14 @@ ssh-keygen -lf /tmp/known_hosts.new
 #    staying trusted on its OLD key (a match on ANY entry passes). `-R` takes a
 #    single host, so keep the loop — a second `-R` overrides the first instead of
 #    removing both — and name non-default-port hosts in the bracketed form they
-#    were stored under:
+#    were stored under.
+#
+#    The removals must succeed before anything is appended. `-R` rewrites the file
+#    (mkstemp + rename in its directory), so it fails on an unwritable parent dir
+#    even when the file itself is appendable — and appending after a failed
+#    removal leaves the old AND new keys trusted side by side, quietly undoing the
+#    revocation. The touch keeps a first-ever run (no known_hosts yet) from
+#    tripping that gate:
 missing=
 for h in server1 server2 '[server3]:2222'; do
   ssh-keygen -F "$h" -f /tmp/known_hosts.new >/dev/null || missing="$missing $h"
@@ -733,8 +740,16 @@ done
 if [ -n "$missing" ]; then
   echo "NOT scanned:$missing — fix and re-scan; known_hosts left unchanged"
 else
-  for h in server1 server2 '[server3]:2222'; do ssh-keygen -R "$h" -f configs/known_hosts 2>/dev/null; done
-  cat /tmp/known_hosts.new >> configs/known_hosts
+  touch configs/known_hosts
+  rmfail=
+  for h in server1 server2 '[server3]:2222'; do
+    ssh-keygen -R "$h" -f configs/known_hosts >/dev/null 2>&1 || rmfail="$rmfail $h"
+  done
+  if [ -n "$rmfail" ]; then
+    echo "old keys NOT removed for:$rmfail — NOT appending (they would stay trusted); fix and re-run"
+  else
+    cat /tmp/known_hosts.new >> configs/known_hosts
+  fi
 fi
 
 # 4. (optional) hash the hostnames at rest once pinned:
