@@ -713,16 +713,28 @@ ssh-keyscan -p 2222 server3 >> /tmp/known_hosts.new
 #    own /etc/ssh/ssh_host_*_key.pub obtained over a channel you already trust:
 ssh-keygen -lf /tmp/known_hosts.new
 
-# 3. Only after the fingerprints match, install them. Remove any superseded entry
-#    for each host first — otherwise a rekeyed/rebuilt host's OLD key stays in the
-#    file and OpenSSH keeps trusting it (a match on ANY entry passes). Keep the
-#    loop: `-R` takes a single host, and a second `-R` overrides the first rather
-#    than removing both. Non-default-port hosts must be named in the same
-#    bracketed form they were stored under, or their stale key is left behind:
+# 3. Confirm every host is present in the candidate file BEFORE deleting anything.
+#    ssh-keyscan skips hosts it cannot reach and still exits 0 when only some of
+#    them failed, so a typo or a briefly-down host would have its good pinned key
+#    removed in step 4 with nothing to put back — turning a transient outage into
+#    a host that strict checking then refuses to connect to:
+missing=
+for h in server1 server2 '[server3]:2222'; do
+  ssh-keygen -F "$h" -f /tmp/known_hosts.new >/dev/null || missing="$missing $h"
+done
+[ -z "$missing" ] || echo "NOT scanned:$missing — resolve before continuing"
+
+# 4. Only once the fingerprints match and nothing is missing, install them. Remove
+#    any superseded entry for each host first — otherwise a rekeyed/rebuilt host's
+#    OLD key stays in the file and OpenSSH keeps trusting it (a match on ANY entry
+#    passes). Keep the loop: `-R` takes a single host, and a second `-R` overrides
+#    the first rather than removing both. Non-default-port hosts must be named in
+#    the same bracketed form they were stored under, or their stale key is left
+#    behind:
 for h in server1 server2 '[server3]:2222'; do ssh-keygen -R "$h" -f configs/known_hosts 2>/dev/null; done
 cat /tmp/known_hosts.new >> configs/known_hosts
 
-# 4. (optional) hash the hostnames at rest once pinned:
+# 5. (optional) hash the hostnames at rest once pinned:
 ssh-keygen -Hf configs/known_hosts && rm -f configs/known_hosts.old
 ```
 
