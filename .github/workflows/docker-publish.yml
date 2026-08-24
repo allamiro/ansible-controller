@@ -119,9 +119,62 @@ jobs:
       contents: read
       packages: write
       id-token: write   # keyless cosign signing via GitHub OIDC
+      actions: read     # read the Auto-tag run's status (see Resolve release version)
 
     steps:
-      - uses: actions/checkout@v7   # .trivyignore must be on disk for the scan below
+      - uses: actions/checkout@v7   # .trivyignore, and the tag lookup below
+        with:
+          fetch-depth: 0   # tags are not fetched by a shallow clone
+
+      # auto-tag.yml creates the vX.Y.Z tag, but pushes it with GITHUB_TOKEN — and
+      # GitHub does not start workflow runs from events created by that token. So this
+      # workflow's `on: push: tags` trigger has never fired, and the type=semver tags
+      # below were never applied: only latest/main/sha-* exist in the registries, for
+      # this release and every one before it. Resolving the tag here puts them on the
+      # run that does happen.
+      #
+      # auto-tag.yml runs as a separate workflow on this same push, so wait on its run
+      # reaching a terminal state rather than polling for the tag on a timer. A fixed
+      # window does not resolve the race, it only usually wins it: a queued runner can
+      # push the tag after the window closes, and because that push carries
+      # GITHUB_TOKEN it can never trigger a publish of its own — so the release would
+      # be stuck at latest/sha-* permanently, silently. Waiting for the run means the
+      # only way to see no tag is that auto-tag finished and produced none.
+      #
+      # GitHub creates the run record at push time even when the runner is queued, so
+      # a run that has not appeared within a minute is a push auto-tag skipped
+      # (paths-ignore) rather than one that is merely slow. Either way, publish
+      # latest/sha-* without semver tags rather than failing a release over a tag that
+      # was never going to exist.
+      - name: Resolve release version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run_id=""
+          for _ in $(seq 1 12); do
+            run_id="$(gh run list --workflow auto-tag.yml --commit "$GITHUB_SHA" \
+                        --json databaseId --jq '.[0].databaseId // empty')"
+            [ -n "$run_id" ] && break
+            sleep 5
+          done
+
+          if [ -n "$run_id" ]; then
+            echo "Waiting for Auto-tag run ${run_id}"
+            gh run watch "$run_id" --exit-status >/dev/null 2>&1 \
+              || echo "::warning::Auto-tag run ${run_id} did not succeed; resolving whatever tag exists"
+          else
+            echo "::notice::no Auto-tag run for ${GITHUB_SHA} (push it skips); no version tag expected"
+          fi
+
+          git fetch --tags --force --quiet
+          version="$(git tag --points-at "$GITHUB_SHA" --list 'v*.*.*' --sort=-v:refname | head -1)"
+          if [ -n "$version" ]; then
+            echo "Publishing version ${version}"
+          else
+            echo "::notice::no v*.*.* tag on ${GITHUB_SHA}; publishing latest/sha tags only"
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Download digests
         uses: actions/download-artifact@v8
@@ -143,9 +196,9 @@ jobs:
             type=ref,event=branch
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,prefix=sha-
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
+            type=semver,pattern={{version}},value=${{ steps.version.outputs.version }},enable=${{ steps.version.outputs.version != '' }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ steps.version.outputs.version }},enable=${{ steps.version.outputs.version != '' }}
+            type=semver,pattern={{major}},value=${{ steps.version.outputs.version }},enable=${{ steps.version.outputs.version != '' }}
 
       - name: Login to Docker Hub
         uses: docker/login-action@v4
