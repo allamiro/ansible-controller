@@ -726,12 +726,16 @@ ssh-keygen -lf /tmp/known_hosts.new
 #    removing both — and name non-default-port hosts in the bracketed form they
 #    were stored under.
 #
-#    The removals must succeed before anything is appended. `-R` rewrites the file
-#    (mkstemp + rename in its directory), so it fails on an unwritable parent dir
-#    even when the file itself is appendable — and appending after a failed
-#    removal leaves the old AND new keys trusted side by side, quietly undoing the
-#    revocation. The touch keeps a first-ever run (no known_hosts yet) from
-#    tripping that gate:
+#    The removals run on a WORK COPY, never on the live file. `-R` rewrites its
+#    target (mkstemp + rename in that directory), so a removal can fail — an
+#    unwritable parent dir, quota, a concurrent chmod — and if removals mutated
+#    the live file directly, one failing after another succeeded would strand it
+#    with good pins already deleted. Editing a copy makes the whole update
+#    all-or-nothing: the live file is touched by exactly one final write, and only
+#    after every removal has succeeded. (The final `>` needs write permission on
+#    the FILE only, so this also works where the parent dir is read-only. Not
+#    doing an mv keeps the live file's owner/mode intact — it must stay readable
+#    to the container's uid 1000.)
 missing=
 for h in server1 server2 '[server3]:2222'; do
   ssh-keygen -F "$h" -f /tmp/known_hosts.new >/dev/null || missing="$missing $h"
@@ -740,16 +744,18 @@ done
 if [ -n "$missing" ]; then
   echo "NOT scanned:$missing — fix and re-scan; known_hosts left unchanged"
 else
-  touch configs/known_hosts
+  work=$(mktemp)
+  cp configs/known_hosts "$work" 2>/dev/null || :   # first-ever pin: start empty
   rmfail=
   for h in server1 server2 '[server3]:2222'; do
-    ssh-keygen -R "$h" -f configs/known_hosts >/dev/null 2>&1 || rmfail="$rmfail $h"
+    ssh-keygen -R "$h" -f "$work" >/dev/null 2>&1 || rmfail="$rmfail $h"
   done
   if [ -n "$rmfail" ]; then
-    echo "old keys NOT removed for:$rmfail — NOT appending (they would stay trusted); fix and re-run"
+    echo "old keys NOT removed for:$rmfail — known_hosts left unchanged; fix and re-run"
   else
-    cat /tmp/known_hosts.new >> configs/known_hosts
+    cat "$work" /tmp/known_hosts.new > configs/known_hosts
   fi
+  rm -f "$work" "$work.old"
 fi
 
 # 4. (optional) hash the hostnames at rest once pinned:
