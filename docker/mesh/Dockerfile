@@ -83,6 +83,15 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # because apt-owned packages carry no pip RECORD, so pip cannot uninstall them;
 # everything this layer resolves against was installed by pip and has a RECORD, so
 # pip can reuse it in place instead of refetching it.
+# The exact set this layer is allowed to add, transitive dependencies included.
+# Constraints stop the controller's own pins from moving, but they say nothing
+# about packages the controller does not have: those would resolve to whatever is
+# newest at build time, so a digest-pinned BASE would still produce a different
+# image on a later rebuild. Pinning the full closure — and asserting the closure
+# is exactly this — makes the orchestrator reproducible for a given BASE.
+# Regenerate after changing a pin above: `comm -13` of the pins before/after.
+COPY docker/mesh/orchestrator-added.txt /tmp/expected-added.txt
+
 RUN set -eux; \
     pip3 freeze --all | grep -E '^[A-Za-z0-9._-]+==' | LC_ALL=C sort > /tmp/base-pins.txt; \
     test -s /tmp/base-pins.txt; \
@@ -91,7 +100,13 @@ RUN set -eux; \
       -c /tmp/constraints.txt \
       "ansible-runner==2.4.3" \
       "receptorctl==1.6.7" \
-      "click==8.3.3"; \
+      "click==8.3.3" \
+      "lockfile==0.12.2" \
+      "pexpect==4.9.0" \
+      "ptyprocess==0.7.0" \
+      "python-daemon==3.1.2" \
+      "python-dateutil==2.9.0.post0" \
+      "six==1.17.0"; \
     pip3 freeze --all | grep -E '^[A-Za-z0-9._-]+==' | LC_ALL=C sort > /tmp/mesh-pins.txt; \
     drift="$(LC_ALL=C comm -23 /tmp/base-pins.txt /tmp/mesh-pins.txt | grep -vi '^click==' || true)"; \
     if [ -n "$drift" ]; then \
@@ -99,8 +114,22 @@ RUN set -eux; \
       echo "$drift" >&2; \
       exit 1; \
     fi; \
-    rm -f /tmp/base-pins.txt /tmp/constraints.txt /tmp/mesh-pins.txt; \
+    LC_ALL=C comm -13 /tmp/base-pins.txt /tmp/mesh-pins.txt > /tmp/added.txt; \
+    if ! LC_ALL=C diff -u /tmp/expected-added.txt /tmp/added.txt; then \
+      echo "ERROR: the packages added by this layer are not the pinned set above." >&2; \
+      echo "       A dependency appeared, vanished, or resolved to another version;" >&2; \
+      echo "       pin it explicitly (or drop the stale pin) so the image stays" >&2; \
+      echo "       reproducible, then rebuild." >&2; \
+      exit 1; \
+    fi; \
+    rm -f /tmp/base-pins.txt /tmp/constraints.txt /tmp/mesh-pins.txt \
+          /tmp/added.txt /tmp/expected-added.txt; \
     pip3 check; \
     ansible --version; \
     ansible-runner --version; \
     receptorctl --help >/dev/null
+
+# Record what this image was actually built on, so a running orchestrator can be
+# traced back to its controller even when BASE was a mutable reference.
+LABEL org.opencontainers.image.base.name="${BASE}"
+LABEL org.opencontainers.image.title="Ansible Mesh Orchestrator"

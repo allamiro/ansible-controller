@@ -1,0 +1,9 @@
+ansible-runner==2.4.3
+click==8.3.3
+lockfile==0.12.2
+pexpect==4.9.0
+ptyprocess==0.7.0
+python-daemon==3.1.2
+python-dateutil==2.9.0.post0
+receptorctl==1.6.7
+six==1.17.0
