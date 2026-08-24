@@ -1,0 +1,26 @@
+# No PKI material — public or private — is committed to git. The CA, certs, keys,
+# and CSRs all live under secrets/ (below) on shared storage and are distributed
+# by the signing workflow (README §6 Phase 6 / §9), never through the repo.
+secrets/**
+!secrets/
+!secrets/**/
+!secrets/**/.gitkeep
+
+# Backstop: never commit key/cert material dropped anywhere under mesh/, even
+# outside secrets/. Extensions are ambiguous (a .pem may hold a private key), so
+# the guard is deliberately broad; anything that must persist belongs in secrets/.
+*.key
+*_key
+*.pem
+*.crt
+*.csr
+*.pub
+*.pfx
+*.p12
+*.p8
+*.der
+*.p7b
+id_rsa
+id_dsa
+id_ecdsa
+id_ed25519
