@@ -10,8 +10,13 @@ name: Auto-tag
 #   fix: / perf: / refactor:   →  patch  (v1.0.0 → v1.0.1)
 #   anything else              →  patch  (default)
 #
-# The new tag triggers docker-publish.yml (versioned image push to Docker Hub
-# + GHCR) and release.yml (GitHub Release with changelog) automatically.
+# The versioned image and the GitHub Release both come from THIS push to main, not
+# from the tag. The tag is pushed with GITHUB_TOKEN, and GitHub does not start
+# workflow runs from events created by that token — so a `push: tags` trigger never
+# fires. The Release is created by the step below; docker-publish.yml runs on this
+# same push, waits for this workflow's run, reads the tag it created, and applies the
+# versioned image tags. (A dedicated release.yml keyed on `push: tags` used to sit
+# alongside this and never ran once, for the same GITHUB_TOKEN reason; it was removed.)
 
 on:
   push:
