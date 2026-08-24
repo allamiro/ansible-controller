@@ -80,21 +80,19 @@ jobs:
       # A just-built local image has no registry digest, so this is the exact
       # case ALLOW_MUTABLE_BASE exists for. The base is not actually mutable
       # here — it was built from this commit seconds ago.
+      #
+      # Plain `docker build`, NOT build-push-action: that action runs in the
+      # docker-container buildx builder, which resolves FROM against registries
+      # only — it cannot see the ansible-controller:ci image just loaded into the
+      # runner's daemon, so the build fails with "pull access denied". The
+      # daemon's default BuildKit builder does see local images. The layer this
+      # forgoes gha-caching for is a single pip install (~20s).
       - name: Build orchestrator FROM the controller
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: ./docker/mesh/Dockerfile
-          target: orchestrator
-          platforms: ${{ matrix.platform }}
-          push: false
-          load: true
-          tags: ansible-orchestrator:ci
-          build-args: |
-            BASE=ansible-controller:ci
-            ALLOW_MUTABLE_BASE=1
-          cache-from: type=gha,scope=mesh-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=mesh-${{ matrix.arch }}
+        run: |
+          docker build -f docker/mesh/Dockerfile --target orchestrator \
+            --build-arg BASE=ansible-controller:ci \
+            --build-arg ALLOW_MUTABLE_BASE=1 \
+            -t ansible-orchestrator:ci .
 
       # The Dockerfile's own layer already enforces the no-drift and exact-added-set
       # assertions at build time; this proves the tools run on THIS architecture.
