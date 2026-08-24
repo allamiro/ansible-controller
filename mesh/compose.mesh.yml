@@ -1,0 +1,87 @@
+# Mesh overlay — distributed-execution control plane (mesh plan Phase 3).
+#
+# This file is inert unless it is BOTH passed explicitly and its profile enabled:
+#
+#   docker compose -f docker-compose.yml -f mesh/compose.mesh.yml \
+#     --profile mesh up -d
+#
+# `make up` runs plain `docker compose up -d`, which never reads this file, so the
+# controller's default behaviour is untouched (mesh plan §1, guarantee 2).
+# Relative paths below resolve from the project directory — the repo root, since
+# docker-compose.yml is the first -f file — not from mesh/.
+
+services:
+  # The controller gains ONE thing: a mount of the shared socket volume, so a
+  # process inside it can reach the receptor control socket. Image, ports, and
+  # every other mount still come from docker-compose.yml; Compose merges volumes
+  # by target path, so nothing there is replaced.
+  #
+  # The controller image has no receptorctl yet — Phase 5 points this service at
+  # the orchestrator image (controller + ansible-runner + receptorctl) and starts
+  # dispatching. Phase 3 only proves the plumbing.
+  ansible:
+    volumes:
+      - receptor-runtime:/run/receptor
+
+  receptor-controller:
+    # Opt-in only: without `--profile mesh` this service is never created, so
+    # `docker compose up` on the overlay still starts the controller alone.
+    profiles: [mesh]
+    # Pinned by digest as well as tag: a tag is a mutable pointer, and the mesh's
+    # ingress is not something to re-base implicitly on a rebuild. v1.6.7 matches
+    # the receptorctl pinned in docker/mesh/Dockerfile — receptor and receptorctl
+    # are released together and should be upgraded together.
+    image: quay.io/ansible/receptor:v1.6.7@sha256:6296f6cd3b0301cc7c9376e48ae15a42fc7b606235d08e94543fe77661cea4d2
+    container_name: receptor-controller
+    restart: unless-stopped
+    volumes:
+      # Staged read-only, then installed into place by the command below.
+      - ./mesh/config/receptor/controller.yml:/mnt/receptor/controller.yml:ro
+      - receptor-runtime:/run/receptor
+    # Two startup problems are solved here, both as root, before the long-lived
+    # process drops back to the image's unprivileged receptor user:
+    #
+    #  1. A fresh named volume is created root-owned 0755, so uid 998 cannot
+    #     create its socket inside it. Root prepares the directory first.
+    #  2. The config is COPIED in rather than read from the bind mount. A checkout
+    #     made under a restrictive umask (0077 is common, and is this repo's own
+    #     working default) leaves controller.yml mode 0600 and unreadable to uid
+    #     998 — the sidecar would die with a confusing "permission denied" that
+    #     depends on the operator's umask. Installing it as root removes host file
+    #     modes from the equation and keeps the mount read-only.
+    #
+    # receptor itself never runs as root: setpriv drops to receptor(998) via exec,
+    # so PID 1's child is unprivileged for the life of the container.
+    #
+    # Consequence for the dispatcher (Phase 5/7): the socket is 0600 receptor:998
+    # inside a 0750 directory, so only root — or uid 998, which does not exist in
+    # the controller image — can reach it. `docker exec` runs as root, which is how
+    # `make run` already works and how `make mesh-run` will, so this is consistent.
+    # But an operator who SSHes into the controller as `ansible` (uid 1000, port
+    # 2222) CANNOT dispatch: they get "Socket path does not exist", because 0750
+    # hides the directory contents. If that path is ever needed, widen it
+    # deliberately (group-owned socket at 0660), not by loosening this to 0666 —
+    # write access to this socket is authority to run work on every node.
+    user: "0:0"
+    entrypoint: ["/usr/local/bin/dumb-init", "--", "/bin/sh", "-euc"]
+    command:
+      - |
+        install -d -o receptor -g receptor -m 0750 /run/receptor
+        install -o receptor -g receptor -m 0400 \
+          /mnt/receptor/controller.yml /etc/receptor/receptor.conf
+        exec setpriv --reuid=receptor --regid=receptor --clear-groups \
+          receptor -c /etc/receptor/receptor.conf
+    # Ready means "the control socket answers", which is exactly what the
+    # orchestrator needs — a listening TCP port would not prove the socket exists.
+    healthcheck:
+      test: ["CMD", "receptorctl", "--socket", "/run/receptor/receptor.sock", "status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  # Carries only the control socket between the sidecar and the controller. The
+  # socket is the mesh's authority boundary, so it stays 0600 and never leaves
+  # this volume (see mesh/config/receptor/controller.yml).
+  receptor-runtime:
