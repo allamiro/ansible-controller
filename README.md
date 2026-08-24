@@ -25,7 +25,7 @@ Ubuntu 26.04-based Docker image that packages Ansible, OpenSSH, and everything n
 - **Multi-platform** — ships `linux/amd64` and `linux/arm64` (Apple Silicon, AWS Graviton)
 - **Auto-versioned** — every push to `main` is automatically tagged via conventional commits
 - **Published to two registries** — Docker Hub and GitHub Container Registry (GHCR)
-- **Security hardened** — non-root `ansible` user, `PermitRootLogin no`, pip-upgraded CVE packages
+- **Security hardened** — non-root `ansible` user, `PermitRootLogin no`, pip-upgraded CVE packages, unreachable vendored binaries stripped
 
 ---
 
@@ -740,6 +740,9 @@ This project is licensed under the [Apache License 2.0](LICENSE).
 ## Notes
 
 - **Base image:** Ubuntu 26.04 LTS — standard security support until 2031, extended further with Ubuntu Pro.
+- **CVE surface:** the build strips two sources of findings that `apt-get upgrade` cannot reach, and the image scans clean at CRITICAL/HIGH.
+  - Canonical drops `/usr/bin/pebble` into the OCI rootfs outside dpkg, so no package owns it and it can never be patched in place. This image runs `entrypoint.sh` + sshd as PID 1 and never invokes pebble, so it is deleted along with `/var/lib/pebble` — taking eight Go stdlib CVEs with it.
+  - pip bundles its own pinned copies of a few libraries under `pip/_vendor` and advertises them in `vendor.txt` and `bom.cdx.json`, which scanners read independently of what is actually installed. `docker/patch-pip-vendor.py` re-vendors msgpack from the patched release installed alongside it and deletes the vendored `pkg_resources` tree (dead code — pip declares that metadata backend unusable on Python 3.14+), updating both manifests to match. The script asserts its own result, so a future pip release that reshapes `_vendor` fails the build rather than silently reintroducing the findings. The redundant apt `python3-pip`, fully shadowed by the pip in `/usr/local`, is purged.
 - **Ansible:** the image ships the current `ansible-core` (via pip) plus the `ansible.posix` and `community.general` collections — not the ~280 MiB `ansible` community bundle. Declare any additional collections or roles in `configs/requirements.yml`; they are installed automatically at container start (or on demand with `make galaxy`) into the host-persisted `configs/.galaxy/` directory, no rebuild needed.
 - If `configs/ansible.cfg` exists on the host it is used automatically; otherwise the image default applies.
 - The `ansible` user (uid 1000) is the only user inside the container. `PermitRootLogin no` is enforced.
