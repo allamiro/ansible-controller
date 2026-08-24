@@ -691,8 +691,9 @@ path it will happily capture an attacker's key — its manual explicitly warns
 against building `known_hosts` "without verifying the keys":
 
 ```bash
-# 1. Fetch candidate keys (not yet trusted)
-ssh-keyscan -H server1 server2 > /tmp/known_hosts.new
+# 1. Fetch candidate keys — WITHOUT -H, so each fingerprint stays attributable to
+#    its plaintext host in the next step (-H hashes the hostnames):
+ssh-keyscan server1 server2 > /tmp/known_hosts.new
 
 # 2. Compare each fingerprint against a TRUSTED source before pinning — the host
 #    console, the cloud provider's API, a config-management fact, or the host's
@@ -701,6 +702,9 @@ ssh-keygen -lf /tmp/known_hosts.new
 
 # 3. Only after the fingerprints match, add them:
 cat /tmp/known_hosts.new >> configs/known_hosts
+
+# 4. (optional) hash the hostnames at rest once pinned:
+ssh-keygen -Hf configs/known_hosts && rm -f configs/known_hosts.old
 ```
 
 Better still, provision authoritative host keys directly from your
