@@ -113,7 +113,7 @@ HA is provided at two layers that fail and recover independently:
 ### 2.4 Dispatch & failover flow (per job)
 
 ```text
- exec-run ZONE=net20 PLAYBOOK=patch.yml LIMIT=web01
+ mesh-run ZONE=net20 PLAYBOOK=patch.yml LIMIT=web01
      │
      ├─(1) classify: ZONE=net20 → pool = [exec-net20-a, exec-net20-b]
      ├─(2) receptorctl status → healthy = reachable subset of the pool
@@ -195,7 +195,7 @@ ansible-controller/
     │       └── node.yml.template
     ├── pki/                     # mesh-ca-init, controller-cert, node-csr, node-sign
     ├── bin/
-    │   ├── exec-run.sh          # dispatcher (classify → select → submit → collect)
+    │   ├── mesh-run          # dispatcher (classify → select → submit → collect)
     │   ├── mesh-status.sh
     │   └── mesh-ping.sh
     ├── deploy/                  # HA overlays: multi-ingress, VIP, shared-storage mounts
@@ -258,8 +258,8 @@ risk column; anything that touches it must pass [§9.1](#91-non-disruption-check
 - [ ] **No‑TLS** dev mesh to prove wiring (never in a production compose file)
 
 ### Phase 5 — prove distributed execution
-- [ ] `mesh/bin/exec-run.sh` (minimal: transmit → submit → worker → process)
-- [ ] Positive test: controller can’t SSH target directly; `exec-run` succeeds
+- [ ] `mesh/bin/mesh-run` (minimal: transmit → submit → worker → process)
+- [ ] Positive test: controller can’t SSH target directly; `mesh-run` succeeds
 - [ ] "Prove‑on‑node" playbook shows node id, not controller
 
 ### Phase 6 — PKI + mandatory mTLS
@@ -287,7 +287,7 @@ risk column; anything that touches it must pass [§9.1](#91-non-disruption-check
 - [ ] Test: unsigned work rejected
 
 ### Phase 10 — Make targets + docs
-- [ ] `mesh-up`, `mesh-down`, `mesh-status`, `mesh-ping`, `exec-run` (or `relay-run`)
+- [ ] `mesh-up`, `mesh-down`, `mesh-status`, `mesh-ping`, `mesh-run`
 - [ ] Runbook: create/enroll/sign/install/verify/run/rotate/revoke/troubleshoot
 - [ ] Confirm every pre‑existing Make target still works
 
@@ -332,7 +332,7 @@ docker compose --profile mesh config --services   # expect: + receptor-controlle
 ### 9.2 Positive distributed‑execution tests
 ```text
 1. Prove the controller CANNOT reach the target directly (no route / SSH fails).
-2. make relay-run RELAY=net20 PLAYBOOK=ping.yml  → SUCCESS on the controller CLI.
+2. make mesh-run ZONE=net20 PLAYBOOK=ping.yml  → SUCCESS on the controller CLI.
 3. "Prove-on-node" playbook returns the execution node's hostname/id, not the
    controller's (§25 of the source spec).
 4. Correct Ansible exit code and artifacts returned to the controller.
@@ -351,7 +351,7 @@ Each must be **rejected** (encryption alone is not acceptance — both sides aut
 
 ### 9.4 Target SSH negative test
 ```text
-Remove/replace the job SSH credential, then relay-run:
+Remove/replace the job SSH credential, then mesh-run:
   Receptor connects ✓   Runner reaches node ✓   SSH to target FAILS ✓   job = FAILED
 Proves Receptor identity and target SSH identity are separate.
 ```
@@ -359,14 +359,14 @@ Proves Receptor identity and target SSH identity are separate.
 ### 9.5 Execution‑node HA (failover)
 ```text
 - Pool net20 = [exec-net20-a, exec-net20-b]; stop exec-net20-a.
-- relay-run RELAY=net20 → dispatcher selects exec-net20-b → SUCCESS.
+- mesh-run ZONE=net20 → dispatcher selects exec-net20-b → SUCCESS.
 - Assert: a job that had already STARTED on a node is NOT retried elsewhere
   (failover-boundary rule).
 ```
 
 ### 9.6 Concurrency / parallelism
 ```text
-- Launch N concurrent relay-run jobs across zones.
+- Launch N concurrent mesh-run jobs across zones.
 - Assert unique PDDs, unique artifact dirs, no work-unit id collision.
 - Assert per-node concurrency cap holds (extra jobs queue, not overrun).
 ```
@@ -383,7 +383,7 @@ Proves Receptor identity and target SSH identity are separate.
 ## 10. Definition of done
 
 - `make run` still executes directly (regression proven).
-- `make relay-run RELAY=net20 PLAYBOOK=ping.yml` runs on the node and returns rc + output.
+- `make mesh-run ZONE=net20 PLAYBOOK=ping.yml` runs on the node and returns rc + output.
 - Controller has **no** direct network path to the target (proven).
 - mTLS mutual, node‑id checking on, `insecureskipverify` never set.
 - No CA private key inside any runtime container.
@@ -417,5 +417,12 @@ Proves Receptor identity and target SSH identity are separate.
    are network‑only initially?
 2. **Deployment target for Tier 2:** two VMs, or an orchestrator (k8s)? Determines
    when/how Tier 2 becomes real.
-3. **Naming:** `relay-run` (matches the source spec) vs `exec-run` (matches the
-   orchestrator/execution‑node language). Pick one before Phase 5.
+3. **Command naming — RESOLVED.** Distributed jobs use
+   **`make mesh-run ZONE=<zone> PLAYBOOK=<pb>`**, joining the existing `mesh-*`
+   namespace (`mesh-up`, `mesh-down`, `mesh-status`, `mesh-ping`). `make run` stays
+   as the direct/legacy path, unchanged. `ZONE` unifies local (`ZONE=local`) and
+   network (`ZONE=net20`), so no separate verbs are needed; when auto‑routing lands,
+   `ZONE` becomes optional and is classified from `zones.yml` — no new verb.
+   Rejected: `control-run` (the control plane does not execute) and `relay-run`
+   (mislabels an execution node as a pass‑through). The source spec’s
+   `relay-run`/`RELAY=` may be kept as back‑compat aliases if desired.
