@@ -695,6 +695,13 @@ against building `known_hosts` "without verifying the keys":
 #    its plaintext host in the next step (-H hashes the hostnames):
 ssh-keyscan server1 server2 > /tmp/known_hosts.new
 
+#    A host reached on a non-default port (ansible_port) must be scanned WITH -p.
+#    OpenSSH looks such a host up as [host]:port, and ssh-keyscan only writes that
+#    bracketed form when -p is given — scan it without and you store a plain
+#    `server3` entry that never matches, so StrictHostKeyChecking=yes rejects the
+#    host even though its key was verified:
+ssh-keyscan -p 2222 server3 >> /tmp/known_hosts.new
+
 # 2. Compare each fingerprint against a TRUSTED source before pinning — the host
 #    console, the cloud provider's API, a config-management fact, or the host's
 #    own /etc/ssh/ssh_host_*_key.pub obtained over a channel you already trust:
@@ -704,8 +711,9 @@ ssh-keygen -lf /tmp/known_hosts.new
 #    for each host first — otherwise a rekeyed/rebuilt host's OLD key stays in the
 #    file and OpenSSH keeps trusting it (a match on ANY entry passes). Keep the
 #    loop: `-R` takes a single host, and a second `-R` overrides the first rather
-#    than removing both:
-for h in server1 server2; do ssh-keygen -R "$h" -f configs/known_hosts 2>/dev/null; done
+#    than removing both. Non-default-port hosts must be named in the same
+#    bracketed form they were stored under, or their stale key is left behind:
+for h in server1 server2 '[server3]:2222'; do ssh-keygen -R "$h" -f configs/known_hosts 2>/dev/null; done
 cat /tmp/known_hosts.new >> configs/known_hosts
 
 # 4. (optional) hash the hostnames at rest once pinned:
