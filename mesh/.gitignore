@@ -1,0 +1,13 @@
+# The mesh secret tree holds private keys and the CA — never commit any of it.
+# Only the directory skeleton (.gitkeep) is tracked.
+secrets/**
+!secrets/
+!secrets/**/
+!secrets/**/.gitkeep
+
+# Common private-material patterns, wherever they land under mesh/
+*.key
+*.pem
+*.csr
+*_key
+*_key.pub
