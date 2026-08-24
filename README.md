@@ -702,7 +702,9 @@ ssh-keygen -lf /tmp/known_hosts.new
 
 # 3. Only after the fingerprints match, install them. Remove any superseded entry
 #    for each host first — otherwise a rekeyed/rebuilt host's OLD key stays in the
-#    file and OpenSSH keeps trusting it (a match on ANY entry passes):
+#    file and OpenSSH keeps trusting it (a match on ANY entry passes). Keep the
+#    loop: `-R` takes a single host, and a second `-R` overrides the first rather
+#    than removing both:
 for h in server1 server2; do ssh-keygen -R "$h" -f configs/known_hosts 2>/dev/null; done
 cat /tmp/known_hosts.new >> configs/known_hosts
 
