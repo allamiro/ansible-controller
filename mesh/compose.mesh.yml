@@ -1,12 +1,20 @@
 # Mesh overlay — distributed-execution control plane (mesh plan Phase 3).
 #
-# This file is inert unless it is BOTH passed explicitly and its profile enabled:
-#
 #   docker compose -f docker-compose.yml -f mesh/compose.mesh.yml \
 #     --profile mesh up -d
 #
-# `make up` runs plain `docker compose up -d`, which never reads this file, so the
-# controller's default behaviour is untouched (mesh plan §1, guarantee 2).
+# `make up` runs plain `docker compose up -d`, which never passes this file, so
+# the controller's default behaviour is untouched (mesh plan §1, guarantee 2).
+#
+# Precisely what each half does, since the two are often conflated:
+#   * Passing -f mesh/compose.mesh.yml merges the `ansible:` block below, which
+#     adds the receptor-runtime mount to the controller and declares the volume.
+#     No mesh container is created and nothing new runs.
+#   * Adding --profile mesh is what creates the receptor-controller sidecar.
+# So the overlay is not literally inert when loaded alone — it is the profile that
+# gates the sidecar. A volume mount cannot itself carry `profiles:`; if the
+# controller must be bit-identical, omit the -f instead, which is exactly what
+# `make up` does.
 # Relative paths below resolve from the project directory — the repo root, since
 # docker-compose.yml is the first -f file — not from mesh/.
 
@@ -53,9 +61,14 @@ services:
     # receptor itself never runs as root: setpriv drops to receptor(998) via exec,
     # so PID 1's child is unprivileged for the life of the container.
     #
-    # Consequence for the dispatcher (Phase 5/7): the socket is 0600 receptor:998
-    # inside a 0750 directory, so only root — or uid 998, which does not exist in
-    # the controller image — can reach it. `docker exec` runs as root, which is how
+    # Consequence for the dispatcher (Phase 5/7): the directory and the socket are
+    # both owned by receptor(998) — the socket's own process — and are 0750/0600,
+    # so the only identities that can reach the socket are receptor itself and
+    # root. (Root-owning the directory would buy nothing: receptor must create,
+    # and on restart replace, its socket there, so it needs write access to the
+    # directory either way. The boundary being enforced is that NO OTHER uid can
+    # reach it, not that receptor is kept out of its own runtime dir.)
+    # `docker exec` runs as root, which is how
     # `make run` already works and how `make mesh-run` will, so this is consistent.
     # But an operator who SSHes into the controller as `ansible` (uid 1000, port
     # 2222) CANNOT dispatch: they get "Socket path does not exist", because 0750
