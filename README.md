@@ -685,11 +685,26 @@ ssh_args = -o UserKnownHostsFile=/configs/known_hosts -o StrictHostKeyChecking=y
 ```
 
 Pre-populate the `known_hosts` file on the host (it persists via the `./configs`
-mount):
+mount). **Verify the keys out-of-band before trusting them.** `ssh-keyscan`
+records whatever key answers on the network, so over an untrusted or compromised
+path it will happily capture an attacker's key — its manual explicitly warns
+against building `known_hosts` "without verifying the keys":
 
 ```bash
-ssh-keyscan -H server1 server2 >> configs/known_hosts
+# 1. Fetch candidate keys (not yet trusted)
+ssh-keyscan -H server1 server2 > /tmp/known_hosts.new
+
+# 2. Compare each fingerprint against a TRUSTED source before pinning — the host
+#    console, the cloud provider's API, a config-management fact, or the host's
+#    own /etc/ssh/ssh_host_*_key.pub obtained over a channel you already trust:
+ssh-keygen -lf /tmp/known_hosts.new
+
+# 3. Only after the fingerprints match, add them:
+cat /tmp/known_hosts.new >> configs/known_hosts
 ```
+
+Better still, provision authoritative host keys directly from your
+config-management system or golden image instead of scanning at all.
 
 If you prefer trust-on-first-use over pre-pinning every host, use
 `StrictHostKeyChecking=accept-new`: Ansible records each host key the first time
