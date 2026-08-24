@@ -11,12 +11,19 @@
 #     -t ansible-orchestrator:dev .
 #
 # BASE is REQUIRED and deliberately has no default. It must name a controller
-# image built from docker/Dockerfile, pinned to an immutable digest: a floating
-# tag such as :latest would silently re-base the image on whatever controller is
-# newest at build time, which is the very drift this design exists to prevent.
-# With no default the build fails closed instead ("base name (${BASE}) should not
-# be blank"). The execution-node target is added in a follow-up PR (mesh plan
-# Phase 4) so receptor's Go-binary CVE surface is reviewed on its own.
+# image built from docker/Dockerfile, pinned to an immutable digest: a tag is a
+# mutable pointer, so it would silently re-base the image on whatever controller
+# it points at come build time — the very drift this design exists to prevent.
+# With no default the build fails closed ("base name (${BASE}) should not be
+# blank"), and the guard in the stage below rejects a BASE that is not a digest.
+#
+# A controller image that was just built locally and never pushed has no digest
+# to name; such builds opt out explicitly and are warned that the result is not
+# reproducible:
+#   --build-arg ALLOW_MUTABLE_BASE=1
+#
+# The execution-node target is added in a follow-up PR (mesh plan Phase 4) so
+# receptor's Go-binary CVE surface is reviewed on its own.
 ARG BASE
 
 # ---- orchestrator: the control-plane image that DISPATCHES work ----
@@ -25,6 +32,27 @@ ARG BASE
 # sshd/entrypoint unchanged, so operators run `make mesh-run` the same way they
 # run `make run` today.
 FROM ${BASE} AS orchestrator
+
+# Re-declared so the value is readable inside the stage (a pre-FROM ARG is not).
+ARG BASE
+# Enforce the immutability promise above rather than only documenting it: a tag —
+# `:latest` or any other — can be repointed between builds, so BASE must name a
+# digest. Local builds against a controller that was just built and never pushed
+# have no digest to name, so they opt out explicitly and get a warning instead:
+#   --build-arg ALLOW_MUTABLE_BASE=1
+ARG ALLOW_MUTABLE_BASE=0
+RUN set -eu; \
+    case "${BASE}" in \
+      *@sha256:*) ;; \
+      *) if [ "${ALLOW_MUTABLE_BASE}" != "1" ]; then \
+           echo "ERROR: BASE='${BASE}' is not digest-pinned." >&2; \
+           echo "       Pass a controller image as repo@sha256:<digest> so the mesh" >&2; \
+           echo "       image cannot be silently re-based between builds, or set" >&2; \
+           echo "       --build-arg ALLOW_MUTABLE_BASE=1 for a local build." >&2; \
+           exit 1; \
+         fi; \
+         echo "WARNING: BASE='${BASE}' is a mutable reference; this image is not reproducible." >&2 ;; \
+    esac
 
 # bash with pipefail: the pins snapshot below is built through a pipe, and under
 # the default /bin/sh (dash, no pipefail) a failing `pip3 freeze` would be masked
