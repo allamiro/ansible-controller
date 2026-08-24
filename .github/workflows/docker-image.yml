@@ -1,17 +1,18 @@
 name: CI
 
+# Triggers deliberately match docker-publish.yml's rather than filtering on paths.
+# That workflow rebuilds and publishes on every push to main, and this image's
+# contents are not determined by this repository alone: the Dockerfile tracks a
+# mutable ubuntu:26.04, runs apt-get upgrade, and installs Python packages at floors
+# rather than exact pins. A README-only merge therefore publishes a freshly resolved
+# image that may differ from anything previously scanned. A path filter here would
+# mean some merges publish without the CVE gate below ever having run — so every PR
+# that can trigger a publish is gated, at the cost of building on doc-only changes.
 on:
   pull_request:
     branches: ["main"]
-    paths:
-      - "docker/**"
-      - "docker-compose.yml"
-      - ".github/workflows/docker-image.yml"
   push:
     branches: ["main"]
-    paths:
-      - "docker/**"
-      - "docker-compose.yml"
 
 jobs:
   lint:
@@ -27,11 +28,27 @@ jobs:
           dockerfile: docker/Dockerfile
           failure-threshold: error
 
+  # Mirrors the publish matrix in docker-publish.yml: each architecture is built
+  # natively and gated on its own. Scanning only amd64 would let an arm64-only
+  # CRITICAL/HIGH — a different base-image package set, or an arch-specific binary
+  # like msgpack's compiled extension — pass the gate and still get published.
+  # Native runners for the same reason as the publish workflow: arm64 under QEMU
+  # was ~5x slower.
   build-and-test:
-    name: Build and smoke-test (amd64)
-    runs-on: ubuntu-latest
+    name: Build and smoke-test (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     needs: lint
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
     permissions:
       contents: read
     steps:
@@ -42,12 +59,14 @@ jobs:
         with:
           context: .
           file: ./docker/Dockerfile
-          platforms: linux/amd64
+          platforms: ${{ matrix.platform }}
           push: false
           load: true
           tags: ansible-controller:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # scoped per arch — a shared cache scope would have the two runners
+          # evicting each other's layers every run
+          cache-from: type=gha,scope=ci-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=ci-${{ matrix.arch }}
       - name: Smoke test
         run: |
           docker run -d --name ci-smoke ansible-controller:ci
@@ -55,3 +74,23 @@ jobs:
           docker exec ci-smoke ansible --version
           docker exec ci-smoke pgrep sshd
           docker rm -f ci-smoke
+
+      # The gate that makes a CVE fix verifiable before it is merged. This image is
+      # built with push: false, so a regression caught here never reaches a registry —
+      # unlike the scan in docker-publish.yml, which can only report after the manifest
+      # is already public.
+      #
+      # --ignore-unfixed: fail only on findings that can actually be acted on. Without
+      # it, a newly disclosed HIGH with no upstream patch yet would block every merge
+      # until the distro caught up, with nothing a change here could do about it.
+      # Accepted risks belong in .trivyignore, with a justification and an expiry.
+      - name: Fail on CRITICAL/HIGH CVEs (Trivy)
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+            | sh -s -- -b /usr/local/bin
+          trivy image \
+            --severity CRITICAL,HIGH \
+            --ignore-unfixed \
+            --exit-code 1 \
+            --timeout 10m \
+            ansible-controller:ci
