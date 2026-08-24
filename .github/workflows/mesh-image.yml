@@ -10,19 +10,25 @@ name: Mesh CI
 # Unlike docker-image.yml this workflow IS path-filtered: the mesh Dockerfile
 # builds FROM the controller image produced in the same job, so its inputs are
 # fully determined by files in this repository — the drift concern that forces
-# docker-image.yml to run on every PR does not apply here. Publishing mesh images
-# is deliberately out of scope (mesh plan Phase 11); docker-publish.yml is
-# untouched.
+# docker-image.yml to run on every PR does not apply here. The filter covers ALL
+# of docker/ (not just docker/mesh/): a change to the controller Dockerfile,
+# entrypoint, or pip-vendor patch changes the orchestrator base, and could break
+# its install or dependency assertions without any mesh file moving — skipped
+# here, that breakage would land on main undetected until the next mesh-only PR.
+# Publishing mesh images is deliberately out of scope (mesh plan Phase 11);
+# docker-publish.yml is untouched.
 on:
   pull_request:
     branches: ["main"]
     paths:
-      - "docker/mesh/**"
+      - "docker/**"
+      - ".dockerignore"
       - ".github/workflows/mesh-image.yml"
   push:
     branches: ["main"]
     paths:
-      - "docker/mesh/**"
+      - "docker/**"
+      - ".dockerignore"
       - ".github/workflows/mesh-image.yml"
 
 jobs:
@@ -104,10 +110,13 @@ jobs:
 
       # Same gate as the controller CI. The orchestrator inherits the controller's
       # CVE posture; this catches anything the added packages introduce, per arch.
+      # Installer fetched from the pinned release tag and told to install that
+      # same version — not from `main`, whose script contents can change (or be
+      # compromised) between runs. Bump the two pins together.
       - name: Fail on CRITICAL/HIGH CVEs (Trivy)
         run: |
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
-            | sh -s -- -b /usr/local/bin
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/v0.74.0/contrib/install.sh \
+            | sh -s -- -b /usr/local/bin v0.74.0
           trivy image \
             --severity CRITICAL,HIGH \
             --ignore-unfixed \
