@@ -1,13 +1,23 @@
-# The mesh secret tree holds private keys and the CA — never commit any of it.
-# Only the directory skeleton (.gitkeep) is tracked.
+# The mesh secret tree holds private keys AND the certs/CSRs issued alongside
+# them at runtime — never commit its contents. Only the skeleton (.gitkeep)
+# is tracked.
 secrets/**
 !secrets/
 !secrets/**/
 !secrets/**/.gitkeep
 
-# Common private-material patterns, wherever they land under mesh/
+# Defence-in-depth: a PRIVATE key dropped anywhere under mesh/ (even outside
+# secrets/) must never be committed. Public PKI material is intentionally NOT
+# ignored here — *.crt certificates, *.csr signing requests, and *.pub keys are
+# distributed by the PKI workflow and may be shared/tracked (README §2.3 "PKI
+# pub", §3/§4 shared config+PKI on git). Runtime private material belongs in
+# secrets/ (ignored wholesale above); these patterns only backstop mistakes.
 *.key
-*.pem
-*.csr
 *_key
-*_key.pub
+id_rsa
+id_dsa
+id_ecdsa
+id_ed25519
+*.pfx
+*.p12
+*.p8
