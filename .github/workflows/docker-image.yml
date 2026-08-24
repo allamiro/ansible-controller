@@ -55,3 +55,23 @@ jobs:
           docker exec ci-smoke ansible --version
           docker exec ci-smoke pgrep sshd
           docker rm -f ci-smoke
+
+      # The gate that makes a CVE fix verifiable before it is merged. This image is
+      # built with push: false, so a regression caught here never reaches a registry —
+      # unlike the scan in docker-publish.yml, which can only report after the manifest
+      # is already public.
+      #
+      # --ignore-unfixed: fail only on findings that can actually be acted on. Without
+      # it, a newly disclosed HIGH with no upstream patch yet would block every merge
+      # until the distro caught up, with nothing a change here could do about it.
+      # Accepted risks belong in .trivyignore, with a justification and an expiry.
+      - name: Fail on CRITICAL/HIGH CVEs (Trivy)
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+            | sh -s -- -b /usr/local/bin
+          trivy image \
+            --severity CRITICAL,HIGH \
+            --ignore-unfixed \
+            --exit-code 1 \
+            --timeout 10m \
+            ansible-controller:ci

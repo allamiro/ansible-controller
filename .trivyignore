@@ -1,0 +1,20 @@
+# Accepted CVE findings, skipped by every Trivy scan in .github/workflows/.
+#
+# The scans in docker-image.yml and docker-publish.yml fail the build on
+# CRITICAL/HIGH, so this file is the only escape hatch — which makes it worth
+# keeping honest. Before adding an entry, prefer fixing the finding: most of what
+# lands here is reachable by bumping a pin in docker/Dockerfile, and a finding that
+# looks unfixable is often a vendored copy rather than the real package (see
+# docker/patch-pip-vendor.py for how pip's bundled tree produced two such reports).
+#
+# Every entry needs a justification and an expiry date. Trivy drops the entry on its
+# own once the date passes, so the finding comes back for a fresh decision rather
+# than staying suppressed because nobody revisited it.
+#
+#   CVE-2026-12345 exp:2026-12-31
+#   # Only reachable through <component>, which this image does not run.
+#   # Upstream fix tracked in <link>.
+#
+# Findings with no upstream fix available do NOT belong here: the scans pass
+# --ignore-unfixed, so they are already excluded and will surface on their own once
+# a patch ships.
