@@ -39,6 +39,14 @@ services:
     # ingress is not something to re-base implicitly on a rebuild. v1.6.7 matches
     # the receptorctl pinned in docker/mesh/Dockerfile — receptor and receptorctl
     # are released together and should be upgraded together.
+    #
+    # The digest is the MULTI-ARCH index digest (linux/amd64 + linux/arm64 +
+    # linux/ppc64le), not a single-arch manifest, so this same pin runs natively
+    # on amd64 and arm64 control hosts — matching the two architectures the
+    # controller itself is built for. Verify when bumping the pin:
+    #   docker buildx imagetools inspect quay.io/ansible/receptor:vX.Y.Z
+    # and take the top-level "Digest:" line (the index), never a per-platform
+    # manifest digest from the list below it.
     image: quay.io/ansible/receptor:v1.6.7@sha256:6296f6cd3b0301cc7c9376e48ae15a42fc7b606235d08e94543fe77661cea4d2
     container_name: receptor-controller
     restart: unless-stopped
