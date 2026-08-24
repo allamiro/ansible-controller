@@ -196,9 +196,11 @@ docker/Dockerfile        →  controller        # UNCHANGED; the PUBLISHED image
 docker/mesh/Dockerfile:
   ARG BASE=<controller image>
   FROM ${BASE} AS orchestrator      # controller + ansible-runner + receptorctl
-  FROM ${BASE} AS execution-node    # controller + receptor; entrypoint runs
-                                    #   receptor, NOT sshd (port 22 never exposed;
-                                    #   the inherited sshd is a later slimming target)
+  FROM ${BASE} AS execution-node    # controller + receptor + ansible-runner;
+                                    #   entrypoint runs receptor, NOT sshd; the
+                                    #   inherited port-22 HEALTHCHECK is overridden
+                                    #   with a receptor-readiness check (inherited
+                                    #   sshd is never started — a later slimming target)
 ```
 
 Why not a shared `ansible-runtime` base stage inside `docker/Dockerfile`? Two
@@ -256,7 +258,7 @@ risk column; anything that touches it must pass [§9.1](#91-non-disruption-check
 | 1 | Add `docker/mesh/Dockerfile` scaffold (`FROM` controller); **`docker/Dockerfile` untouched** | No — controller build unchanged | Controller smoke + Trivy = 0 unchanged, both arches ([§9.1](#91-non-disruption-checks-run-every-mesh-pr)) |
 | 2 | `orchestrator` target in `docker/mesh/Dockerfile` (`FROM` controller + `ansible-runner` + `receptorctl`) | No — separate image, explicit `--target` | Controller digest unchanged; `orchestrator` scan 0 |
 | 3 | `receptor-controller` sidecar + shared socket volume, **profile‑gated** | No (opt‑in) | `make up` unchanged |
-| 4 | `execution-node` target in `docker/mesh/Dockerfile` (`FROM` controller + `receptor`; entrypoint runs receptor, not sshd) + test lab, **no TLS (dev only)** | No | Local build only; never published |
+| 4 | `execution-node` target in `docker/mesh/Dockerfile` (`FROM` controller + `receptor` + `ansible-runner`; entrypoint runs receptor; HEALTHCHECK → receptor readiness) + test lab, **no TLS (dev only)** | No | Local build only; never published |
 | 5 | Prove `transmit → work submit → worker → process` across the mesh | No | Positive tests [§9.2](#92-positive-distributed-execution-tests) |
 | 6 | PKI scripts + **mandatory mTLS** + **Tier‑1** (2nd receptor sidecar, orchestrator control‑socket failover, node multi‑peer) | No | Negative mTLS + Tier‑1 tests [§9.3](#93-negative-mtls-tests)/[§9.7](#97-control-plane-tier-1-ingress-redundancy) |
 | 7 | Target SSH credential handling + artifacts + per-job `meta.json` | No | SSH‑negative test [§9.4](#94-target-ssh-negative-test) |
@@ -292,7 +294,8 @@ risk column; anything that touches it must pass [§9.1](#91-non-disruption-check
 - [ ] Verify `make up` still starts controller **only**
 
 ### Phase 4 — execution node + dev lab
-- [ ] `execution-node` target = `FROM ${BASE}` + `receptor`; entrypoint runs receptor (not sshd)
+- [ ] `execution-node` target = `FROM ${BASE}` + `receptor` + `ansible-runner` (Phase 5 submits `ansible-runner worker` here)
+- [ ] Override the inherited port-22 `HEALTHCHECK` with a Receptor-readiness check (node runs receptor, not sshd)
 - [ ] `docker/mesh/node-entrypoint.sh` (render node config from env)
 - [ ] `mesh/tests/` multi‑network compose lab (controller cannot reach targets)
 - [ ] **No‑TLS** dev mesh to prove wiring (never in a production compose file)
@@ -318,7 +321,7 @@ risk column; anything that touches it must pass [§9.1](#91-non-disruption-check
 ### Phase 8 — pools, failover, concurrency
 - [ ] `mesh/config/zones.yml` + `pools.yml`
 - [ ] Dispatcher: classify → healthy‑node select → submit → **dispatch‑only failover**
-- [ ] Per‑node concurrency cap via `receptorctl work list`
+- [ ] Per‑node concurrency cap via an atomic `flock` reservation on a per-node slot file (not a `work list` check)
 - [ ] Unique PDD + artifact dir + work‑unit id per concurrent job
 
 ### Phase 9 — work signing
@@ -412,7 +415,7 @@ Proves Receptor identity and target SSH identity are separate.
 - Assert unique PDDs, unique artifact dirs, no work-unit id collision.
 - Assert all N per-job meta.json files survive (one file per UUID; no shared-file
   corruption or lost entries).
-- Per-node cap is enforced by an ATOMIC reservation: select+submit hold an `flock`
+- Per-node cap is enforced by an ATOMIC reservation: select+submit hold a `flock`
   on a per-node slot file (on shared storage), so the cap is not a check-then-act
   race on `receptorctl work list`.
 - Assert the cap holds under a burst where every dispatcher sees a "free" slot at
