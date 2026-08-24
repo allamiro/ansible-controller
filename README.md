@@ -715,6 +715,19 @@ If you prefer trust-on-first-use over pre-pinning every host, use
 it connects and then fails if a key later changes. That still catches
 key-substitution attacks after the first contact, unlike the `=no` default.
 
+`accept-new` has to **write** the first key, so `configs/known_hosts` must be
+writable by the container user (uid 1000) — otherwise the write silently fails and
+every session keeps treating keys as new. Prepare it on the host:
+
+```bash
+touch configs/known_hosts
+sudo chown 1000:1000 configs/known_hosts   # the container's ansible user is uid 1000
+chmod 600 configs/known_hosts
+```
+
+The pre-pinned `StrictHostKeyChecking=yes` recipe above needs the file only
+*readable*, so it sidesteps this ownership requirement entirely.
+
 > The distributed execution mesh (see [`mesh/`](mesh/README.md)) will use strict,
 > managed host-key checking as its default from the start — this relaxed setting
 > is scoped to the existing direct controller only.
