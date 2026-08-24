@@ -1,19 +1,18 @@
 name: CI
 
+# Triggers deliberately match docker-publish.yml's rather than filtering on paths.
+# That workflow rebuilds and publishes on every push to main, and this image's
+# contents are not determined by this repository alone: the Dockerfile tracks a
+# mutable ubuntu:26.04, runs apt-get upgrade, and installs Python packages at floors
+# rather than exact pins. A README-only merge therefore publishes a freshly resolved
+# image that may differ from anything previously scanned. A path filter here would
+# mean some merges publish without the CVE gate below ever having run — so every PR
+# that can trigger a publish is gated, at the cost of building on doc-only changes.
 on:
   pull_request:
     branches: ["main"]
-    paths:
-      - "docker/**"
-      - "docker-compose.yml"
-      - ".trivyignore"
-      - ".github/workflows/docker-image.yml"
   push:
     branches: ["main"]
-    paths:
-      - "docker/**"
-      - "docker-compose.yml"
-      - ".trivyignore"
 
 jobs:
   lint:
