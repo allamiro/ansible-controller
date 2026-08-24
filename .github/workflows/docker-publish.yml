@@ -121,7 +121,39 @@ jobs:
       id-token: write   # keyless cosign signing via GitHub OIDC
 
     steps:
-      - uses: actions/checkout@v7   # .trivyignore must be on disk for the scan below
+      - uses: actions/checkout@v7   # .trivyignore, and the tag lookup below
+        with:
+          fetch-depth: 0   # tags are not fetched by a shallow clone
+
+      # auto-tag.yml creates the vX.Y.Z tag, but pushes it with GITHUB_TOKEN — and
+      # GitHub does not start workflow runs from events created by that token. So this
+      # workflow's `on: push: tags` trigger has never fired, and the type=semver tags
+      # below were never applied: only latest/main/sha-* exist in the registries, for
+      # this release and every one before it. Resolving the tag here puts them on the
+      # run that does happen.
+      #
+      # auto-tag.yml runs concurrently with this workflow on the same push, so the tag
+      # may land a little after this job starts — hence the wait. If no tag ever
+      # appears (a paths-ignored doc push that auto-tag skips, or a direct push that
+      # produced no bump) publish latest/sha-* without semver tags rather than failing
+      # the release.
+      - name: Resolve release version
+        id: version
+        run: |
+          version=""
+          for attempt in $(seq 1 12); do
+            git fetch --tags --force --quiet
+            version="$(git tag --points-at HEAD --list 'v*.*.*' --sort=-v:refname | head -1)"
+            if [ -n "$version" ]; then
+              echo "Resolved ${version} on attempt ${attempt}"
+              break
+            fi
+            sleep 10
+          done
+          if [ -z "$version" ]; then
+            echo "::notice::no v*.*.* tag on ${GITHUB_SHA}; publishing latest/sha tags only"
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Download digests
         uses: actions/download-artifact@v8
@@ -143,9 +175,9 @@ jobs:
             type=ref,event=branch
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,prefix=sha-
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
+            type=semver,pattern={{version}},value=${{ steps.version.outputs.version }},enable=${{ steps.version.outputs.version != '' }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ steps.version.outputs.version }},enable=${{ steps.version.outputs.version != '' }}
+            type=semver,pattern={{major}},value=${{ steps.version.outputs.version }},enable=${{ steps.version.outputs.version != '' }}
 
       - name: Login to Docker Hub
         uses: docker/login-action@v4
