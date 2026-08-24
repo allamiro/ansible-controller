@@ -23,12 +23,14 @@ on:
     paths:
       - "docker/**"
       - ".dockerignore"
+      - ".trivyignore"
       - ".github/workflows/mesh-image.yml"
   push:
     branches: ["main"]
     paths:
       - "docker/**"
       - ".dockerignore"
+      - ".trivyignore"
       - ".github/workflows/mesh-image.yml"
 
 jobs:
