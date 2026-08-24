@@ -6,12 +6,14 @@ on:
     paths:
       - "docker/**"
       - "docker-compose.yml"
+      - ".trivyignore"
       - ".github/workflows/docker-image.yml"
   push:
     branches: ["main"]
     paths:
       - "docker/**"
       - "docker-compose.yml"
+      - ".trivyignore"
 
 jobs:
   lint:
@@ -27,11 +29,27 @@ jobs:
           dockerfile: docker/Dockerfile
           failure-threshold: error
 
+  # Mirrors the publish matrix in docker-publish.yml: each architecture is built
+  # natively and gated on its own. Scanning only amd64 would let an arm64-only
+  # CRITICAL/HIGH — a different base-image package set, or an arch-specific binary
+  # like msgpack's compiled extension — pass the gate and still get published.
+  # Native runners for the same reason as the publish workflow: arm64 under QEMU
+  # was ~5x slower.
   build-and-test:
-    name: Build and smoke-test (amd64)
-    runs-on: ubuntu-latest
+    name: Build and smoke-test (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     needs: lint
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
     permissions:
       contents: read
     steps:
@@ -42,12 +60,14 @@ jobs:
         with:
           context: .
           file: ./docker/Dockerfile
-          platforms: linux/amd64
+          platforms: ${{ matrix.platform }}
           push: false
           load: true
           tags: ansible-controller:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # scoped per arch — a shared cache scope would have the two runners
+          # evicting each other's layers every run
+          cache-from: type=gha,scope=ci-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=ci-${{ matrix.arch }}
       - name: Smoke test
         run: |
           docker run -d --name ci-smoke ansible-controller:ci
