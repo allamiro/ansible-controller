@@ -693,14 +693,18 @@ against building `known_hosts` "without verifying the keys":
 ```bash
 # 1. Fetch candidate keys — WITHOUT -H, so each fingerprint stays attributable to
 #    its plaintext host in the next step (-H hashes the hostnames):
-ssh-keyscan server1 server2 > /tmp/known_hosts.new
+#    The candidate file gets a private random name. A fixed path like
+#    /tmp/known_hosts.new on a multi-user host is a classic spoof target: another
+#    user can pre-create or symlink it, seeding the file you later trust:
+kh_new=$(mktemp)
+ssh-keyscan server1 server2 > "$kh_new"
 
 #    A host reached on a non-default port (ansible_port) must be scanned WITH -p.
 #    OpenSSH looks such a host up as [host]:port, and ssh-keyscan only writes that
 #    bracketed form when -p is given — scan it without and you store a plain
 #    `server3` entry that never matches, so StrictHostKeyChecking=yes rejects the
 #    host even though its key was verified:
-ssh-keyscan -p 2222 server3 >> /tmp/known_hosts.new
+ssh-keyscan -p 2222 server3 >> "$kh_new"
 
 #    Scan the address Ansible actually CONNECTS to, which is `ansible_host` when
 #    the inventory sets one and the inventory name otherwise. OpenSSH looks the
@@ -711,7 +715,7 @@ ssh-keyscan -p 2222 server3 >> /tmp/known_hosts.new
 # 2. Compare each fingerprint against a TRUSTED source before pinning — the host
 #    console, the cloud provider's API, a config-management fact, or the host's
 #    own /etc/ssh/ssh_host_*_key.pub obtained over a channel you already trust:
-ssh-keygen -lf /tmp/known_hosts.new
+ssh-keygen -lf "$kh_new"
 
 # 3. Install — but only if every host actually made it into the candidate file.
 #    ssh-keyscan skips hosts it cannot reach and still exits 0 when only some of
@@ -738,7 +742,7 @@ ssh-keygen -lf /tmp/known_hosts.new
 #    0644 is what OpenSSH itself creates).
 missing=
 for h in server1 server2 '[server3]:2222'; do
-  ssh-keygen -F "$h" -f /tmp/known_hosts.new >/dev/null || missing="$missing $h"
+  ssh-keygen -F "$h" -f "$kh_new" >/dev/null || missing="$missing $h"
 done
 
 if [ -n "$missing" ]; then
@@ -757,15 +761,18 @@ else
       ssh-keygen -R "$h" -f "$work" >/dev/null 2>&1
     done
     new=$(mktemp configs/known_hosts.XXXXXX)
-    cat "$work" /tmp/known_hosts.new > "$new"
+    cat "$work" "$kh_new" > "$new"
     chmod 644 "$new"
     mv "$new" configs/known_hosts && new=
   )
-  if [ $? -eq 0 ]; then echo "known_hosts updated"; else echo "FAILED — known_hosts left unchanged"; fi
+  ok=$?
+  if [ "$ok" -eq 0 ]; then echo "known_hosts updated"; else echo "FAILED — known_hosts left unchanged"; fi
 fi
 
 # 4. (optional) hash the hostnames at rest once pinned:
-ssh-keygen -Hf configs/known_hosts && rm -f configs/known_hosts.old
+#    Gated on the update above having succeeded — pasted verbatim after a failed
+#    or skipped update, an unguarded hash would still rewrite the live file:
+[ "${ok:-1}" -eq 0 ] && ssh-keygen -Hf configs/known_hosts && rm -f configs/known_hosts.old
 ```
 
 Better still, provision authoritative host keys directly from your
