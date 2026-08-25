@@ -33,11 +33,18 @@ services:
       - receptor-runtime:/run/receptor
       - e2e-ssh:/e2e-ssh:ro            # disposable key, seeded by e2e-up.sh
     # The suite drives the orchestrator via docker exec (as production drives it
-    # via make mesh-run); no sshd runs here, so the inherited port-22
-    # healthcheck is disabled rather than left to report a false unhealthy.
+    # via make mesh-run); no sshd runs here, so the inherited port-22 check is
+    # replaced with one that actually matters to the orchestrator's job: the
+    # control-plane socket being visible over the shared volume. (Plain
+    # `disable: true` also breaks `up --wait` on older compose releases, which
+    # error on a service with no check at all.)
     entrypoint: ["sleep", "infinity"]
     healthcheck:
-      disable: true
+      test: ["CMD", "test", "-S", "/run/receptor/receptor.sock"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
 
   receptor-controller:
     # Same digest-pinned sidecar and same bootstrap as the production overlay
