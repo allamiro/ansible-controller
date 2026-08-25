@@ -40,6 +40,7 @@ SOCKETS=/run/receptor/receptor.sock,/run/receptor/receptor-b.sock
 JOBS_DIR=/var/lib/mesh/jobs
 SLOTS_DIR="${MESH_SLOTS_DIR:-/var/lib/mesh/slots}"
 POOLS_FILE="${MESH_POOLS_FILE:-/etc/mesh/pools.yml}"
+POOLS_FILE_SET=0   # 1 when --pools-file was passed: a missing file is then an error
 ZONES_FILE="${MESH_ZONES_FILE:-/etc/mesh/zones.yml}"
 # Operator-facing artifact copies land under the controller's log tree — the
 # compose setup bind-mounts /var/log/ansible to the host's logs/, so a job's
@@ -59,7 +60,7 @@ while [ $# -gt 0 ]; do
     --socket)      SOCKETS="${2:?}"; shift 2;;
     --jobs-dir)    JOBS_DIR="${2:?}"; shift 2;;
     --log-dir)     LOG_DIR="${2-}"; shift 2;;
-    --pools-file)  POOLS_FILE="${2:?}"; shift 2;;
+    --pools-file)  POOLS_FILE="${2:?}"; POOLS_FILE_SET=1; shift 2;;
     --zones-file)  ZONES_FILE="${2:?}"; shift 2;;
     *) die "unknown argument: $1";;
   esac
@@ -130,20 +131,32 @@ PYEOF
   ) || die "pool resolution failed"
   [ ${#CANDIDATES[@]} -gt 0 ] || die "pool '$POOL' resolved to no candidates"
 else
-  cap=$(P_FILE="$POOLS_FILE" P_NODE="$NODE" python3 - <<'PYEOF'
+  # A cap declared for this node in pools.yml binds --node dispatches too. An
+  # ABSENT default pools file means "no caps configured" (backward
+  # compatible); but a pools file that exists yet cannot be parsed, or an
+  # explicitly passed path that is missing, is a hard error — silently
+  # treating a corrupt config as "uncapped" would defeat the cap it declares.
+  cap=$(P_FILE="$POOLS_FILE" P_NODE="$NODE" P_EXPLICIT="$POOLS_FILE_SET" python3 - <<'PYEOF'
 import os, sys, yaml
 f, node = os.environ["P_FILE"], os.environ["P_NODE"]
+explicit = os.environ["P_EXPLICIT"] == "1"
 try:
     data = yaml.safe_load(open(f)) or {}
-except (OSError, yaml.YAMLError):
+except FileNotFoundError:
+    if explicit:
+        sys.exit(f"pools file '{f}' not found")
     data = {}
+except OSError as e:
+    sys.exit(f"pools file '{f}': {e}")
+except yaml.YAMLError as e:
+    sys.exit(f"pools file '{f}' is not valid YAML: {e}")
 for entries in (data.get("pools") or {}).values():
     for e in entries or []:
         if not isinstance(e, str) and (e or {}).get("node") == node:
             print(int(e.get("max_concurrent") or 0)); sys.exit()
 print(0)
 PYEOF
-)
+) || die "pools lookup failed"
   CANDIDATES=("$NODE $cap")
 fi
 

@@ -374,11 +374,11 @@ cosign verify \
 (dispatch → mTLS mesh → execution node → artifacts back, with ingress
 failover); the PKI toolchain for real identities; the control-plane overlay on
 your compose setup; published, signed images for all three roles; per-job
-credential hygiene and host-visible artifacts.
+credential hygiene and host-visible artifacts; pool/zone dispatch with
+per-node concurrency caps and dispatch-only failover.
 
 **Landing next** — packaged node deployment, `make mesh-run` / `make
-mesh-status`, node pools with automatic dispatch failover, and work signing.
-The full plan and its progress live in the
+mesh-status`, and work signing. The full plan and its progress live in the
 [DESIGN.md checklist](DESIGN.md#7-to-do-checklist).
 
 ## Where things live
