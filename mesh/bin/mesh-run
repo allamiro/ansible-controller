@@ -237,7 +237,7 @@ routable_via() {
 # exactly as long as the process does and releases the instant it dies.
 SLOT_FD= SLOT_FILE= DISPATCH_STATE=pre-submit
 acquire_slot() {
-  local node="$1" cap="$2" i f
+  local node="$1" cap="$2" i f g gi
   [ "$cap" -gt 0 ] || return 0   # uncapped node
   (umask 077 && mkdir -p "$SLOTS_DIR") || return 1
   for ((i = 1; i <= cap; i++)); do
@@ -254,7 +254,26 @@ acquire_slot() {
     # group scopes the stderr silence to the open attempt alone, while the
     # exec'd fd itself still persists, which is the point.
     if ! { exec {SLOT_FD}>>"$f"; } 2>/dev/null; then SLOT_FD=; continue; fi
-    if flock -n "$SLOT_FD" 2>/dev/null; then SLOT_FILE="$f"; return 0; fi
+    if flock -n "$SLOT_FD" 2>/dev/null; then
+      SLOT_FILE="$f"
+      # A cap REDUCTION can leave a live job (its flock) or an unresolved
+      # .hold on a slot numbered ABOVE the new cap. Those still occupy the
+      # node, so they count against it: if any is found, this reservation is
+      # surrendered and the node treated as full rather than overshooting.
+      for g in "$SLOTS_DIR/$node".slot.*; do
+        [ -e "$g" ] || continue
+        case "$g" in *.hold) continue;; esac
+        gi="${g##*.slot.}"
+        case "$gi" in *[!0-9]*|'') continue;; esac
+        [ "$gi" -gt "$cap" ] || continue
+        if [ -e "$g.hold" ] || ! flock -n "$g" true 2>/dev/null; then
+          { exec {SLOT_FD}>&-; } 2>/dev/null || true
+          SLOT_FD= SLOT_FILE=
+          return 1
+        fi
+      done
+      return 0
+    fi
     { exec {SLOT_FD}>&-; } 2>/dev/null || true
     SLOT_FD=
   done
