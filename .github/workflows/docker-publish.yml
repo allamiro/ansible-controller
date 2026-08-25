@@ -167,7 +167,10 @@ jobs:
     if: github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 15 sufficed for one image; the job now stitches, signs, and Trivy-scans
+    # three per registry, and the backstop scan alone can take a few minutes
+    # per image on a cold DB.
+    timeout-minutes: 25
     permissions:
       contents: read
       packages: write
@@ -288,9 +291,13 @@ jobs:
               tags=$(jq -cr --arg img "$image" \
                 '.tags | map(select(startswith($img + ":")) | "-t " + .) | join(" ")' \
                 <<< "$DOCKER_METADATA_OUTPUT_JSON")
+              # Digest files live under per-image subdirectories, so only each
+              # file's BASENAME is the digest — the glob path itself would
+              # produce invalid "@sha256:controller/<hash>" references.
               # $tags and the digest list are intentionally word-split
               # shellcheck disable=SC2046,SC2086
-              docker buildx imagetools create $tags $(printf "${image}@sha256:%s " "${dir}"/*)
+              docker buildx imagetools create $tags \
+                $(for f in "${dir}"/*; do printf "%s@sha256:%s " "$image" "${f##*/}"; done)
             done
           done
 
