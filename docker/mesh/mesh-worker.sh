@@ -35,4 +35,55 @@ exec 2> >(tail -c 1048576 2>/dev/null > "$log" || cat > /dev/null 2>&1)
 # 15 prior + this worker's = 16 retained, ≤1 MiB each.
 ls -t /var/lib/receptor/worker-*.log 2>/dev/null | grep -Fxv "$log" | tail -n +16 | xargs -r rm -f --
 
-exec ansible-runner worker "$@"
+# NOT exec: the worker owns credential cleanup (mesh plan Phase 7). The
+# transmitted PDD can carry env/ssh_key, and the unit directory persists on
+# this node until the controller releases it — which never happens when a
+# submit went ambiguous or the results stream broke. Destroying the key when
+# the runner ends makes cleanup independent of controller connectivity; the
+# eventual release then removes an already-credential-free unit dir. receptor
+# runs this command inside the unit dir, so the search is scoped to it. Every
+# step is failure-proof: cleanup must never rewrite the runner's exit code.
+#
+# The fallback must be PER FILE, inside the -exec action: find exits 0 after
+# an error-free traversal even when the exec'd command failed, so a chained
+# second find would never run and a failed shred (ENOSPC on CoW, missing
+# shred) would strand the key.
+cleanup_creds() {
+  find . -type f -path '*/env/ssh_key' \
+    -exec sh -c 'shred -u -- "$1" 2>/dev/null || rm -f -- "$1"' _ {} \; \
+    2>/dev/null || true
+}
+
+# Signal-safe: a node/receptor restart TERMs this wrapper mid-run. The runner
+# runs as a tracked child so the signal is forwarded (it would otherwise be
+# orphaned — receptor signals the wrapper, not the process group), its exit
+# is collected, and the key is destroyed BEFORE the wrapper dies. The EXIT
+# trap covers the normal path with the same cleanup.
+#
+# Two ordering rules, both load-bearing:
+#  * traps are armed BEFORE the child is launched — a signal in the gap would
+#    otherwise take the default disposition and skip cleanup entirely;
+#  * the child's stdin is explicitly `<&0` — a background command in
+#    non-job-control bash otherwise gets /dev/null and the worker would read
+#    EOF instead of the receptor-transmitted PDD.
+rc=0
+runner_pid=
+on_signal() {
+  sig="$1"
+  if [ -n "$runner_pid" ]; then
+    kill -"$sig" "$runner_pid" 2>/dev/null || true
+    wait "$runner_pid" 2>/dev/null || rc=$?
+  else
+    case "$sig" in TERM) rc=143;; INT) rc=130;; esac
+  fi
+  cleanup_creds
+  trap - "$sig" EXIT
+  exit "$rc"
+}
+trap 'on_signal TERM' TERM
+trap 'on_signal INT'  INT
+trap cleanup_creds EXIT
+ansible-runner worker "$@" <&0 &
+runner_pid=$!
+wait "$runner_pid" || rc=$?
+exit "$rc"

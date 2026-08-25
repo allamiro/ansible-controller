@@ -90,7 +90,7 @@ cross the wall:
 ```bash
 docker build -f docker/Dockerfile -t ansible-controller:dev .   # 1. the controller base
 mesh/tests/e2e-up.sh ansible-controller:dev                     # 2. build + start the lab (throwaway certificates issued for you)
-mesh/tests/e2e-check.sh                                         # 3. watch 20 checks prove every property above
+mesh/tests/e2e-check.sh                                         # 3. watch 22 checks prove every property above
 mesh/tests/e2e-down.sh                                          # tear it all down again
 ```
 
@@ -190,21 +190,15 @@ mounts, and the direct execution path are untouched — omit `--profile mesh`
 and none of this exists.
 
 **To dispatch from this host you also need the orchestrator image** — the
-stock controller deliberately carries no `receptorctl`/`mesh-run`. Until
-[#67](https://github.com/allamiro/ansible-controller/pull/67) publishes it,
-build it from your checkout and point the `ansible` service at it:
-
-```bash
-docker build -f docker/mesh/Dockerfile --target orchestrator \
-  --build-arg BASE=ansible-controller:dev --build-arg ALLOW_MUTABLE_BASE=1 \
-  -t ansible-orchestrator:local .
-```
+stock controller deliberately carries no `receptorctl`/`mesh-run`. Point the
+`ansible` service at the published image (see
+[Getting the images](#getting-the-images)):
 
 ```yaml
 # orchestrator.override.yml — add as one more -f file on the compose command
 services:
   ansible:
-    image: ansible-orchestrator:local
+    image: ghcr.io/allamiro/ansible-orchestrator:latest
 ```
 
 ### Step 3 — connect your execution nodes
@@ -243,13 +237,56 @@ What you get back:
   read from the run's own record, so scripts and CI can trust `$?`.
 - **A job directory** — every run gets a unique ID and a directory under
   `/var/lib/mesh/jobs/<uuid>/` (override with `--jobs-dir`) containing the
-  full stdout, the per-task event log, and a `meta.json` describing the run.
-  Concurrent jobs never collide.
+  full stdout, the per-task event log, and a `meta.json` describing the run
+  with timestamped status transitions. Concurrent jobs never collide.
+- **Artifacts on the host** — the operator-facing set (stdout, `rc`, `status`,
+  `job_events/`, final `meta.json`) is also copied to
+  `/var/log/ansible/runner/<uuid>/`, which the compose setup exposes on the
+  host as `logs/runner/<uuid>/` — read results without entering a container.
+- **Credential hygiene** — a key passed with `--ssh-key` travels only inside
+  the encrypted mesh stream, is never logged or placed in an environment
+  variable, and every transient copy is removed when the job ends (the
+  controller-side copy gets a best-effort overwrite before deletion — note
+  that overwrite guarantees don't hold on CoW/flash storage, so point
+  `--jobs-dir` at a tmpfs if the disk below it gets imaged; the node-side
+  copy is destroyed by the worker itself the moment execution finishes, even
+  if the controller never reconnects).
 
 **A job never runs twice.** If a submission provably failed to leave the
 control host, it can be retried elsewhere — but once a node has (or even *may*
 have) accepted it, it is never re-sent. A network blip mid-job can cost you a
 retry you do by hand; it can never silently run your playbook twice.
+
+## Node runtime Python dependencies
+
+If your playbooks use plugins that need Python packages on the machine running
+Ansible — cloud inventory SDKs like `boto3` are the classic case — those
+packages must exist **on the execution node**, since that's where the playbook
+runs. They are deliberately *not* shipped per job (staging compiled packages
+through the job stream is the wrong layer: slow, arch-specific, and
+unauditable). Extend the node image once instead, exactly the way the
+controller bakes its own dependencies:
+
+```dockerfile
+# Dockerfile.site-node
+FROM ghcr.io/allamiro/ansible-execution-node:latest
+USER root
+COPY node-requirements.txt /tmp/node-requirements.txt
+RUN pip3 install --no-cache-dir --break-system-packages -r /tmp/node-requirements.txt \
+ && rm /tmp/node-requirements.txt
+USER ansible
+```
+
+```bash
+docker build -f Dockerfile.site-node -t ansible-execution-node:site .
+# run this tag on your node hosts
+```
+
+Pin versions in `node-requirements.txt` and rebuild the site image when the
+base updates — nodes stay reproducible and every dependency is visible in one
+file.
+
+---
 
 ## Health and troubleshooting
 
@@ -282,12 +319,19 @@ release you already run:
 | `ansible-orchestrator` | Controller + the dispatcher (`mesh-run`, `receptorctl`) | Control host |
 | `ansible-execution-node` | Orchestrator + the mesh agent (hardened build, no SSH server) | Inside each closed network |
 
-Signed multi-arch images on Docker Hub and GHCR are landing with the current
-release cycle ([#67](https://github.com/allamiro/ansible-controller/pull/67));
-until they're published, build them from your checkout — the
-[lab scripts](#try-it-in-ten-minutes) do exactly this — with
-`docker/mesh/Dockerfile` (targets `orchestrator` and `execution-node`). Once
-published, verify a pull the same way as the controller:
+All three ship per release to Docker Hub and GHCR — multi-arch, cosign-signed,
+Trivy-gated — with the mesh images built `FROM` the exact controller digest
+pushed by the same run:
+
+```bash
+docker pull ghcr.io/allamiro/ansible-orchestrator:latest
+docker pull ghcr.io/allamiro/ansible-execution-node:latest
+```
+
+Prefer building from your checkout instead? The
+[lab scripts](#try-it-in-ten-minutes) do exactly that with
+`docker/mesh/Dockerfile` (targets `orchestrator` and `execution-node`).
+Verify a pulled image the same way as the controller:
 
 ```bash
 cosign verify \
@@ -301,12 +345,13 @@ cosign verify \
 **Working now** — the full distributed path in the [lab](#try-it-in-ten-minutes)
 (dispatch → mTLS mesh → execution node → artifacts back, with ingress
 failover); the PKI toolchain for real identities; the control-plane overlay on
-your compose setup.
+your compose setup; published, signed images for all three roles; per-job
+credential hygiene and host-visible artifacts.
 
-**Landing next** — published images ([#67](https://github.com/allamiro/ansible-controller/pull/67)),
-packaged node deployment, `make mesh-run` / `make mesh-status`, node pools with
-automatic dispatch failover, and per-job credential injection. The full plan
-and its progress live in the [DESIGN.md checklist](DESIGN.md#7-to-do-checklist).
+**Landing next** — packaged node deployment, `make mesh-run` / `make
+mesh-status`, node pools with automatic dispatch failover, and work signing.
+The full plan and its progress live in the
+[DESIGN.md checklist](DESIGN.md#7-to-do-checklist).
 
 ## Where things live
 
@@ -319,7 +364,7 @@ mesh/
 ├── config/receptor/   # ingress endpoint configs (A and B)
 ├── pki/               # certificate tooling: CA, node requests, signing
 ├── secrets/           # your issued bundles (gitignored; CA key stays offline)
-└── tests/             # the ten-minute lab + its 20-check verification suite
+└── tests/             # the ten-minute lab + its 22-check verification suite
 ```
 
 Want the reasoning behind the design — why the failover boundary sits where it

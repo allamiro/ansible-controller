@@ -1,9 +1,12 @@
 #!/bin/bash
-# mesh-run — minimal Phase 5 dispatcher: run a playbook on ONE execution node
-# via receptor, returning the playbook's real exit code and its artifacts.
+# mesh-run — dispatcher (Phases 5+7): run a playbook on ONE execution node
+# via receptor, returning the playbook's real exit code and its artifacts —
+# with credential hygiene (shredded transient key copies, no-log guarantee)
+# and per-job artifact export to the operator's log tree.
 #
 #   mesh-run --node <node-id> --playbook <file.yml> --inventory <file> \
-#            [--ssh-key <file>] [--socket <receptor.sock>] [--jobs-dir <dir>]
+#            [--ssh-key <file>] [--socket <receptor.sock>] [--jobs-dir <dir>] \
+#            [--log-dir <dir>]
 #
 # Runs INSIDE the orchestrator container (the e2e suite and, later, `make
 # mesh-run` invoke it there). Flow — mesh plan §2.4 steps 4-9, single node:
@@ -28,6 +31,11 @@ die() { echo "mesh-run: ERROR: $*" >&2; exit 2; }
 NODE= PLAYBOOK= INVENTORY= SSH_KEY= ANSIBLE_CFG= GALAXY_DIR=
 SOCKETS=/run/receptor/receptor.sock,/run/receptor/receptor-b.sock
 JOBS_DIR=/var/lib/mesh/jobs
+# Operator-facing artifact copies land under the controller's log tree — the
+# compose setup bind-mounts /var/log/ansible to the host's logs/, so a job's
+# stdout/rc/job_events are readable on the host without entering the container
+# (plan Phase 7). --log-dir "" disables the export.
+LOG_DIR=/var/log/ansible/runner
 while [ $# -gt 0 ]; do
   case "$1" in
     --node)        NODE="${2:?}"; shift 2;;
@@ -38,6 +46,7 @@ while [ $# -gt 0 ]; do
     --galaxy-dir)  GALAXY_DIR="${2:?}"; shift 2;;
     --socket)      SOCKETS="${2:?}"; shift 2;;
     --jobs-dir)    JOBS_DIR="${2:?}"; shift 2;;
+    --log-dir)     LOG_DIR="${2-}"; shift 2;;
     *) die "unknown argument: $1";;
   esac
 done
@@ -65,10 +74,47 @@ done
 [ -n "$LIVE_SOCKET" ] || die "no live receptor control socket among: $SOCKETS"
 case "$NODE" in *[!A-Za-z0-9._-]*) die "--node '$NODE' invalid";; esac
 
-# (4) unique private data dir per job — no shared state between concurrent runs
+# (4) unique private data dir per job — no shared state between concurrent
+# runs. Owner-only from birth (umask, not chmod-after): the staged tree holds
+# credentials from the instant the key is copied in, so there must be no
+# window in which another uid could read it.
 JOB_ID=$(cat /proc/sys/kernel/random/uuid)
 PDD="$JOBS_DIR/$JOB_ID"
-mkdir -p "$PDD/project" "$PDD/inventory" "$PDD/env"
+(umask 077 && mkdir -p "$PDD/project" "$PDD/inventory" "$PDD/env")
+
+# Credential hygiene (plan Phase 7): the staged key copy exists only for the
+# transmit stream. Whatever path this dispatcher exits by — success, pre-gate
+# refusal, ambiguous submit, broken results stream — the transient copy is
+# removed; artifacts and meta.json are kept, the secret is not. shred adds a
+# best-effort overwrite before unlinking, but on CoW/journaled/flash storage
+# (overlayfs, btrfs, most SSDs) old blocks can survive an overwrite — the
+# guarantees that actually hold everywhere are the 0600/0700 scoping from
+# birth and prompt removal; put --jobs-dir on a tmpfs when the storage below
+# it gets imaged or snapshotted. NEVER enable xtrace in this script and never
+# echo the key path's contents — the no-log guarantee is part of the contract.
+# Every step is ||-guarded and the incoming exit status is captured and
+# restored: a cleanup failure (say the jobs filesystem went read-only) warns
+# but must never replace the playbook's exit code — the same
+# never-corrupt-the-result rule the artifact export follows.
+finalize() {
+  local st=$?
+  if [ -n "$SSH_KEY" ] && [ -f "$PDD/env/ssh_key" ]; then
+    shred -u "$PDD/env/ssh_key" 2>/dev/null \
+      || rm -f "$PDD/env/ssh_key" 2>/dev/null \
+      || echo "mesh-run: warning: could not remove transient key copy $PDD/env/ssh_key" >&2
+  fi
+  # The lifecycle record reaches the host-visible log tree on EVERY terminal
+  # path, not just completed round-trips: submit-ambiguous and
+  # results-incomplete are exactly the states where an operator needs the
+  # record to decide whether re-running is safe.
+  if [ -n "$LOG_DIR" ] && [ -f "$PDD/meta.json" ]; then
+    { mkdir -p "$LOG_DIR/$JOB_ID" \
+        && cp "$PDD/meta.json" "$LOG_DIR/$JOB_ID/meta.json"; } 2>/dev/null \
+      || echo "mesh-run: warning: could not export meta.json to '$LOG_DIR/$JOB_ID'; the record remains at $PDD/meta.json" >&2
+  fi
+  return "$st"
+}
+trap finalize EXIT
 # The playbook is resolved through symlinks ONCE, and that resolved name is
 # used for both staging and execution — staging the target directory while
 # telling the runner to execute the symlink's basename would fail when the
@@ -147,9 +193,14 @@ if [ -n "$ANSIBLE_CFG" ]; then
 fi
 if [ -n "$SSH_KEY" ]; then
   [ -f "$SSH_KEY" ] || die "--ssh-key '$SSH_KEY' not found"
-  # env/ssh_key is loaded into a per-job ssh-agent by the runner ON THE NODE and
-  # travels only inside the receptor stream. Phase 7 hardens handling further
-  # (no-log guarantees, secure cleanup of transient copies).
+  # env/ssh_key is loaded into a per-job ssh-agent by the runner ON THE NODE
+  # and travels only inside the mTLS receptor stream — it is never an argument,
+  # never in the environment, never logged (Phase 7). The staged copy here is
+  # removed on exit by the trap above; the node-side copy is destroyed by
+  # mesh-worker itself right after execution — independent of controller
+  # connectivity, so an ambiguous submit or broken results stream cannot
+  # strand a key in the unit dir — and `work release` later removes the
+  # already-credential-free unit dir.
   install -m 600 "$SSH_KEY" "$PDD/env/ssh_key"
 fi
 
@@ -172,6 +223,11 @@ rec = {
     "playbook": os.environ["M_PB"],
     "unit_id": os.environ["M_UNIT"],
     "status": os.environ["M_ST"],
+    # RFC 3339 UTC; refreshed on every transition so a history reader can
+    # order lifecycle records without trusting file mtimes.
+    "updated": __import__("datetime").datetime.now(
+        __import__("datetime").timezone.utc
+    ).isoformat(timespec="seconds"),
 }
 if os.environ["M_NOTE"]:
     rec["note"] = os.environ["M_NOTE"]
@@ -235,6 +291,36 @@ rc=$(cat "$art_rc_file")
 receptorctl --socket "$SOCKET" work release "$UNIT_ID" >/dev/null 2>&1 || true
 
 if [ "$rc" -eq 0 ]; then meta succeeded; else meta "failed rc=$rc"; fi
+
+# Publish the operator-facing artifact set to the log tree (Phase 7): stdout,
+# rc, status, job_events plus the final meta.json — the files an operator
+# reads — copied per job to $LOG_DIR/<job-id>/, which the compose setup
+# exposes on the host as logs/runner/<job-id>/. Runs after the terminal meta
+# transition so the exported record shows the job's outcome, and deliberately
+# non-fatal: the round-trip SUCCEEDED by this point, and a read-only/absent
+# log tree must not convert a completed job into a failure. env/ (credentials)
+# is never part of the export.
+# Every individual copy is failure-tolerant: under set -e a bare cp dying
+# mid-export (disk full, quota) would override the playbook's exit code —
+# the one thing this script promises never to do.
+if [ -n "$LOG_DIR" ]; then
+  art_dir=$(dirname "$art_rc_file")
+  export_ok=1
+  if mkdir -p "$LOG_DIR/$JOB_ID" 2>/dev/null; then
+    for f in stdout rc status; do
+      [ -f "$art_dir/$f" ] || continue
+      cp "$art_dir/$f" "$LOG_DIR/$JOB_ID/$f" 2>/dev/null || export_ok=0
+    done
+    if [ -d "$art_dir/job_events" ]; then
+      cp -a "$art_dir/job_events" "$LOG_DIR/$JOB_ID/" 2>/dev/null || export_ok=0
+    fi
+    # meta.json itself is exported by the EXIT trap on every terminal path.
+  else
+    export_ok=0
+  fi
+  [ "$export_ok" = 1 ] || echo "mesh-run: warning: artifact export to '$LOG_DIR/$JOB_ID' incomplete; authoritative copies remain at $PDD/artifacts" >&2
+fi
+
 echo "mesh-run: job=$JOB_ID node=$NODE unit=$UNIT_ID rc=$rc artifacts=$PDD/artifacts" >&2
 
 # (9) the playbook's own exit code is the contract

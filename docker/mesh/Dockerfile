@@ -146,8 +146,9 @@ LABEL org.opencontainers.image.title="Ansible Mesh Orchestrator"
 # upstream's image; switching it to this build is a follow-up once this image
 # is published, mesh plan Phase 11.)
 FROM golang:1.25-trixie@sha256:2c4c60ef415fbfa5e90300722293bef36c5e63fae17570ce18f580af933dbd73 AS receptor-build
+WORKDIR /src
 # Tag commit pinned, not the tag name — tags can be moved, commits cannot.
-RUN git clone --filter=blob:none https://github.com/ansible/receptor /src  && cd /src  && git checkout -q d0798033b600f6f6ad0709e99dc7d58379a22bc6  && go get golang.org/x/crypto@v0.53.0 golang.org/x/net@v0.56.0 golang.org/x/text@v0.39.0  && go mod tidy  && CGO_ENABLED=0 go build -trimpath       -ldflags "-s -w -X github.com/ansible/receptor/internal/version.Version=1.6.7"       -o /receptor ./cmd/receptor-cl  && test "$(/receptor --version)" = "1.6.7"
+RUN git clone --filter=blob:none https://github.com/ansible/receptor .  && git checkout -q d0798033b600f6f6ad0709e99dc7d58379a22bc6  && go get golang.org/x/crypto@v0.53.0 golang.org/x/net@v0.56.0 golang.org/x/text@v0.39.0  && go mod tidy  && CGO_ENABLED=0 go build -trimpath       -ldflags "-s -w -X github.com/ansible/receptor/internal/version.Version=1.6.7"       -o /receptor ./cmd/receptor-cl  && test "$(/receptor --version)" = "1.6.7"
 
 # ---- execution-node: the image that RUNS work on a zone's network ----
 # = controller + ansible-runner (worker) + receptor (the mesh peer itself).
@@ -177,7 +178,9 @@ RUN chmod 755 /usr/local/bin/node-entrypoint.sh /usr/local/bin/mesh-worker \
  && receptor --version \
  && mkdir -p /run/receptor /var/lib/receptor \
  && chown ansible:ansible /run/receptor /var/lib/receptor
-USER ansible
+# Numeric uid (= the ansible user): resolvable by runtimes that check the
+# image config without the container's /etc/passwd (hadolint DL3066).
+USER 1000
 
 # Override the controller's port-22 HEALTHCHECK: there is no sshd here. Healthy
 # means receptor is up AND answering on its local control socket.
