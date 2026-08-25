@@ -15,6 +15,11 @@ ENV DEBIAN_FRONTEND=noninteractive
 # entrypoint.sh + sshd as PID 1 and never invokes pebble, so it is dead weight carrying the
 # Go stdlib CVEs of whatever toolchain built it (v1.26.5: CVE-2026-33818, CVE-2026-39821,
 # CVE-2026-46600, CVE-2026-56853, CVE-2026-56858/9, CVE-2026-56860, CVE-2026-56862).
+# sshpass: Ansible's ssh connection can only use ansible_password / --ask-pass by
+# handing the password to sshpass; without it every password-authenticated target
+# fails with "to use the 'ssh' connection type with passwords, you must install the
+# sshpass program". Inherited by the mesh execution-node image, where the playbook
+# actually runs, so password-only fleets work over the mesh too.
 RUN apt-get update \
  && apt-get upgrade -y \
  && apt-get install -y --no-install-recommends \
@@ -25,6 +30,7 @@ RUN apt-get update \
       python3 \
       python3-pip \
       sudo \
+      sshpass \
  && rm -f /etc/ssh/ssh_host_* \
  && rm -rf /usr/bin/pebble /var/lib/pebble \
  && rm -rf /var/lib/apt/lists/*
