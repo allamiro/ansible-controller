@@ -126,11 +126,18 @@ pools = data.get("pools") or {}
 
 def parse(pname, e):
     node = e if isinstance(e, str) else (e or {}).get("node", "")
-    cap = 0 if isinstance(e, str) else int((e or {}).get("max_concurrent") or 0)
+    raw = None if isinstance(e, str) else (e or {}).get("max_concurrent")
     if not node:
         sys.exit(f"pool '{pname}' has an entry without a node id")
-    if cap < 0:
-        sys.exit(f"pool '{pname}' node '{node}': max_concurrent must be >= 0")
+    # int() would silently truncate floats ('-0.5' -> 0 -> uncapped) and
+    # accept booleans; a malformed cap must fail closed instead.
+    if raw is None:
+        cap = 0
+    elif isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
+        sys.exit(f"pool '{pname}' node '{node}': max_concurrent must be a "
+                 f"non-negative integer, got {raw!r}")
+    else:
+        cap = raw
     return node, cap
 
 caps = {}
@@ -188,13 +195,18 @@ for pname, entries in (data.get("pools") or {}).items():
         sys.exit(f"pool '{pname}' must be a LIST of node entries")
     for e in entries or []:
         if isinstance(e, str):
-            n, cap = e, 0
+            n, raw = e, None
         else:
-            n, cap = (e or {}).get("node", ""), int((e or {}).get("max_concurrent") or 0)
+            n, raw = (e or {}).get("node", ""), (e or {}).get("max_concurrent")
         if n != node:
             continue
-        if cap < 0:
-            sys.exit(f"pool '{pname}' node '{node}': max_concurrent must be >= 0")
+        if raw is None:
+            cap = 0
+        elif isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
+            sys.exit(f"pool '{pname}' node '{node}': max_concurrent must be a "
+                     f"non-negative integer, got {raw!r}")
+        else:
+            cap = raw
         if found is not None and found[0] != cap:
             sys.exit(
                 f"node '{node}' declared with max_concurrent={found[0]} in "
@@ -236,10 +248,12 @@ routable_via() {
 # closed) for the life of this process, so the reservation outlives any crash
 # exactly as long as the process does and releases the instant it dies.
 SLOT_FD= SLOT_FILE= DISPATCH_STATE=pre-submit
-acquire_slot() {
+# Runs UNDER the per-node admission lock (see acquire_slot): acquisition and
+# the above-cap probe must be one atomic decision, or two dispatchers holding
+# different cap snapshots (a config edit mid-flight) could interleave and
+# jointly overshoot the lower cap.
+slot_scan() {
   local node="$1" cap="$2" i f g gi
-  [ "$cap" -gt 0 ] || return 0   # uncapped node
-  (umask 077 && mkdir -p "$SLOTS_DIR") || return 1
   for ((i = 1; i <= cap; i++)); do
     f="$SLOTS_DIR/$node.slot.$i"
     # A .hold marker means a previous dispatch through this slot ended with
@@ -278,6 +292,21 @@ acquire_slot() {
     SLOT_FD=
   done
   return 1
+}
+
+acquire_slot() {
+  local node="$1" cap="$2" ADM_FD out=1
+  [ "$cap" -gt 0 ] || return 0   # uncapped node
+  (umask 077 && mkdir -p "$SLOTS_DIR") || return 1
+  # Per-node admission lock: serializes the scan+probe so concurrent
+  # dispatchers make their capacity decisions one at a time. Held only for
+  # the scan, never for the job; a stuck peer bounds the wait at 30s.
+  if ! { exec {ADM_FD}>>"$SLOTS_DIR/$node.admission"; } 2>/dev/null; then return 1; fi
+  if flock -w 30 "$ADM_FD" 2>/dev/null; then
+    slot_scan "$node" "$cap" && out=0
+  fi
+  { exec {ADM_FD}>&-; } 2>/dev/null || true
+  return "$out"
 }
 
 # The durable half of the reservation. The flock covers only this process's
