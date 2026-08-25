@@ -261,14 +261,21 @@ docker run -d --rm --name mesh-e2e-probe --network "$E2E_NET" \
 # the operator which way it went wrong — probe died, or receptor's log wording
 # changed — with the actual log tail, so a wording drift is a visible test
 # maintenance task rather than a silent mystery.
-verdict= plog=
+verdict= plog= seen_running=0
 deadline=$((SECONDS + 30))
 while [ $SECONDS -lt $deadline ]; do
   plog=$(docker logs mesh-e2e-probe 2>&1 || true)
   if grep -qiE "certificate signed by unknown authority|failed to verify certificate|x509" <<<"$plog"; then verdict=refused; break; fi
   if grep -qi "Connection established" <<<"$plog"; then verdict=connected; break; fi
-  docker inspect --format '{{.State.Running}}' mesh-e2e-probe 2>/dev/null | grep -q true \
-    || { verdict=died; break; }
+  # `docker run -d` returns before the container necessarily reaches Running,
+  # so "not running" only means "died" after it was OBSERVED running once —
+  # otherwise the first iteration could misfire before receptor comes up. The
+  # deadline still bounds a container that never starts.
+  if docker inspect --format '{{.State.Running}}' mesh-e2e-probe 2>/dev/null | grep -q true; then
+    seen_running=1
+  elif [ "$seen_running" = 1 ]; then
+    verdict=died; break
+  fi
   sleep 2
 done
 docker rm -f mesh-e2e-probe mesh-e2e-rogue-ingress >/dev/null 2>&1 || true
