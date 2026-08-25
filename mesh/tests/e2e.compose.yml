@@ -42,21 +42,27 @@ services:
     # `disable: true` also breaks `up --wait` on older compose releases, which
     # error on a service with no check at all.)
     entrypoint: ["sleep", "infinity"]
+    # Healthy = at least one ingress ANSWERS on the shared volume. A plain
+    # `test -S` would stay green on the stale socket file a stopped sidecar
+    # leaves behind (the volume outlives the process).
     healthcheck:
-      test: ["CMD", "test", "-S", "/run/receptor/receptor.sock"]
+      test: ["CMD-SHELL", "receptorctl --socket /run/receptor/receptor.sock status >/dev/null 2>&1 || receptorctl --socket /run/receptor/receptor-b.sock status >/dev/null 2>&1"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 15s
 
+  # TWO sidecars — the suite exercises the production overlay's Tier-1 shape:
+  # nodes peer to both, the dispatcher fails over between their sockets, and
+  # since Phase 6 every hop is mutual TLS. Certs come from mesh/pki/ into
+  # ./.e2e-pki (gitignored) via e2e-up.sh.
   receptor-controller:
-    # Same digest-pinned sidecar and same bootstrap as the production overlay
-    # (mesh/compose.mesh.yml) — the suite must exercise what production runs.
     image: quay.io/ansible/receptor:v1.6.7@sha256:6296f6cd3b0301cc7c9376e48ae15a42fc7b606235d08e94543fe77661cea4d2
     container_name: mesh-e2e-receptor
     networks: [ctlnet]
     volumes:
-      - ../config/receptor/controller.yml:/mnt/receptor/controller.yml:ro
+      - ../config/receptor/controller-a.yml:/mnt/receptor/receptor.conf:ro
+      - ./.e2e-pki/issued/controller-a:/mnt/receptor/tls:ro
       - receptor-runtime:/run/receptor
     user: "0:0"
     entrypoint: ["/usr/local/bin/dumb-init", "--", "/bin/sh", "-euc"]
@@ -64,7 +70,33 @@ services:
       - |
         install -d -o receptor -g receptor -m 0750 /run/receptor
         install -o receptor -g receptor -m 0400 \
-          /mnt/receptor/controller.yml /etc/receptor/receptor.conf
+          /mnt/receptor/receptor.conf /etc/receptor/receptor.conf
+        install -d -o receptor -g receptor -m 0750 /etc/receptor/tls
+        install -o receptor -g receptor -m 0400 /mnt/receptor/tls/tls.key /etc/receptor/tls/tls.key
+        install -o receptor -g receptor -m 0444 /mnt/receptor/tls/tls.crt /etc/receptor/tls/tls.crt
+        install -o receptor -g receptor -m 0444 /mnt/receptor/tls/ca.crt  /etc/receptor/tls/ca.crt
+        exec setpriv --reuid=receptor --regid=receptor --clear-groups \
+          receptor -c /etc/receptor/receptor.conf
+
+  receptor-controller-b:
+    image: quay.io/ansible/receptor:v1.6.7@sha256:6296f6cd3b0301cc7c9376e48ae15a42fc7b606235d08e94543fe77661cea4d2
+    container_name: mesh-e2e-receptor-b
+    networks: [ctlnet]
+    volumes:
+      - ../config/receptor/controller-b.yml:/mnt/receptor/receptor.conf:ro
+      - ./.e2e-pki/issued/controller-b:/mnt/receptor/tls:ro
+      - receptor-runtime:/run/receptor
+    user: "0:0"
+    entrypoint: ["/usr/local/bin/dumb-init", "--", "/bin/sh", "-euc"]
+    command:
+      - |
+        install -d -o receptor -g receptor -m 0750 /run/receptor
+        install -o receptor -g receptor -m 0400 \
+          /mnt/receptor/receptor.conf /etc/receptor/receptor.conf
+        install -d -o receptor -g receptor -m 0750 /etc/receptor/tls
+        install -o receptor -g receptor -m 0400 /mnt/receptor/tls/tls.key /etc/receptor/tls/tls.key
+        install -o receptor -g receptor -m 0444 /mnt/receptor/tls/tls.crt /etc/receptor/tls/tls.crt
+        install -o receptor -g receptor -m 0444 /mnt/receptor/tls/ca.crt  /etc/receptor/tls/ca.crt
         exec setpriv --reuid=receptor --regid=receptor --clear-groups \
           receptor -c /etc/receptor/receptor.conf
 
@@ -74,13 +106,17 @@ services:
     networks: [ctlnet, targetnet]      # the ONLY service on both networks
     environment:
       RECEPTOR_NODE_ID: exec-e2e-a
-      RECEPTOR_PEERS: mesh-e2e-receptor:27199
+      RECEPTOR_PEERS: mesh-e2e-receptor:27199,mesh-e2e-receptor-b:27199
+      RECEPTOR_TLS_CERT: /e2e-tls/tls.crt
+      RECEPTOR_TLS_KEY: /e2e-tls/tls.key
+      RECEPTOR_TLS_CA: /e2e-tls/ca.crt
     # Rendered config + control socket on tmpfs, never the writable layer
     # (uid/gid: the image pre-creates this dir for uid 1000, but a tmpfs mount
     # would shadow it root-owned without these options).
     tmpfs:
       - /run/receptor:uid=1000,gid=1000,mode=0750
     volumes:
+      - ./.e2e-pki/issued/exec-e2e-a:/e2e-tls:ro
       - e2e-ssh:/e2e-ssh:ro
 
   target:

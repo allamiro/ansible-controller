@@ -21,7 +21,12 @@ set -euo pipefail
 
 die() { echo "mesh-run: ERROR: $*" >&2; exit 2; }
 
-NODE= PLAYBOOK= INVENTORY= SSH_KEY= ANSIBLE_CFG= GALAXY_DIR= SOCKET=/run/receptor/receptor.sock
+# --socket takes a comma-separated preference list (Tier 1, §9.7): the first
+# socket whose receptor answers `status` is used for the whole job. Both
+# sidecars route to every node, so surviving either ingress suffices — losing
+# the orchestrator HOST itself is Tier 2 and out of scope here.
+NODE= PLAYBOOK= INVENTORY= SSH_KEY= ANSIBLE_CFG= GALAXY_DIR=
+SOCKETS=/run/receptor/receptor.sock,/run/receptor/receptor-b.sock
 JOBS_DIR=/var/lib/mesh/jobs
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -31,7 +36,7 @@ while [ $# -gt 0 ]; do
     --ssh-key)     SSH_KEY="${2:?}"; shift 2;;
     --ansible-cfg) ANSIBLE_CFG="${2:?}"; shift 2;;
     --galaxy-dir)  GALAXY_DIR="${2:?}"; shift 2;;
-    --socket)      SOCKET="${2:?}"; shift 2;;
+    --socket)      SOCKETS="${2:?}"; shift 2;;
     --jobs-dir)    JOBS_DIR="${2:?}"; shift 2;;
     *) die "unknown argument: $1";;
   esac
@@ -39,7 +44,25 @@ done
 [ -n "$NODE" ]      || die "--node is required"
 [ -f "$PLAYBOOK" ]  || die "--playbook '$PLAYBOOK' not found"
 [ -e "$INVENTORY" ] || die "--inventory '$INVENTORY' not found (file or directory)"
-[ -S "$SOCKET" ]    || die "receptor control socket '$SOCKET' not found"
+
+# Control-socket selection is routability-aware, not merely liveness-aware: an
+# ingress can answer `status` while it has lost (or is still reconverging) its
+# route to the requested node, while the OTHER ingress still sees it. Prefer
+# the first socket that is live AND routes to the node; remember live-but-
+# routeless sockets so the definitive gate below can distinguish "node is in
+# no ingress's mesh" from "no ingress is alive at all".
+SOCKET= LIVE_SOCKET= mesh_status=
+IFS=',' read -ra socket_list <<<"$SOCKETS"
+for cand in "${socket_list[@]}"; do
+  cand="${cand//[[:space:]]/}"
+  [ -S "$cand" ] || continue
+  st=$(receptorctl --socket "$cand" status 2>/dev/null) || continue
+  [ -n "$LIVE_SOCKET" ] || LIVE_SOCKET="$cand"
+  if awk -v n="$NODE" '$1 == n { found = 1 } END { exit !found }' <<<"$st"; then
+    SOCKET="$cand"; mesh_status="$st"; break
+  fi
+done
+[ -n "$LIVE_SOCKET" ] || die "no live receptor control socket among: $SOCKETS"
 case "$NODE" in *[!A-Za-z0-9._-]*) die "--node '$NODE' invalid";; esac
 
 # (4) unique private data dir per job — no shared state between concurrent runs
@@ -158,15 +181,15 @@ PYEOF
 }
 meta created
 
-# DEFINITIVELY-pre-submit gate (plan §2.4): a node absent from receptorctl
-# status has provably received nothing, so failing here may honestly say
-# "nothing was executed" — this is the only place that claim is allowed.
-mesh_status=$(receptorctl --socket "$SOCKET" status 2>/dev/null) \
-  || { meta submit-failed-pre; die "cannot query receptor status (nothing was executed)"; }
-# Exact, fixed-string match on the first column: grep -w treats '-' as a word
-# boundary and '.' as a wildcard, so 'exec-net20' would "match" exec-net20-a.
-awk -v n="$NODE" '$1 == n { found = 1 } END { exit !found }' <<<"$mesh_status" \
-  || { meta submit-failed-pre; die "node '$NODE' is not in the mesh (nothing was executed)"; }
+# DEFINITIVELY-pre-submit gate (plan §2.4): the selection above already looked
+# for the node on EVERY live ingress (exact first-column match — grep -w would
+# treat '-' as a boundary and '.' as a wildcard). No live ingress routing to
+# the node means nothing can have been submitted, so failing here may honestly
+# say "nothing was executed" — the only place that claim is allowed.
+if [ -z "$SOCKET" ]; then
+  meta submit-failed-pre
+  die "node '$NODE' is not reachable via any live ingress ($SOCKETS) — nothing was executed"
+fi
 
 # (6) transmit -> submit. receptorctl prints "Unit ID: <id>" on success. Past
 # this point failures are AMBIGUOUS: the request may have reached the node and
