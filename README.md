@@ -37,6 +37,7 @@ Ubuntu 26.04-based Docker image that packages Ansible, OpenSSH, and everything n
 - [Pull the image](#pull-the-image)
 - [Makefile targets](#makefile-targets)
 - [Running playbooks](#running-playbooks)
+- [Distributed execution mesh](#distributed-execution-mesh)
 - [Adding roles from a GitHub repository](#adding-roles-from-a-github-repository)
 - [Adding roles from Ansible Galaxy](#adding-roles-from-ansible-galaxy)
 - [Ad-hoc commands](#ad-hoc-commands)
@@ -294,6 +295,52 @@ If roles live in a separate directory, mount them and set `roles_path` in `confi
 [defaults]
 roles_path = /configs/roles:/configs/playbooks/roles
 ```
+
+---
+
+## Distributed execution mesh
+
+Everything above runs Ansible **directly on the controller** — which requires
+the controller to have a network route to every target. The **distributed
+execution mesh** removes that requirement: the controller becomes an
+*orchestrator* that dispatches jobs over a mutually-authenticated
+[Receptor](https://github.com/ansible/receptor) mesh to **execution nodes**
+placed inside segmented networks, and the playbook runs there.
+
+```mermaid
+flowchart LR
+    subgraph direct["Direct (default — unchanged)"]
+        C1["controller"] -- "SSH" --> T0["reachable targets"]
+    end
+    subgraph dist["Distributed (opt-in)"]
+        C2["orchestrator"] == "Receptor mesh<br/>mandatory mTLS" ==> N["execution node<br/>(inside the segmented network)"]
+        N -- "SSH" --> T["targets the controller<br/>cannot route to"]
+    end
+```
+
+Key properties:
+
+- **Opt-in and non-disruptive** — the mesh is profile-gated
+  (`--profile mesh`); `make up` / `make run` and the published
+  `ansible-controller` image are byte-identical with or without it.
+- **Mandatory mutual TLS** — every mesh hop authenticates both sides; node
+  identity is bound to its certificate, and the CA private key stays offline.
+- **HA built in** — redundant receptor ingress sidecars with dispatcher
+  failover (Tier 1), designed for active/active orchestrators later.
+- **Same supply chain** — the `ansible-orchestrator` and
+  `ansible-execution-node` images build `FROM` the controller's digest and are
+  published by the same release pipeline (mesh Phase 11): multi-arch
+  manifests, cosign signatures, and the CVE gate, on Docker Hub and GHCR
+  alike:
+
+```bash
+docker pull ghcr.io/allamiro/ansible-orchestrator:latest
+docker pull ghcr.io/allamiro/ansible-execution-node:latest
+```
+
+Architecture and pipeline diagrams, PKI workflow, the e2e lab, and the
+regression suite are documented in [`mesh/README.md`](mesh/README.md); the full
+design of record is [`mesh/DESIGN.md`](mesh/DESIGN.md).
 
 ---
 

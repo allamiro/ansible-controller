@@ -55,6 +55,13 @@ services:
     image: quay.io/ansible/receptor:v1.6.7@sha256:6296f6cd3b0301cc7c9376e48ae15a42fc7b606235d08e94543fe77661cea4d2
     container_name: receptor-controller
     restart: unless-stopped
+    # Execution nodes in other networks dial this listener from outside the
+    # compose network, so it must be published on the host. Safe to expose:
+    # the listener requires a client certificate from the mesh CA before any
+    # peer is accepted (tls-server: requireclientcert), and the control socket
+    # stays a unix socket that is never network-reachable.
+    ports:
+      - "27199:27199"
     volumes:
       # Staged read-only, then installed into place by the command below.
       - ./mesh/config/receptor/controller-a.yml:/mnt/receptor/receptor.conf:ro
@@ -118,6 +125,10 @@ services:
     image: quay.io/ansible/receptor:v1.6.7@sha256:6296f6cd3b0301cc7c9376e48ae15a42fc7b606235d08e94543fe77661cea4d2
     container_name: receptor-controller-b
     restart: unless-stopped
+    # B's in-container listener is also 27199; published on host port 27200 so
+    # both ingresses are reachable from outside. Same exposure rationale as A.
+    ports:
+      - "27200:27199"
     volumes:
       - ./mesh/config/receptor/controller-b.yml:/mnt/receptor/receptor.conf:ro
       - ./mesh/secrets/receptor/issued/controller-b:/mnt/receptor/tls:ro
