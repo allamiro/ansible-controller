@@ -49,3 +49,38 @@ lint:
 
 logs:
 	docker logs -f ansible-controller
+
+# ---- distributed execution mesh (mesh/ — see mesh/RUNBOOK.md) ----
+# The control plane: controller (orchestrator image) + both receptor ingress
+# sidecars. Needs issued identities under mesh/secrets/ first; the runbook
+# walks the full setup. All mesh targets use -i without -t so they also work
+# from scripts and CI.
+mesh-up:
+	docker compose -f docker-compose.yml -f mesh/compose.mesh.yml --profile mesh up -d
+
+mesh-down:
+	docker compose -f docker-compose.yml -f mesh/compose.mesh.yml --profile mesh down
+
+# Mesh view from BOTH ingresses; either may be down (that is what Tier-1
+# redundancy is for), so a single dead sidecar must not fail the status.
+mesh-status:
+	-docker exec -i ansible-controller receptorctl --socket /run/receptor/receptor.sock status
+	-docker exec -i ansible-controller receptorctl --socket /run/receptor/receptor-b.sock status
+
+# Reach one node over the mesh:  make mesh-ping NODE=exec-dmz-a
+mesh-ping:
+	@test -n "$(NODE)" || { echo "usage: make mesh-ping NODE=<node-id>"; exit 2; }
+	docker exec -i ansible-controller receptorctl --socket /run/receptor/receptor.sock ping $(NODE)
+
+# Dispatch a playbook over the mesh. Exactly one of NODE / POOL / ZONE:
+#   make mesh-run NODE=exec-dmz-a PLAYBOOK=site.yml INVENTORY=inventory/dmz.ini
+#   make mesh-run ZONE=dmz PLAYBOOK=site.yml INVENTORY=inventory/dmz.ini SSH_KEY=/home/ansible/.ssh/id_ed25519
+# PLAYBOOK is relative to /configs/playbooks, INVENTORY to /configs (same
+# conventions as `make run`); SSH_KEY is a container path.
+MESH_INVENTORY ?= inventory/hosts.ini
+mesh-run:
+	docker exec -i ansible-controller /usr/local/mesh/bin/mesh-run \
+		$(if $(NODE),--node $(NODE),) $(if $(POOL),--pool $(POOL),) $(if $(ZONE),--zone $(ZONE),) \
+		--playbook /configs/playbooks/$(PLAYBOOK) \
+		--inventory /configs/$(or $(INVENTORY),$(MESH_INVENTORY)) \
+		$(if $(SSH_KEY),--ssh-key $(SSH_KEY),)

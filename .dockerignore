@@ -1,5 +1,8 @@
-# Build context only needs docker/ (Dockerfile + entrypoint.sh).
+# Build context only needs docker/ (Dockerfile + entrypoint.sh) and
+# mesh/bin (the dispatcher baked into the orchestrator image — Phase 10).
 # Everything else just slows context upload and can invalidate caches.
+# mesh/secrets stays excluded by the blanket mesh/* rule AND by its own
+# gitignore: key material must never enter a build context.
 .git
 .github
 .claude
@@ -8,7 +11,8 @@ configs
 logs
 playbooks
 ssh
-mesh
+mesh/*
+!mesh/bin
 *.md
 LICENSE
 Makefile

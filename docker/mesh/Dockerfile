@@ -129,6 +129,12 @@ RUN set -eux; \
     ansible-runner --version; \
     receptorctl --help >/dev/null
 
+# ---- the dispatcher, baked (Phase 10) ----
+# `make mesh-run` execs this path in the running orchestrator. The e2e suite
+# bind-mounts the checkout's copy over it, so tests always exercise the
+# working tree's dispatcher while the shipped image stays self-contained.
+COPY --chmod=0755 mesh/bin/mesh-run /usr/local/mesh/bin/mesh-run
+
 # Record what this image was actually built on, so a running orchestrator can be
 # traced back to its controller even when BASE was a mutable reference.
 LABEL org.opencontainers.image.base.name="${BASE}"

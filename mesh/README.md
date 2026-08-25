@@ -191,7 +191,7 @@ key.
 On the control host:
 
 ```bash
-docker compose -f docker-compose.yml -f mesh/compose.mesh.yml --profile mesh up -d
+make mesh-up      # = docker compose -f docker-compose.yml -f mesh/compose.mesh.yml --profile mesh up -d
 ```
 
 This starts both ingress endpoints beside your controller and connects the
@@ -215,30 +215,25 @@ services:
 ### Step 3 — connect your execution nodes
 
 Run the execution-node image on the host inside each closed network with its
-issued certificate bundle mounted; it dials out to your control host on ports
-27199 (ingress A) and 27200 (ingress B) and appears in the mesh. The packaged
-wiring for this step — published images, a ready-made node compose file, and
-`make mesh-run` / `make mesh-status`
-targets — is the part still landing (see
-[What ships today](#what-ships-today-and-whats-next)); until it does, the
-[lab](#try-it-in-ten-minutes) shows the complete working wiring you can adapt,
-and `mesh/tests/e2e.compose.yml` is a faithful reference for the node side.
+issued certificate bundle and the work-signing public key mounted; it dials
+out to your control host on ports 27199 (ingress A) and 27200 (ingress B) and
+appears in the mesh. The [RUNBOOK's enrollment section](RUNBOOK.md#2-enroll-an-execution-node)
+has the complete `docker run` invocation; a ready-made node compose file is
+the one remaining packaging item, and `mesh/tests/e2e.compose.yml` stays a
+faithful reference for the node side.
 
 ## Running a job
 
-Jobs are dispatched from inside the orchestrator container with `mesh-run`
-(the lab mounts it at `/usr/local/mesh/bin/mesh-run`; a `make mesh-run`
-shortcut is on the roadmap):
-
-Paths are container paths: with the production overlay your playbooks and
-inventory are mounted under `/configs`, same as direct runs:
+Dispatch with `make mesh-run` — `PLAYBOOK` is relative to `playbooks/` and
+`INVENTORY` to `configs/`, the same conventions as `make run`:
 
 ```bash
-/usr/local/mesh/bin/mesh-run --node exec-dmz-a \
-                             --playbook /configs/playbooks/site.yml \
-                             --inventory /configs/inventory/dmz.ini \
-                             [--ssh-key /path/to/key]
+make mesh-run NODE=exec-dmz-a PLAYBOOK=site.yml INVENTORY=inventory/dmz.ini
 ```
+
+(Under the hood this execs the baked dispatcher,
+`/usr/local/mesh/bin/mesh-run`, inside the orchestrator; call it directly for
+flags `make` doesn't surface, like `--jobs-dir`.)
 
 What you get back:
 
@@ -277,8 +272,8 @@ and [`zones.yml`](config/zones.yml), mount them at `/etc/mesh/` in the
 orchestrator, and dispatch by zone or pool:
 
 ```bash
-/usr/local/mesh/bin/mesh-run --zone dmz --playbook ... --inventory ...
-/usr/local/mesh/bin/mesh-run --pool net20 --playbook ... --inventory ...
+make mesh-run ZONE=dmz    PLAYBOOK=site.yml INVENTORY=inventory/dmz.ini
+make mesh-run POOL=net20  PLAYBOOK=site.yml INVENTORY=inventory/net20.ini
 ```
 
 What the dispatcher guarantees:
@@ -333,11 +328,11 @@ file.
 
 ## Health and troubleshooting
 
-Check what the mesh can see (inside the orchestrator container):
+Check what the mesh can see:
 
 ```bash
-receptorctl --socket /run/receptor/receptor.sock status     # via ingress A
-receptorctl --socket /run/receptor/receptor-b.sock status   # via ingress B
+make mesh-status               # both ingress views (either may be down)
+make mesh-ping NODE=exec-dmz-a # round-trip to one node
 ```
 
 A healthy mesh lists every execution node in `Known Nodes` with a route, and
@@ -395,15 +390,15 @@ credential hygiene and host-visible artifacts; pool/zone dispatch with
 per-node concurrency caps and dispatch-only failover; mandatory work signing
 (nodes refuse unsigned submissions).
 
-**Landing next** — packaged node deployment and the `make mesh-*` targets
-with the operator runbook. The full plan and its progress live in the
-[DESIGN.md checklist](DESIGN.md#7-to-do-checklist).
+**Landing next** — a packaged node compose file. Everything else in the plan
+has shipped; details in the [DESIGN.md checklist](DESIGN.md#7-to-do-checklist).
 
 ## Where things live
 
 ```text
 mesh/
 ├── README.md          # this guide
+├── RUNBOOK.md         # operator procedures: enroll, rotate, evict, troubleshoot
 ├── DESIGN.md          # the deep end: architecture decisions, HA tiers, test matrix
 ├── compose.mesh.yml   # control-plane overlay (opt-in via --profile mesh)
 ├── bin/mesh-run       # the job dispatcher
@@ -413,6 +408,8 @@ mesh/
 └── tests/             # the ten-minute lab + its 25-check verification suite
 ```
 
-Want the reasoning behind the design — why the failover boundary sits where it
+Operating it day to day — enrolling nodes, rotating credentials, evicting a
+node, troubleshooting — is the [**RUNBOOK**](RUNBOOK.md). Want the reasoning
+behind the design — why the failover boundary sits where it
 does, the HA tiers, the full threat model? That's
 [**DESIGN.md**](DESIGN.md). This page is everything you need to *run* it.

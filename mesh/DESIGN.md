@@ -375,9 +375,13 @@ risk column; anything that touches it must pass [§9.1](#91-non-disruption-check
 - [x] Test: unsigned work rejected — e2e #25
 
 ### Phase 10 — Make targets + docs
-- [ ] `mesh-up`, `mesh-down`, `mesh-status`, `mesh-ping`, `mesh-run`
-- [ ] Runbook: create/enroll/sign/install/verify/run/rotate/revoke/troubleshoot
-- [ ] Confirm every pre-existing Make target still works
+- [x] `mesh-up`, `mesh-down`, `mesh-status`, `mesh-ping`, `mesh-run` — the
+      dispatcher is baked into the orchestrator image; pools/zones configs
+      mount live-editable at `/etc/mesh/`
+- [x] Runbook: create/enroll/sign/install/verify/run/rotate/revoke/troubleshoot
+      — [`mesh/RUNBOOK.md`](RUNBOOK.md)
+- [x] Confirm every pre-existing Make target still works (unchanged; verified
+      by `make -n` across the full target list)
 
 ---
 
