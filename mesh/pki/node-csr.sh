@@ -10,7 +10,8 @@ check_id "$ID"
 for d in "$@"; do check_dns "$d"; done
 
 rimg ID="$ID" EXTRA_DNS="$*" -- '
-  mkdir -p /pki/csr && cd /pki/csr
+  mkdir -p /pki/csr
+  cd /pki/csr
   set -- dnsname="$ID"
   for d in $EXTRA_DNS; do set -- "$@" dnsname="$d"; done
   receptor --cert-makereq commonname="$ID" bits=2048 "$@" nodeid="$ID" \

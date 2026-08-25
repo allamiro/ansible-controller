@@ -27,18 +27,24 @@ PKI_DIR="$PWD/mesh/tests/.e2e-pki"
 export MESH_SECRETS="$PKI_DIR"
 # Each identity regenerates independently: an interrupted earlier run must not
 # leave later identities permanently missing behind a single guard.
+# A bundle counts as present only when COMPLETE (crt+key+ca) — an interrupted
+# earlier run can leave a partial bundle, and half a bundle must regenerate,
+# not get mounted into a container to fail obscurely there.
+bundle_ok() { [ -f "$1/tls.crt" ] && [ -f "$1/tls.key" ] && [ -f "$1/ca.crt" ]; }
 [ -f "$PKI_DIR/ca/ca.key" ] || mesh/pki/mesh-ca-init.sh "mesh-e2e throwaway CA"
-[ -f "$PKI_DIR/issued/controller-a/tls.crt" ] || mesh/pki/controller-cert.sh controller-a mesh-e2e-receptor
-[ -f "$PKI_DIR/issued/controller-b/tls.crt" ] || mesh/pki/controller-cert.sh controller-b mesh-e2e-receptor-b
-if [ ! -f "$PKI_DIR/issued/exec-e2e-a/tls.key" ]; then
-  [ -f "$PKI_DIR/csr/exec-e2e-a.csr" ] || mesh/pki/node-csr.sh exec-e2e-a
+bundle_ok "$PKI_DIR/issued/controller-a" || { rm -rf "$PKI_DIR/issued/controller-a"; mesh/pki/controller-cert.sh controller-a mesh-e2e-receptor; }
+bundle_ok "$PKI_DIR/issued/controller-b" || { rm -rf "$PKI_DIR/issued/controller-b"; mesh/pki/controller-cert.sh controller-b mesh-e2e-receptor-b; }
+if ! bundle_ok "$PKI_DIR/issued/exec-e2e-a"; then
+  rm -rf "$PKI_DIR/issued/exec-e2e-a"
+  { [ -f "$PKI_DIR/csr/exec-e2e-a.csr" ] && [ -f "$PKI_DIR/csr/exec-e2e-a.key" ]; } \
+    || { rm -f "$PKI_DIR/csr/exec-e2e-a.csr" "$PKI_DIR/csr/exec-e2e-a.key"; mesh/pki/node-csr.sh exec-e2e-a; }
   mesh/pki/node-sign.sh csr/exec-e2e-a.csr exec-e2e-a
   cp "$PKI_DIR/csr/exec-e2e-a.key" "$PKI_DIR/issued/exec-e2e-a/tls.key"
 fi
 # a SECOND, unrelated CA — the §9.3 unknown-CA negative test needs a cert
 # that is cryptographically valid but signed by a stranger
 [ -f "$PKI_DIR/rogue/ca/ca.key" ] || MESH_SECRETS="$PKI_DIR/rogue" mesh/pki/mesh-ca-init.sh "rogue CA"
-[ -f "$PKI_DIR/rogue/issued/exec-rogue/tls.crt" ] || MESH_SECRETS="$PKI_DIR/rogue" mesh/pki/controller-cert.sh exec-rogue
+bundle_ok "$PKI_DIR/rogue/issued/exec-rogue" || { rm -rf "$PKI_DIR/rogue/issued/exec-rogue"; MESH_SECRETS="$PKI_DIR/rogue" mesh/pki/controller-cert.sh exec-rogue; }
 # uid-1000 readability for material mounted into uid-1000 containers
 docker run --rm -u 0:0 -v "$PKI_DIR:/pki" --entrypoint sh ansible-execution-node:e2e -euc '
   chown -R 1000:1000 /pki/issued /pki/rogue/issued 2>/dev/null || true

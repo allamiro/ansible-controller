@@ -180,9 +180,13 @@ docker run -d --rm --name mesh-e2e-rogue-plain --network "$E2E_NET" \
   -e RECEPTOR_NODE_ID=exec-rogue-plain -e RECEPTOR_PEERS=mesh-e2e-receptor:27199 \
   -e RECEPTOR_INSECURE_DEV=1 ansible-execution-node:e2e >/dev/null \
   || fail "could not start the plaintext rogue"
-rogue_absent mesh-e2e-rogue-plain exec-rogue-plain && pass "plaintext (certless) node never joined the mesh" \
-  || { docker rm -f mesh-e2e-rogue-plain >/dev/null 2>&1; fail "certless node JOINED the mesh"; }
+rogue_absent mesh-e2e-rogue-plain exec-rogue-plain; ra=$?
 docker rm -f mesh-e2e-rogue-plain >/dev/null 2>&1 || true
+case $ra in
+  0) pass "plaintext (certless) node never joined the mesh";;
+  1) fail "certless node JOINED the mesh";;
+  *) fail "certless-rogue test setup broken (rogue not running) — not a proven rejection";;
+esac
 
 echo "== 16. a client cert from an UNKNOWN CA is rejected by the ingress (§9.3) =="
 # The rogue must TRUST the real mesh CA (so it accepts our server cert and the
@@ -197,9 +201,13 @@ docker run -d --rm --name mesh-e2e-rogue-ca --network "$E2E_NET" \
   -e RECEPTOR_TLS_CERT=/e2e-tls/tls.crt -e RECEPTOR_TLS_KEY=/e2e-tls/tls.key \
   -e RECEPTOR_TLS_CA=/e2e-real-ca.crt ansible-execution-node:e2e >/dev/null \
   || fail "could not start the unknown-CA rogue"
-rogue_absent mesh-e2e-rogue-ca "^exec-rogue " && pass "unknown client-CA cert rejected by the ingress" \
-  || { docker rm -f mesh-e2e-rogue-ca >/dev/null 2>&1; fail "unknown-CA node JOINED the mesh"; }
+rogue_absent mesh-e2e-rogue-ca "^exec-rogue "; ra=$?
 docker rm -f mesh-e2e-rogue-ca >/dev/null 2>&1 || true
+case $ra in
+  0) pass "unknown client-CA cert rejected by the ingress";;
+  1) fail "unknown-CA node JOINED the mesh";;
+  *) fail "unknown-CA-rogue test setup broken (rogue not running) — not a proven rejection";;
+esac
 
 echo "== 17. node id ≠ certificate identity is rejected (§9.3) =="
 # A VALID mesh cert (exec-e2e-a's) presented by a node CLAIMING to be someone
@@ -208,7 +216,7 @@ echo "== 17. node id ≠ certificate identity is rejected (§9.3) =="
 # at all, so the container EXITS with an identity-mismatch error rather than
 # running-but-not-joining. Assert exactly that — a clean exit or a different
 # error would not prove the identity binding.
-idlog=$(docker run --rm --network "$E2E_NET" \
+idlog=$(timeout 60 docker run --rm --network "$E2E_NET" \
   -v "$PWD/mesh/tests/.e2e-pki/issued/exec-e2e-a:/e2e-tls:ro" \
   -e RECEPTOR_NODE_ID=exec-imposter -e RECEPTOR_PEERS=mesh-e2e-receptor:27199 \
   -e RECEPTOR_TLS_CERT=/e2e-tls/tls.crt -e RECEPTOR_TLS_KEY=/e2e-tls/tls.key \

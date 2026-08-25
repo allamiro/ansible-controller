@@ -19,9 +19,14 @@ set -euo pipefail
 
 RECEPTOR_IMAGE="${RECEPTOR_IMAGE:-quay.io/ansible/receptor:v1.6.7@sha256:6296f6cd3b0301cc7c9376e48ae15a42fc7b606235d08e94543fe77661cea4d2}"
 MESH_SECRETS="${MESH_SECRETS:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/secrets/receptor}"
-# Leaf lifetime 1y, CA 10y — override with env (RFC3339).
-CA_NOT_AFTER="${CA_NOT_AFTER:-$(date -u -d "+3650 days" +%Y-%m-%dT%H:%M:%SZ)}"
-CERT_NOT_AFTER="${CERT_NOT_AFTER:-$(date -u -d "+365 days" +%Y-%m-%dT%H:%M:%SZ)}"
+# Leaf lifetime 1y, CA 10y — override with env (RFC3339). GNU date first,
+# BSD (macOS) date as fallback, so Docker Desktop hosts work too.
+future_utc() { # days -> RFC3339
+  date -u -d "+$1 days" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+    || date -u -v "+${1}d" +%Y-%m-%dT%H:%M:%SZ
+}
+CA_NOT_AFTER="${CA_NOT_AFTER:-$(future_utc 3650)}"
+CERT_NOT_AFTER="${CERT_NOT_AFTER:-$(future_utc 365)}"
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
@@ -29,7 +34,10 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 # which the character set alone would admit and which escape issued/<id>/.
 check_id()   { case "$1" in ''|.|..|*[!A-Za-z0-9._-]*) die "node id '$1' invalid: [A-Za-z0-9._-]+, not '.'/'..'";; esac; }
 check_dns()  { case "$1" in ''|-*|*[!A-Za-z0-9.-]*) die "DNS name '$1' invalid: [A-Za-z0-9.-]+, no leading '-'";; esac; }
-check_rfc3339() { case "$1" in *[!0-9TZ:+-]*|'') die "'$1' is not RFC3339 (expected e.g. 2027-01-01T00:00:00Z)";; esac; }
+check_rfc3339() {
+  [[ "$1" =~ ^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](Z|[+-][0-9]{2}:[0-9]{2})$ ]] \
+    || die "'$1' is not RFC3339 (expected e.g. 2027-01-01T00:00:00Z)"
+}
 check_relpath() {
   case "$1" in ''|/*|*[!A-Za-z0-9._/-]*) die "path '$1' invalid: relative, [A-Za-z0-9._/-]+";; esac
   case "/$1/" in */../*|*/./*) die "path '$1' invalid: no '.' or '..' components";; esac

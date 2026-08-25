@@ -11,7 +11,8 @@ for d in "$@"; do check_dns "$d"; done
 [ -f "$MESH_SECRETS/ca/ca.key" ] || die "no CA key at $MESH_SECRETS/ca — run mesh-ca-init.sh (or restore the offline key to sign)"
 
 rimg ID="$ID" EXTRA_DNS="$*" NOT_AFTER="$CERT_NOT_AFTER" -- '
-  mkdir -p "/pki/issued/$ID" && cd "/pki/issued/$ID"
+  mkdir -p "/pki/issued/$ID"
+  cd "/pki/issued/$ID"
   set -- dnsname="$ID"
   for d in $EXTRA_DNS; do set -- "$@" dnsname="$d"; done
   receptor --cert-makereq commonname="$ID" bits=2048 "$@" nodeid="$ID" \
