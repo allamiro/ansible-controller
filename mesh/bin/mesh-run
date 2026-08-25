@@ -686,9 +686,22 @@ persist_slot_hold || true
 # stop waiting and fall through to the results-incomplete path below rather
 # than blocking forever. The node's true outcome is unknown either way; the
 # .hold marker keeps its slot and nothing is ever re-sent.
+# The pipeline runs in its OWN process group (setsid) so the watchdog can
+# terminate the WHOLE pipeline — receptorctl AND ansible-runner — not just a
+# wrapper shell. Orphaned children would otherwise keep running AND keep the
+# INHERITED slot-lock fd open, holding a capped node at capacity even after an
+# operator clears the .hold marker. (Fallback without setsid: TERM the subshell;
+# its children still exit when the ingress tears the stream down, just less
+# promptly.) Backgrounding also lets a trapped TERM/INT interrupt the wait, so
+# `make mesh-run` is interruptible and finalize is not skipped.
 rc=0
-( receptorctl --socket "$SOCKET" work results "$UNIT_ID" 2>/dev/null \
-    | ansible-runner process "$PDD" ) & results_pid=$!
+if command -v setsid >/dev/null 2>&1; then
+  setsid sh -c 'receptorctl --socket "$1" work results "$2" 2>/dev/null | ansible-runner process "$3"' \
+    _ "$SOCKET" "$UNIT_ID" "$PDD" & results_pid=$!; results_target="-$results_pid"
+else
+  ( receptorctl --socket "$SOCKET" work results "$UNIT_ID" 2>/dev/null \
+      | ansible-runner process "$PDD" ) & results_pid=$!; results_target="$results_pid"
+fi
 grace="${MESH_RESULTS_GRACE:-30}" gone_since=
 while kill -0 "$results_pid" 2>/dev/null; do
   sleep "${MESH_RESULTS_POLL:-5}"
@@ -698,7 +711,12 @@ while kill -0 "$results_pid" 2>/dev/null; do
   if [ $((SECONDS - gone_since)) -ge "$grace" ]; then
     echo "mesh-run: node '$NODE' unroutable for >${grace}s during result streaming;" \
          "stopping the stream (unit=$UNIT_ID may still be running on it)" >&2
-    kill "$results_pid" 2>/dev/null || true
+    # Whole group: TERM, a moment to unwind, then KILL. "$results_target" is
+    # the negative pgid under setsid (kills receptorctl + ansible-runner too),
+    # or the subshell pid in the fallback.
+    kill -TERM "$results_target" 2>/dev/null || true
+    sleep 2
+    kill -KILL "$results_target" 2>/dev/null || true
     break
   fi
 done

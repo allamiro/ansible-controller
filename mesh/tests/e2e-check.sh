@@ -588,7 +588,10 @@ done
 [ "$rejoined" = 1 ] && pass "execution node re-joined after restart" \
   || fail "execution node did not re-join within 60s of restart"
 # If the watchdog path ran it left a results-incomplete unit + .hold marker;
-# clear both so the environment is clean for a re-run.
+# clear both so the environment is clean for a re-run. `work list` emits JSON by
+# default (an empty mesh is the literal {}), so json.load parses it directly;
+# the whole block is best-effort (2>/dev/null, || true), so even a future output
+# change only skips the unit sweep and still removes the .hold markers below.
 docker exec mesh-e2e-orchestrator sh -c '
   for u in $(receptorctl --socket /run/receptor/receptor.sock work list 2>/dev/null \
              | python3 -c "import sys,json;[print(k) for k in json.load(sys.stdin)]" 2>/dev/null); do
