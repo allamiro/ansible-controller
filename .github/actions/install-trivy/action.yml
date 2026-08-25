@@ -1,0 +1,52 @@
+name: Install Trivy
+description: >-
+  Installs a pinned Trivy release with retried, asserted downloads. The one
+  place for the version pin and the fetch logic every scanning job shares.
+
+# Why a local action rather than a curl one-liner per workflow:
+#
+# The inline form this replaces — `curl -sfL .../install.sh | sh -s -- -b ...` —
+# masks a failed download. The runner executes `run:` steps with `bash -e` and
+# no pipefail, so the pipeline's status is sh's: it reads an empty script, exits
+# 0, and the job dies later at the first `trivy image` with "trivy: command not
+# found" (exit 127). Mesh CI run 32889322921 (2026-08-25) failed exactly that
+# way on a transient raw.githubusercontent.com fetch. Three of the four copies
+# also fetched the installer from `main`, whose contents can change between
+# runs, while the fourth pinned a release tag with a comment asking for the two
+# pins to be bumped together. Now there is one pin, one fetch, the fetch is
+# retried, and the installed version is asserted before any scan runs.
+
+inputs:
+  version:
+    description: Trivy release tag to install — the single pin for every scan
+    required: false
+    default: v0.74.0
+
+runs:
+  using: composite
+  steps:
+    - name: Install Trivy ${{ inputs.version }}
+      shell: bash
+      env:
+        TRIVY_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        url="https://raw.githubusercontent.com/aquasecurity/trivy/${TRIVY_VERSION}/contrib/install.sh"
+        script="${RUNNER_TEMP}/trivy-install.sh"
+        want="Version: ${TRIVY_VERSION#v}"
+        # Two fetches can fail transiently — the installer script, and the
+        # release tarball it downloads — so both sit inside the retry, and a
+        # pass requires the binary to report the pinned version.
+        for attempt in 1 2 3 4 5; do
+          if curl -fsSL --retry 3 --retry-delay 5 --retry-all-errors -o "$script" "$url" \
+             && sh "$script" -b /usr/local/bin "$TRIVY_VERSION" \
+             && got="$(trivy --version 2>&1)" \
+             && grep -qxF "$want" <<<"$got"; then
+            echo "$got"
+            exit 0
+          fi
+          echo "::warning::Trivy ${TRIVY_VERSION} install attempt ${attempt}/5 failed; retrying in $((attempt * 5))s"
+          sleep $((attempt * 5))
+        done
+        echo "::error::could not install Trivy ${TRIVY_VERSION} after 5 attempts"
+        exit 1

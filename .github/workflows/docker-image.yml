@@ -75,6 +75,8 @@ jobs:
           docker exec ci-smoke pgrep sshd
           docker rm -f ci-smoke
 
+      - uses: ./.github/actions/install-trivy
+
       # The gate that makes a CVE fix verifiable before it is merged. This image is
       # built with push: false, so a regression caught here never reaches a registry —
       # unlike the scan in docker-publish.yml, which can only report after the manifest
@@ -86,8 +88,6 @@ jobs:
       # Accepted risks belong in .trivyignore, with a justification and an expiry.
       - name: Fail on CRITICAL/HIGH CVEs (Trivy)
         run: |
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
-            | sh -s -- -b /usr/local/bin
           trivy image \
             --severity CRITICAL,HIGH \
             --ignore-unfixed \
