@@ -55,7 +55,7 @@ flowchart LR
     N2 -.-> RB
 ```
 
-Four properties you can rely on (each one is re-proven automatically by the
+Five properties you can rely on (each one is re-proven automatically by the
 project's test suite on every change):
 
 1. **No certificate, no entry.** Every connection is authenticated in *both*

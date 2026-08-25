@@ -51,7 +51,8 @@ TLS=1
 if [ "${RECEPTOR_INSECURE_DEV:-0}" = 1 ]; then
   TLS=0
   echo "WARNING: RECEPTOR_INSECURE_DEV=1 — this node peers in PLAINTEXT with no authentication" >&2
-  echo "WARNING: and accepts UNSIGNED work. Acceptable only for throwaway wiring experiments; never in production." >&2
+  echo "WARNING: and accepts UNSIGNED work. This escape exists solely so the e2e suite's" >&2
+  echo "WARNING: certless-attacker probe can start (check 15); it is not a deployment mode." >&2
 else
   # Work-signature verification (Phase 9) is as mandatory as mTLS: the node
   # cert admits a peer to the mesh, the signing key authorizes SUBMITTING

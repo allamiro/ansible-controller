@@ -453,21 +453,29 @@ echo "== 25. unsigned work is refused (Phase 9) =="
 # (refusal at submit, or the unit erroring on the node), the work must never
 # execute. Fail CLOSED: a pending verdict after the deadline is a failure,
 # and an executed unit is the vulnerability this check exists to block.
+# The verdict must be SIGNATURE-SPECIFIC on every path, per this file's
+# fail-closed rule: a submit that fails operationally (socket missing, node
+# down) is a broken probe, not a proven refusal; and a unit that reaches a
+# terminal state without a signature-related detail means verification never
+# gated it (the worker choking on the bogus payload is NOT the property).
 unsigned_out=$(docker exec mesh-e2e-orchestrator bash -euc '
   out=$(echo unsigned-probe | receptorctl --socket /run/receptor/receptor.sock \
         work submit ansible-runner --node exec-e2e-a --payload - 2>&1) || {
-    echo "verdict=refused-at-submit detail=${out}"; exit 0; }
+    if grep -qiE "sign|verif" <<<"$out"; then
+      echo "verdict=refused-at-submit detail=$(tr "\n" " " <<<"$out" | tail -c 200)"
+    else
+      echo "verdict=submit-error detail=$(tr "\n" " " <<<"$out" | tail -c 200)"
+    fi
+    exit 0; }
   unit=$(awk "/^Unit ID:/ {print \$3}" <<<"$out")
-  [ -n "$unit" ] || { echo "verdict=no-unit detail=${out}"; exit 0; }
+  [ -n "$unit" ] || { echo "verdict=no-unit detail=$(tr "\n" " " <<<"$out" | tail -c 200)"; exit 0; }
   verdict=pending st=
   deadline=$((SECONDS + 30))
   while [ $SECONDS -lt $deadline ]; do
     st=$(receptorctl --socket /run/receptor/receptor.sock work status "$unit" 2>&1 || true)
-    if grep -qiE "sign|verif" <<<"$st" && grep -qiE "fail|error" <<<"$st"; then
-      verdict=refused; break
-    fi
-    if grep -qiE "StateName.*Succeeded|state.*succeeded" <<<"$st"; then
-      verdict=executed; break
+    if grep -qiE "Failed|Succeeded" <<<"$st"; then
+      if grep -qiE "sign|verif" <<<"$st"; then verdict=refused; else verdict=terminal-unsigned-gap; fi
+      break
     fi
     sleep 2
   done
@@ -475,12 +483,12 @@ unsigned_out=$(docker exec mesh-e2e-orchestrator bash -euc '
   echo "verdict=$verdict detail=$(tr "\n" " " <<<"$st" | tail -c 200)"
 ') || fail "unsigned-work probe could not run"
 case "$unsigned_out" in
-  verdict=refused*|verdict=refused-at-submit*)
-    pass "unsigned submission refused (${unsigned_out#verdict=})";;
-  verdict=executed*)
-    fail "UNSIGNED WORK EXECUTED — signature verification is not enforced";;
+  verdict=refused" "*|verdict=refused-at-submit" "*)
+    pass "unsigned submission refused with a signature error (${unsigned_out#verdict=})";;
+  verdict=terminal-unsigned-gap*)
+    fail "unit reached a terminal state WITHOUT a signature refusal — verification may not be enforced: $unsigned_out";;
   *)
-    fail "no refusal verdict for unsigned work: $unsigned_out";;
+    fail "no signature-specific refusal for unsigned work: $unsigned_out";;
 esac
 
 echo "All mesh e2e regression checks passed."
