@@ -182,9 +182,14 @@ acquire_slot() {
   (umask 077 && mkdir -p "$SLOTS_DIR") || return 1
   for ((i = 1; i <= cap; i++)); do
     f="$SLOTS_DIR/$node.slot.$i"
-    if ! exec {SLOT_FD}>>"$f" 2>/dev/null; then SLOT_FD=; continue; fi
+    # The braces are load-bearing: a bare `exec {fd}>>file 2>/dev/null` makes
+    # BOTH redirections permanent in this shell — silencing the script's own
+    # stderr (including the completion line) for the rest of its life. The
+    # group scopes the stderr silence to the open attempt alone, while the
+    # exec'd fd itself still persists, which is the point.
+    if ! { exec {SLOT_FD}>>"$f"; } 2>/dev/null; then SLOT_FD=; continue; fi
     if flock -n "$SLOT_FD" 2>/dev/null; then return 0; fi
-    exec {SLOT_FD}>&- 2>/dev/null || true
+    { exec {SLOT_FD}>&-; } 2>/dev/null || true
     SLOT_FD=
   done
   return 1
