@@ -372,7 +372,7 @@ acquire_slot() {
   # HIDING recorded finite caps this dispatch is obliged to honor — a 1->0
   # config transition must not become an overshoot just because the state
   # volume broke — and would leave this job invisible to later cap enables.
-  (umask 077 && mkdir -p "$SLOTS_DIR") 2>/dev/null || return 1
+  (umask 077 && mkdir -p "$SLOTS_DIR/$node") 2>/dev/null || return 1
   # Per-node admission lock: serializes the scan+probe so concurrent
   # dispatchers make their capacity decisions one at a time. Held only for
   # the scan, never for the job; a stuck peer bounds the wait at 30s and
