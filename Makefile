@@ -61,11 +61,14 @@ mesh-up:
 mesh-down:
 	docker compose -f docker-compose.yml -f mesh/compose.mesh.yml --profile mesh down
 
-# Mesh view from BOTH ingresses; either may be down (that is what Tier-1
-# redundancy is for), so a single dead sidecar must not fail the status.
+# Mesh view from BOTH ingresses. One dead sidecar must not fail the status
+# (that is what Tier-1 redundancy is for) — but BOTH dead must: a green exit
+# with no responding ingress would hide a fully-down control plane.
 mesh-status:
-	-docker exec -i ansible-controller receptorctl --socket /run/receptor/receptor.sock status
-	-docker exec -i ansible-controller receptorctl --socket /run/receptor/receptor-b.sock status
+	@ok=0; \
+	docker exec -i ansible-controller receptorctl --socket /run/receptor/receptor.sock status && ok=1; \
+	docker exec -i ansible-controller receptorctl --socket /run/receptor/receptor-b.sock status && ok=1; \
+	[ "$$ok" = 1 ] || { echo "mesh-status: ERROR: no ingress responded"; exit 1; }
 
 # Reach one node over the mesh:  make mesh-ping NODE=exec-dmz-a
 mesh-ping:

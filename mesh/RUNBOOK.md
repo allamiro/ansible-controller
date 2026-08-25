@@ -117,9 +117,13 @@ mesh/pki/work-sign-init.sh --force          # prints the orphaning warning
 # 3. verify: make mesh-run NODE=... PLAYBOOK=ping.yml
 ```
 
-Until step 2 completes, running jobs keep working (old key signs, nodes still
-hold the old public key). Reversing the order refuses all new work until the
-rollout finishes.
+Nodes verify against a single key, so any rotation has a refusal window: a
+node holding the new public key refuses old-signed submissions from the
+moment it restarts (step 1) until the sidecars switch keys (step 2).
+Nodes-first is still the right order because the window CLOSES with the
+one-host sidecar swap you control — reversed, it drags on until the slowest
+node in the slowest network gets its new key. Jobs already running are
+unaffected either way; schedule the rotation in a quiet period.
 
 **The CA itself** (compromise, or planned expiry): a new CA orphans every
 issued certificate. Issue the new CA offline, then re-run enrollment for the

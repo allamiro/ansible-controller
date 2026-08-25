@@ -13,6 +13,9 @@ playbooks
 ssh
 mesh/*
 !mesh/bin
+# Belt for the classic (non-BuildKit) builder: BuildKit re-includes a negated
+# directory's contents, but being explicit removes any builder dependence.
+!mesh/bin/*
 *.md
 LICENSE
 Makefile
