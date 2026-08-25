@@ -199,7 +199,10 @@ docker run -d --rm --name mesh-e2e-rogue-ca --network "$E2E_NET" \
   -v "$PWD/mesh/tests/.e2e-pki/issued/controller-a/ca.crt:/e2e-real-ca.crt:ro" \
   -e RECEPTOR_NODE_ID=exec-rogue -e RECEPTOR_PEERS=mesh-e2e-receptor:27199 \
   -e RECEPTOR_TLS_CERT=/e2e-tls/tls.crt -e RECEPTOR_TLS_KEY=/e2e-tls/tls.key \
-  -e RECEPTOR_TLS_CA=/e2e-real-ca.crt ansible-execution-node:e2e >/dev/null \
+  -e RECEPTOR_TLS_CA=/e2e-real-ca.crt \
+  -v "$PWD/mesh/tests/.e2e-pki/work-signing/work-public.pem:/e2e-signing/work-public.pem:ro" \
+  -e RECEPTOR_WORK_PUBKEY=/e2e-signing/work-public.pem \
+  ansible-execution-node:e2e >/dev/null \
   || fail "could not start the unknown-CA rogue"
 ra=0; rogue_absent mesh-e2e-rogue-ca "^exec-rogue " || ra=$?
 docker rm -f mesh-e2e-rogue-ca >/dev/null 2>&1 || true
@@ -220,7 +223,10 @@ idlog=$(timeout 60 docker run --rm --network "$E2E_NET" \
   -v "$PWD/mesh/tests/.e2e-pki/issued/exec-e2e-a:/e2e-tls:ro" \
   -e RECEPTOR_NODE_ID=exec-imposter -e RECEPTOR_PEERS=mesh-e2e-receptor:27199 \
   -e RECEPTOR_TLS_CERT=/e2e-tls/tls.crt -e RECEPTOR_TLS_KEY=/e2e-tls/tls.key \
-  -e RECEPTOR_TLS_CA=/e2e-tls/ca.crt ansible-execution-node:e2e 2>&1) && \
+  -e RECEPTOR_TLS_CA=/e2e-tls/ca.crt \
+  -v "$PWD/mesh/tests/.e2e-pki/work-signing/work-public.pem:/e2e-signing/work-public.pem:ro" \
+  -e RECEPTOR_WORK_PUBKEY=/e2e-signing/work-public.pem \
+  ansible-execution-node:e2e 2>&1) && \
   fail "identity-mismatch node started successfully (must be rejected)"
 grep -qi "exec-imposter not found in certificate" <<<"$idlog" \
   && pass "valid cert with the WRONG node id refused at startup (identity binding enforced)" \
@@ -231,7 +237,10 @@ docker run -d --rm --name mesh-e2e-rogue-exp --network "$E2E_NET" \
   -v "$PWD/mesh/tests/.e2e-pki/issued/exec-expired:/e2e-tls:ro" \
   -e RECEPTOR_NODE_ID=exec-expired -e RECEPTOR_PEERS=mesh-e2e-receptor:27199 \
   -e RECEPTOR_TLS_CERT=/e2e-tls/tls.crt -e RECEPTOR_TLS_KEY=/e2e-tls/tls.key \
-  -e RECEPTOR_TLS_CA=/e2e-tls/ca.crt ansible-execution-node:e2e >/dev/null \
+  -e RECEPTOR_TLS_CA=/e2e-tls/ca.crt \
+  -v "$PWD/mesh/tests/.e2e-pki/work-signing/work-public.pem:/e2e-signing/work-public.pem:ro" \
+  -e RECEPTOR_WORK_PUBKEY=/e2e-signing/work-public.pem \
+  ansible-execution-node:e2e >/dev/null \
   || fail "could not start the expired-cert rogue"
 ra=0; rogue_absent mesh-e2e-rogue-exp exec-expired || ra=$?
 docker rm -f mesh-e2e-rogue-exp >/dev/null 2>&1 || true
@@ -255,7 +264,10 @@ docker run -d --rm --name mesh-e2e-probe --network "$E2E_NET" \
   -v "$PWD/mesh/tests/.e2e-pki/issued/exec-probe:/e2e-tls:ro" \
   -e RECEPTOR_NODE_ID=exec-probe -e RECEPTOR_PEERS=mesh-e2e-rogue-ingress:27199 \
   -e RECEPTOR_TLS_CERT=/e2e-tls/tls.crt -e RECEPTOR_TLS_KEY=/e2e-tls/tls.key \
-  -e RECEPTOR_TLS_CA=/e2e-tls/ca.crt ansible-execution-node:e2e >/dev/null \
+  -e RECEPTOR_TLS_CA=/e2e-tls/ca.crt \
+  -v "$PWD/mesh/tests/.e2e-pki/work-signing/work-public.pem:/e2e-signing/work-public.pem:ro" \
+  -e RECEPTOR_WORK_PUBKEY=/e2e-signing/work-public.pem \
+  ansible-execution-node:e2e >/dev/null \
   || { docker rm -f mesh-e2e-rogue-ingress >/dev/null 2>&1; fail "could not start the probe node"; }
 # Fail-closed by design: an unrecognised outcome FAILS. The diagnostics tell
 # the operator which way it went wrong — probe died, or receptor's log wording
@@ -434,5 +446,49 @@ wait "$slow_pid" \
   && pass "slot-holding job still completed rc=0" \
   || fail "the slot-holding job failed: $(tail -3 "$slow_log")"
 rm -f "$slow_log"
+
+echo "== 25. unsigned work is refused (Phase 9) =="
+# Every prior dispatch proved the SIGNED path (mesh-run submits --signwork).
+# Now submit a raw unit WITHOUT --signwork: wherever receptor draws the line
+# (refusal at submit, or the unit erroring on the node), the work must never
+# execute. Fail CLOSED: a pending verdict after the deadline is a failure,
+# and an executed unit is the vulnerability this check exists to block.
+# The verdict must be SIGNATURE-SPECIFIC on every path, per this file's
+# fail-closed rule: a submit that fails operationally (socket missing, node
+# down) is a broken probe, not a proven refusal; and a unit that reaches a
+# terminal state without a signature-related detail means verification never
+# gated it (the worker choking on the bogus payload is NOT the property).
+unsigned_out=$(docker exec mesh-e2e-orchestrator bash -euc '
+  out=$(echo unsigned-probe | receptorctl --socket /run/receptor/receptor.sock \
+        work submit ansible-runner --node exec-e2e-a --payload - 2>&1) || {
+    if grep -qiE "sign|verif" <<<"$out"; then
+      echo "verdict=refused-at-submit detail=$(tr "\n" " " <<<"$out" | tail -c 200)"
+    else
+      echo "verdict=submit-error detail=$(tr "\n" " " <<<"$out" | tail -c 200)"
+    fi
+    exit 0; }
+  unit=$(awk "/^Unit ID:/ {print \$3}" <<<"$out")
+  [ -n "$unit" ] || { echo "verdict=no-unit detail=$(tr "\n" " " <<<"$out" | tail -c 200)"; exit 0; }
+  verdict=pending st=
+  deadline=$((SECONDS + 30))
+  while [ $SECONDS -lt $deadline ]; do
+    st=$(receptorctl --socket /run/receptor/receptor.sock work status "$unit" 2>&1 || true)
+    if grep -qiE "Failed|Succeeded|Rejected|Error" <<<"$st"; then
+      if grep -qiE "sign|verif" <<<"$st"; then verdict=refused; else verdict=terminal-unsigned-gap; fi
+      break
+    fi
+    sleep 2
+  done
+  receptorctl --socket /run/receptor/receptor.sock work release "$unit" >/dev/null 2>&1 || true
+  echo "verdict=$verdict detail=$(tr "\n" " " <<<"$st" | tail -c 200)"
+') || fail "unsigned-work probe could not run"
+case "$unsigned_out" in
+  verdict=refused" "*|verdict=refused-at-submit" "*)
+    pass "unsigned submission refused with a signature error (${unsigned_out#verdict=})";;
+  verdict=terminal-unsigned-gap*)
+    fail "unit reached a terminal state WITHOUT a signature refusal — verification may not be enforced: $unsigned_out";;
+  *)
+    fail "no signature-specific refusal for unsigned work: $unsigned_out";;
+esac
 
 echo "All mesh e2e regression checks passed."

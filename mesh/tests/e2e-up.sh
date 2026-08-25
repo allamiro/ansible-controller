@@ -47,6 +47,21 @@ if ! { [ -f "$PKI_DIR/ca/ca.key" ] && [ -f "$PKI_DIR/ca/ca.crt" ] && cert_live "
   rm -rf "$PKI_DIR"
   mesh/pki/mesh-ca-init.sh "mesh-e2e throwaway CA"
 fi
+# Work-signing keypair (Phase 9): ingresses sign, the node verifies. Like the
+# retained cert bundles, retained keys are VALIDATED, not merely present: a
+# truncated private key or a public half from an older rotation would fail the
+# suite obscurely at compose-up. The pair is good only if the private key
+# parses AND its derived public key matches the stored one byte for byte.
+signing_pair_ok() {
+  local d="$PKI_DIR/work-signing" derived
+  [ -f "$d/work-private.pem" ] && [ -f "$d/work-public.pem" ] || return 1
+  derived=$(openssl pkey -in "$d/work-private.pem" -pubout 2>/dev/null) || return 1
+  [ "$derived" = "$(cat "$d/work-public.pem")" ]
+}
+if ! signing_pair_ok; then
+  rm -rf "$PKI_DIR/work-signing"
+  mesh/pki/work-sign-init.sh
+fi
 bundle_ok "$PKI_DIR/issued/controller-a" || { rm -rf "$PKI_DIR/issued/controller-a"; mesh/pki/controller-cert.sh controller-a mesh-e2e-receptor; }
 bundle_ok "$PKI_DIR/issued/controller-b" || { rm -rf "$PKI_DIR/issued/controller-b"; mesh/pki/controller-cert.sh controller-b mesh-e2e-receptor-b; }
 if ! bundle_ok "$PKI_DIR/issued/exec-e2e-a"; then

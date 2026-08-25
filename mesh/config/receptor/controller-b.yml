@@ -40,3 +40,15 @@
 - tcp-listener:
     port: 27199
     tls: mesh-tls
+
+# Work signing (Phase 9): submissions made with --signwork (mesh-run's
+# default) are signed with this key. The ENFORCEMENT point is node-side
+# verification (verifysignature: true), which refuses anything unsigned —
+# this block merely holds the only key that can produce an accepted
+# signature. Issued OFFLINE by mesh/pki/work-sign-init.sh and mounted only
+# into the ingress sidecars, so mesh admission (a node cert) and submit
+# authority (this key) stay separate: a compromised or third-party node can
+# execute work but never inject it.
+- work-signing:
+    privatekey: /etc/receptor/signing/work-private.pem
+    tokenexpiration: 30m

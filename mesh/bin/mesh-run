@@ -50,6 +50,7 @@ ZONES_FILE="${MESH_ZONES_FILE:-/etc/mesh/zones.yml}"
 # stdout/rc/job_events are readable on the host without entering the container
 # (plan Phase 7). --log-dir "" disables the export.
 LOG_DIR=/var/log/ansible/runner
+SIGNWORK=1
 while [ $# -gt 0 ]; do
   case "$1" in
     --node)        NODE="${2:?}"; shift 2;;
@@ -65,6 +66,10 @@ while [ $# -gt 0 ]; do
     --log-dir)     LOG_DIR="${2-}"; shift 2;;
     --pools-file)  POOLS_FILE="${2:?}"; POOLS_FILE_SET=1; shift 2;;
     --zones-file)  ZONES_FILE="${2:?}"; shift 2;;
+    # Work signing (Phase 9) is on by default: the ingress signs every
+    # submission and nodes refuse unsigned work. The escape exists only for
+    # RECEPTOR_INSECURE_DEV wiring experiments, matching the node's escape.
+    --no-signwork) SIGNWORK=; shift;;
     *) die "unknown argument: $1";;
   esac
 done
@@ -626,7 +631,7 @@ persist_slot_hold || { meta submit-failed-pre "could not create the durable slot
 DISPATCH_STATE=in-flight
 submit_out=$(ansible-runner transmit "$PDD" -p "$(basename "$PLAYBOOK_REAL")" 2>/dev/null \
   | receptorctl --socket "$SOCKET" work submit ansible-runner \
-      --node "$NODE" --payload -) \
+      --node "$NODE" --payload - ${SIGNWORK:+--signwork}) \
   || { meta submit-ambiguous "unit id unknown: the response was lost after the attempt left this host; inspect 'receptorctl work list' for an unmatched unit"; \
        die "work submit to '$NODE' failed AFTER the attempt left this host — \
 the unit MAY BE RUNNING; check 'receptorctl work list' before re-running (job=$JOB_ID)"; }

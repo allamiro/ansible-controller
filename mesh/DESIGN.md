@@ -367,9 +367,12 @@ risk column; anything that touches it must pass [§9.1](#91-non-disruption-check
 - [x] Unique PDD + artifact dir + work-unit id per concurrent job (held since Phase 5; re-proven under contention by #24)
 
 ### Phase 9 — work signing
-- [ ] Controller work-signing private key (offline-issued); relay verification pubkey
-- [ ] `verifysignature: true` on node worktype; submit with `--signwork`
-- [ ] Test: unsigned work rejected
+- [x] Controller work-signing private key (offline-issued via
+      `mesh/pki/work-sign-init.sh`); nodes get only the verification pubkey
+      (`RECEPTOR_WORK_PUBKEY`)
+- [x] `verifysignature: true` on the node worktype (mandatory outside
+      `RECEPTOR_INSECURE_DEV`); `mesh-run` submits `--signwork` by default
+- [x] Test: unsigned work rejected — e2e #25
 
 ### Phase 10 — Make targets + docs
 - [ ] `mesh-up`, `mesh-down`, `mesh-status`, `mesh-ping`, `mesh-run`
