@@ -323,11 +323,21 @@ risk column; anything that touches it must pass [§9.1](#91-non-disruption-check
 - [x] Real ansible rc + artifacts (stdout, rc, job_events) return to the controller (checks 11–13, including nonzero rc propagation)
 
 ### Phase 6 — PKI + mandatory mTLS
-- [ ] `mesh/pki/`: `mesh-ca-init.sh`, `controller-cert.sh`, `node-csr.sh`, `node-sign.sh`
-- [ ] Idempotent CA init (STOP if CA exists unless `--force`)
-- [ ] Node‑id ⇄ cert identity checking on; `insecureskipverify` never set
-- [ ] Multi‑ingress peer list (Tier 1) in the node template
-- [ ] All negative mTLS tests pass
+- [x] `mesh/pki/`: `mesh-ca-init.sh`, `controller-cert.sh`, `node-csr.sh`, `node-sign.sh`
+      — receptor's own cert tooling (nodeid OID in SAN) run in the pinned image;
+      signing is gated on the CSR carrying EXACTLY the authorised node id
+- [x] Idempotent CA init (STOP if CA exists unless `--force`); CA key never in
+      any runtime mount — only `issued/` bundles reach containers
+- [x] Node‑id ⇄ cert identity checking on; `insecureskipverify` /
+      `skipreceptornamescheck` never set (e2e asserts their absence as active keys)
+- [x] Multi‑ingress peer list (Tier 1): nodes peer to A **and** B; the
+      dispatcher fails its control socket over between the two sidecars
+- [x] All negative mTLS tests pass (e2e 15–17: certless, unknown-CA, and
+      valid-cert-wrong-identity nodes all refused) + Tier-1 failover proven
+      (e2e 18: sidecar A stopped, dispatch through B succeeds)
+- [x] mTLS is MANDATORY: the node entrypoint refuses to start without cert,
+      key, and CA (`RECEPTOR_INSECURE_DEV=1` is a loud, dev-only escape used
+      by nothing in production or the e2e suite)
 
 ### Phase 7 — credentials, artifacts, job index
 - [ ] `env/ssh_key` in the transmit payload; never logged/echoed

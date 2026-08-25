@@ -17,6 +17,35 @@ docker build -f docker/mesh/Dockerfile --target execution-node \
   --build-arg BASE="${BASE}" --build-arg ALLOW_MUTABLE_BASE=1 \
   -t ansible-execution-node:e2e .
 
+echo "==> issuing the e2e PKI (mesh/pki/ scripts against a throwaway CA)"
+# Idempotent: an existing e2e CA is reused (mesh-ca-init refuses a second run
+# by design), so repeated e2e-up calls keep working certs. Node keys are made
+# readable to uid 1000 — the identity receptor runs as on the node — and only
+# issued/ directories are ever mounted into containers: the CA key stays
+# outside every runtime mount, exactly the plan §4 rule the suite must model.
+PKI_DIR="$PWD/mesh/tests/.e2e-pki"
+export MESH_SECRETS="$PKI_DIR"
+if [ ! -f "$PKI_DIR/ca/ca.key" ]; then
+  mesh/pki/mesh-ca-init.sh "mesh-e2e throwaway CA"
+fi
+if [ ! -f "$PKI_DIR/issued/controller-a/tls.crt" ]; then
+  mesh/pki/controller-cert.sh controller-a mesh-e2e-receptor
+  mesh/pki/controller-cert.sh controller-b mesh-e2e-receptor-b
+  mesh/pki/node-csr.sh exec-e2e-a
+  mesh/pki/node-sign.sh csr/exec-e2e-a.csr exec-e2e-a
+  cp "$PKI_DIR/csr/exec-e2e-a.key" "$PKI_DIR/issued/exec-e2e-a/tls.key"
+  # a SECOND, unrelated CA — the §9.3 unknown-CA negative test needs a cert
+  # that is cryptographically valid but signed by a stranger
+  MESH_SECRETS="$PKI_DIR/rogue" mesh/pki/mesh-ca-init.sh "rogue CA"
+  MESH_SECRETS="$PKI_DIR/rogue" mesh/pki/controller-cert.sh exec-rogue
+fi
+# uid-1000 readability for material mounted into uid-1000 containers
+docker run --rm -u 0:0 -v "$PKI_DIR:/pki" --entrypoint sh ansible-execution-node:e2e -euc '
+  chown -R 1000:1000 /pki/issued /pki/rogue/issued 2>/dev/null || true
+  chmod 600 /pki/issued/*/tls.key /pki/rogue/issued/*/tls.key 2>/dev/null || true
+  chmod 644 /pki/issued/*/tls.crt /pki/issued/*/ca.crt /pki/rogue/issued/*/tls.crt /pki/rogue/issued/*/ca.crt 2>/dev/null || true
+'
+
 echo "==> starting the e2e environment"
 docker compose -f mesh/tests/e2e.compose.yml up -d --wait --wait-timeout 90 \
   || { docker compose -f mesh/tests/e2e.compose.yml ps; exit 1; }

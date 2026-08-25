@@ -21,7 +21,12 @@ set -euo pipefail
 
 die() { echo "mesh-run: ERROR: $*" >&2; exit 2; }
 
-NODE= PLAYBOOK= INVENTORY= SSH_KEY= ANSIBLE_CFG= GALAXY_DIR= SOCKET=/run/receptor/receptor.sock
+# --socket takes a comma-separated preference list (Tier 1, §9.7): the first
+# socket whose receptor answers `status` is used for the whole job. Both
+# sidecars route to every node, so surviving either ingress suffices — losing
+# the orchestrator HOST itself is Tier 2 and out of scope here.
+NODE= PLAYBOOK= INVENTORY= SSH_KEY= ANSIBLE_CFG= GALAXY_DIR=
+SOCKETS=/run/receptor/receptor.sock,/run/receptor/receptor-b.sock
 JOBS_DIR=/var/lib/mesh/jobs
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -31,7 +36,7 @@ while [ $# -gt 0 ]; do
     --ssh-key)     SSH_KEY="${2:?}"; shift 2;;
     --ansible-cfg) ANSIBLE_CFG="${2:?}"; shift 2;;
     --galaxy-dir)  GALAXY_DIR="${2:?}"; shift 2;;
-    --socket)      SOCKET="${2:?}"; shift 2;;
+    --socket)      SOCKETS="${2:?}"; shift 2;;
     --jobs-dir)    JOBS_DIR="${2:?}"; shift 2;;
     *) die "unknown argument: $1";;
   esac
@@ -39,7 +44,17 @@ done
 [ -n "$NODE" ]      || die "--node is required"
 [ -f "$PLAYBOOK" ]  || die "--playbook '$PLAYBOOK' not found"
 [ -e "$INVENTORY" ] || die "--inventory '$INVENTORY' not found (file or directory)"
-[ -S "$SOCKET" ]    || die "receptor control socket '$SOCKET' not found"
+
+# Control-socket failover: pick the first LIVE socket (answers `status`), not
+# merely the first that exists — a dead sidecar leaves its socket file behind.
+SOCKET=
+IFS=',' read -ra socket_list <<<"$SOCKETS"
+for cand in "${socket_list[@]}"; do
+  cand="${cand//[[:space:]]/}"
+  [ -S "$cand" ] || continue
+  if receptorctl --socket "$cand" status >/dev/null 2>&1; then SOCKET="$cand"; break; fi
+done
+[ -n "$SOCKET" ] || die "no live receptor control socket among: $SOCKETS"
 case "$NODE" in *[!A-Za-z0-9._-]*) die "--node '$NODE' invalid";; esac
 
 # (4) unique private data dir per job — no shared state between concurrent runs

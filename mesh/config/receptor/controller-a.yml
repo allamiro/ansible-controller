@@ -1,0 +1,42 @@
+---
+# Receptor config for control-plane sidecar A (mesh plan Phase 3/6).
+# Two sidecars (A and B) provide Tier-1 ingress redundancy (§9.7): execution
+# nodes peer to BOTH, and the orchestrator fails its control socket over
+# between them. This file differs from its sibling only in node id and socket
+# filename.
+#
+# FORMAT: receptor 1.6.7 parses a YAML *list* of action maps — the mapping
+# ("version: 2") style is rejected by this release.
+
+- node:
+    id: controller-a
+
+- log-level:
+    level: info
+
+# The control service is the mesh's AUTHORITY BOUNDARY: anything able to write
+# to it can submit work to every execution node. Unix socket only — no
+# tcplisten — and owner-only permissions.
+- control-service:
+    service: control
+    filename: /run/receptor/receptor.sock
+    permissions: 0600
+
+# Mandatory mutual TLS (Phase 6). Both directions authenticate:
+#   - requireclientcert + clientcas: an execution node must present a cert
+#     signed by the mesh CA or the connection is refused
+#   - receptor's identity check (on by default; skipreceptornamescheck is
+#     deliberately ABSENT) additionally requires the peer's cert to carry the
+#     peer's node id in its SAN — a valid cert for the wrong identity fails
+#   - insecureskipverify is deliberately ABSENT everywhere (§9.3)
+- tls-server:
+    name: mesh-tls
+    cert: /etc/receptor/tls/tls.crt
+    key: /etc/receptor/tls/tls.key
+    requireclientcert: true
+    clientcas: /etc/receptor/tls/ca.crt
+
+# Backend listener the execution nodes dial — TLS-only as of Phase 6.
+- tcp-listener:
+    port: 27199
+    tls: mesh-tls
