@@ -72,6 +72,11 @@ services:
     environment:
       RECEPTOR_NODE_ID: exec-e2e-a
       RECEPTOR_PEERS: mesh-e2e-receptor:27199
+    # Rendered config + control socket on tmpfs, never the writable layer
+    # (uid/gid: the image pre-creates this dir for uid 1000, but a tmpfs mount
+    # would shadow it root-owned without these options).
+    tmpfs:
+      - /run/receptor:uid=1000,gid=1000,mode=0750
     volumes:
       - e2e-ssh:/e2e-ssh:ro
 

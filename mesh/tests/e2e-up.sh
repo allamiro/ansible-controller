@@ -25,8 +25,12 @@ echo "==> seeding the disposable SSH keypair"
 # sshd reads authorized_keys per auth attempt, so seeding after start needs no
 # restarts. The key exists only inside the suite's volumes and is destroyed by
 # e2e-down.sh.
+# Volume names derive from the compose project name. The file pins `name:
+# mesh-e2e`, but COMPOSE_PROJECT_NAME overrides a pinned name, so honour it —
+# hardcoding would seed volumes the running containers never mount.
+proj="${COMPOSE_PROJECT_NAME:-mesh-e2e}"
 docker run --rm -u root \
-  -v mesh-e2e_e2e-ssh:/w -v mesh-e2e_e2e-ssh-authorized:/a \
+  -v "${proj}_e2e-ssh:/w" -v "${proj}_e2e-ssh-authorized:/a" \
   --entrypoint bash ansible-orchestrator:e2e -euc '
   [ -f /w/id_ed25519 ] || ssh-keygen -q -t ed25519 -N "" -f /w/id_ed25519
   # Private key: owner-only and owned by uid 1000 (the user dispatch runs as on

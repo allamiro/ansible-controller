@@ -37,11 +37,18 @@ grep -q 'exec-e2e-a' <<<"$orch_status" \
   || fail "orchestrator cannot see the node"
 
 echo "== 4. the control plane has NO route to the target (the load-bearing claim) =="
-if docker exec mesh-e2e-orchestrator bash -c 'timeout 3 bash -c "exec 6<>/dev/tcp/mesh-e2e-target/22"' 2>/dev/null; then
-  fail "orchestrator CAN reach the target — topology broken"
-else
-  pass "orchestrator cannot reach mesh-e2e-target:22"
-fi
+# Fail CLOSED: the probe always exits 0 and reports OPEN/CLOSED on stdout, so a
+# docker/exec-level error (container down, shell missing) is a FAIL, not a
+# silent pass. `if docker exec ...; then fail; fi` alone would map any
+# operational error onto the security property holding.
+probe=$(docker exec mesh-e2e-orchestrator bash -c \
+  'timeout 3 bash -c "exec 6<>/dev/tcp/mesh-e2e-target/22" 2>/dev/null && echo OPEN || echo CLOSED') \
+  || fail "could not run the route probe on the orchestrator"
+case "$probe" in
+  CLOSED) pass "orchestrator cannot reach mesh-e2e-target:22" ;;
+  OPEN)   fail "orchestrator CAN reach the target — topology broken" ;;
+  *)      fail "route probe returned '$probe'" ;;
+esac
 
 echo "== 5. the execution node CAN reach the target =="
 docker exec mesh-e2e-node-a bash -c 'timeout 3 bash -c "exec 6<>/dev/tcp/mesh-e2e-target/22"' \
@@ -53,11 +60,16 @@ uid=$(docker exec mesh-e2e-node-a sh -c 'awk "/^Uid:/{print \$2}" /proc/1/status
 [ "$uid" = "1000" ] && pass "receptor is PID 1 as uid 1000" || fail "receptor uid=$uid"
 
 echo "== 7. no sshd on the execution node =="
-if docker exec mesh-e2e-node-a pgrep -x sshd >/dev/null 2>&1; then
-  fail "sshd is running on the execution node"
-else
-  pass "no sshd on the execution node"
-fi
+# Same fail-closed shape — and no pgrep: the node image ships no procps, so a
+# pgrep-based check "passed" by the tool being absent. /proc needs nothing.
+sshd_count=$(docker exec mesh-e2e-node-a sh -c \
+  'c=0; for f in /proc/[0-9]*/comm; do [ "$(cat "$f" 2>/dev/null)" = sshd ] && c=$((c+1)); done; echo "count=$c"') \
+  || fail "could not enumerate processes on the node"
+case "$sshd_count" in
+  count=0) pass "no sshd on the execution node" ;;
+  count=*) fail "sshd is running on the execution node (${sshd_count#count=} found)" ;;
+  *)       fail "process probe returned '$sshd_count'" ;;
+esac
 
 echo "== 8. node receptor is the patched CVE-clean build =="
 v=$(docker exec mesh-e2e-node-a receptor --version)

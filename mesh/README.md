@@ -196,7 +196,7 @@ docker/Dockerfile        →  controller        # UNCHANGED; the PUBLISHED image
 docker/mesh/Dockerfile:
   ARG BASE=<controller image>
   FROM ${BASE} AS orchestrator      # controller + ansible-runner + receptorctl
-  FROM ${BASE} AS execution-node    # controller + receptor + ansible-runner;
+  FROM orchestrator AS execution-node # + receptor (patched source build);
                                     #   entrypoint runs receptor, NOT sshd; the
                                     #   inherited port-22 HEALTHCHECK is overridden
                                     #   with a receptor-readiness check (inherited
