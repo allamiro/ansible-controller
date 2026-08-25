@@ -184,14 +184,20 @@ rogue_absent mesh-e2e-rogue-plain exec-rogue-plain && pass "plaintext (certless)
   || { docker rm -f mesh-e2e-rogue-plain >/dev/null 2>&1; fail "certless node JOINED the mesh"; }
 docker rm -f mesh-e2e-rogue-plain >/dev/null 2>&1 || true
 
-echo "== 16. a certificate from an UNKNOWN CA is rejected (§9.3) =="
+echo "== 16. a client cert from an UNKNOWN CA is rejected by the ingress (§9.3) =="
+# The rogue must TRUST the real mesh CA (so it accepts our server cert and the
+# handshake reaches the point where the INGRESS evaluates the client cert),
+# while presenting a client cert signed by the rogue CA. That isolates the
+# property under test — requireclientcert + clientcas=mesh-CA rejecting an
+# unknown client CA — rather than the rogue merely distrusting our server.
 docker run -d --rm --name mesh-e2e-rogue-ca --network "$E2E_NET" \
   -v "$PWD/mesh/tests/.e2e-pki/rogue/issued/exec-rogue:/e2e-tls:ro" \
+  -v "$PWD/mesh/tests/.e2e-pki/issued/controller-a/ca.crt:/e2e-real-ca.crt:ro" \
   -e RECEPTOR_NODE_ID=exec-rogue -e RECEPTOR_PEERS=mesh-e2e-receptor:27199 \
   -e RECEPTOR_TLS_CERT=/e2e-tls/tls.crt -e RECEPTOR_TLS_KEY=/e2e-tls/tls.key \
-  -e RECEPTOR_TLS_CA=/e2e-tls/ca.crt ansible-execution-node:e2e >/dev/null \
+  -e RECEPTOR_TLS_CA=/e2e-real-ca.crt ansible-execution-node:e2e >/dev/null \
   || fail "could not start the unknown-CA rogue"
-rogue_absent mesh-e2e-rogue-ca "^exec-rogue " && pass "unknown-CA node never joined the mesh" \
+rogue_absent mesh-e2e-rogue-ca "^exec-rogue " && pass "unknown client-CA cert rejected by the ingress" \
   || { docker rm -f mesh-e2e-rogue-ca >/dev/null 2>&1; fail "unknown-CA node JOINED the mesh"; }
 docker rm -f mesh-e2e-rogue-ca >/dev/null 2>&1 || true
 
