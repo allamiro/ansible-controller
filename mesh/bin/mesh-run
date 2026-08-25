@@ -204,11 +204,14 @@ for pname, entries in (data.get("pools") or {}).items():
             n, raw = e, None
         else:
             n, raw = (e or {}).get("node", ""), (e or {}).get("max_concurrent")
-        # Full parity with the pool parser: a non-string node (`node: 123`)
-        # or a malformed string (`node: "exec-a\n"`) would silently never
-        # match the dispatched id and bypass its cap.
+        # Full parity with the pool parser: a missing node key (`nod:` typo),
+        # a non-string node (`node: 123`), or a malformed string
+        # (`node: "exec-a\n"`) would silently never match the dispatched id
+        # and bypass its cap.
         import re
-        if n and (not isinstance(n, str) or not re.fullmatch(r"[A-Za-z0-9._-]+", n)):
+        if not n:
+            sys.exit(f"pool '{pname}' has an entry without a node id")
+        if not isinstance(n, str) or not re.fullmatch(r"[A-Za-z0-9._-]+", n):
             sys.exit(f"pool '{pname}': node id {n!r} invalid ([A-Za-z0-9._-]+ only)")
         if n != node:
             continue
@@ -280,11 +283,14 @@ slot_scan() {
   # the README troubleshooting table).
   recorded=$(head -c 16 "$capf" 2>/dev/null | tr -d '[:space:]')
   case "$recorded" in *[!0-9]*) recorded="";; esac
+  # Fail CLOSED if the durable record cannot be written: enforcing an initial
+  # or lowered cap only in this process's memory would evaporate when its
+  # holder drains, letting a stale higher-cap dispatcher overshoot later.
   if [ -z "$recorded" ]; then
-    printf '%s\n' "$record" > "$capf" 2>/dev/null || true
+    printf '%s\n' "$record" > "$capf" 2>/dev/null || return 1
     recorded="$record"
   elif [ "$record" -gt 0 ] && { [ "$recorded" -eq 0 ] || [ "$record" -lt "$recorded" ]; }; then
-    printf '%s\n' "$record" > "$capf" 2>/dev/null || true
+    printf '%s\n' "$record" > "$capf" 2>/dev/null || return 1
     recorded="$record"
   fi
   # Ceiling from the persisted cap (0 = uncapped imposes none):
