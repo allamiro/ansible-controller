@@ -204,11 +204,12 @@ for pname, entries in (data.get("pools") or {}).items():
             n, raw = e, None
         else:
             n, raw = (e or {}).get("node", ""), (e or {}).get("max_concurrent")
-        # A non-string node (YAML `node: 123`) would silently never match the
-        # dispatched id and bypass its cap — reject it like the pool parser.
-        if n and not isinstance(n, str):
-            sys.exit(f"pool '{pname}': node id {n!r} invalid — node ids must be "
-                     "quoted strings ([A-Za-z0-9._-]+)")
+        # Full parity with the pool parser: a non-string node (`node: 123`)
+        # or a malformed string (`node: "exec-a\n"`) would silently never
+        # match the dispatched id and bypass its cap.
+        import re
+        if n and (not isinstance(n, str) or not re.fullmatch(r"[A-Za-z0-9._-]+", n)):
+            sys.exit(f"pool '{pname}': node id {n!r} invalid ([A-Za-z0-9._-]+ only)")
         if n != node:
             continue
         if raw is None:
@@ -265,23 +266,21 @@ SLOT_FD= SLOT_FILE= DISPATCH_STATE=pre-submit
 # jointly overshoot the lower cap.
 slot_scan() {
   local node="$1" cap="$2" record="${3:-$2}" i f g gi eff max_occ hc
-  local capf="$SLOTS_DIR/$node.cap" recorded occupied=0 ceil
+  local capf="$SLOTS_DIR/$node.cap" recorded ceil
 
   # The node's PERSISTED cap — written on every admission attempt, refused
   # ones included, so an accepted reduction survives even when the reducing
   # dispatch never got a slot (holders' recorded caps alone can't carry it:
   # they drain away with their jobs). Rules, all under the admission lock:
-  # lowering (or first write) always sticks; raising — or clearing to
-  # uncapped — requires an IDLE node, so nothing admitted under the lower
-  # cap can be overshot while it still runs.
+  # the first write and any LOWERING (including constraining an uncapped
+  # node) stick immediately; a RAISE is never automatic — a dispatcher
+  # cannot distinguish a deliberate raise from its own stale config snapshot,
+  # so raising is an explicit operator action: delete <node>.cap and the next
+  # admission records the current declaration (documented in pools.yml and
+  # the README troubleshooting table).
   recorded=$(head -c 16 "$capf" 2>/dev/null | tr -d '[:space:]')
   case "$recorded" in *[!0-9]*) recorded="";; esac
-  for g in "$SLOTS_DIR/$node".slot.*; do
-    [ -e "$g" ] || continue
-    case "$g" in *.hold) continue;; esac
-    if [ -e "$g.hold" ] || ! flock -n "$g" true 2>/dev/null; then occupied=1; break; fi
-  done
-  if [ -z "$recorded" ] || [ "$occupied" -eq 0 ]; then
+  if [ -z "$recorded" ]; then
     printf '%s\n' "$record" > "$capf" 2>/dev/null || true
     recorded="$record"
   elif [ "$record" -gt 0 ] && { [ "$recorded" -eq 0 ] || [ "$record" -lt "$recorded" ]; }; then

@@ -9,7 +9,14 @@
 #
 # max_concurrent caps how many mesh-run dispatches may target the node at
 # once, enforced by an atomic flock reservation held for each job's lifetime.
-# 0 (or a bare string entry) means uncapped.
+# 0 (or a bare string entry) means uncapped (no limit of its own — it still
+# honors caps recorded by concurrently running jobs).
+#
+# LOWERING a cap takes effect immediately (running jobs drain first).
+# RAISING one is deliberately an explicit operator step: a dispatcher cannot
+# tell a deliberate raise from a stale config snapshot, so after editing the
+# cap upward, also remove the persisted record in the orchestrator:
+#   docker exec ansible-controller rm /var/lib/mesh/slots/<node>.cap
 #
 # The orchestrator reads /etc/mesh/pools.yml by default — mount this file
 # there (or pass --pools-file). To declare pools, REPLACE the empty map at
