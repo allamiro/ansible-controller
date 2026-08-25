@@ -37,9 +37,14 @@ PUB="$SIGN_DIR/work-public.pem"
 
 (umask 077 && mkdir -p "$SIGN_DIR")
 # One rotation at a time: the recovery logic below reasons about the pair's
-# on-disk state, which a concurrent run would invalidate.
-exec 9>>"$SIGN_DIR/.lock"
-flock 9 || die "another work-sign-init is running"
+# on-disk state, which a concurrent run would invalidate. mkdir is the
+# portable atomic lock — macOS ships no flock CLI, and the CA flow
+# explicitly supports macOS hosts (see common.sh's BSD date fallback).
+LOCK_DIR="$SIGN_DIR/.rotation.lock"
+mkdir "$LOCK_DIR" 2>/dev/null \
+  || die "another work-sign-init appears to be running (remove $LOCK_DIR if it is stale)"
+cleanup() { rm -rf "$LOCK_DIR"; [ -n "${TMP:-}" ] && rm -rf "$TMP"; }
+trap cleanup EXIT
 
 # The guard is a VALIDITY check, not an existence check, and that is what
 # makes rotation recoverable: two files cannot be replaced atomically as a
@@ -74,7 +79,6 @@ esac
 # interruption between the renames leaves priv-new/pub-old — a mismatch the
 # validity guard above recovers on the next run.
 TMP=$(umask 077 && mktemp -d "$SIGN_DIR/.new.XXXXXX")
-trap 'rm -rf "$TMP"' EXIT
 openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out "$TMP/work-private.pem" 2>/dev/null \
   || die "openssl genpkey failed"
 openssl pkey -in "$TMP/work-private.pem" -pubout -out "$TMP/work-public.pem" 2>/dev/null \
