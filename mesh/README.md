@@ -335,6 +335,7 @@ each node advertises the work type that runs playbooks.
 | Ingress A is down | One door failed; the other is up | New dispatches flow through B automatically. A job that was mid-stream on A is reported incomplete — check its artifacts, re-run if safe. Restart A when convenient; nodes re-attach automatically |
 | Playbook failed on the node | The playbook itself failed — the mesh reports honestly | Read the `/var/lib/mesh/jobs/<uuid>/` artifacts: full stdout and per-task events are there, same as a local run |
 | `mesh-run` refuses to retry a job whose outcome is unknown | The never-run-twice rule (above) | Check the job's artifacts / the target's state, then re-run by hand if it's safe |
+| Dispatches report a node at capacity but nothing seems to run there | A job with an unknown outcome left a `.hold` marker keeping its slot reserved (capacity must not evaporate just because the dispatcher lost sight of an acknowledged job) | Read `/var/lib/mesh/slots/<node>.slot.<n>.hold` in the orchestrator — it names the job and unit; confirm the unit finished (`receptorctl work status <unit>`), then delete the marker |
 
 ## Getting the images
 

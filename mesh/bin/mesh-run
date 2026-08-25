@@ -40,7 +40,10 @@ SOCKETS=/run/receptor/receptor.sock,/run/receptor/receptor-b.sock
 JOBS_DIR=/var/lib/mesh/jobs
 SLOTS_DIR="${MESH_SLOTS_DIR:-/var/lib/mesh/slots}"
 POOLS_FILE="${MESH_POOLS_FILE:-/etc/mesh/pools.yml}"
-POOLS_FILE_SET=0   # 1 when --pools-file was passed: a missing file is then an error
+# 1 when the operator chose the path (flag or env): a missing file is then an
+# error — a typo must never silently disable configured concurrency caps.
+POOLS_FILE_SET=0
+[ -n "${MESH_POOLS_FILE:-}" ] && POOLS_FILE_SET=1
 ZONES_FILE="${MESH_ZONES_FILE:-/etc/mesh/zones.yml}"
 # Operator-facing artifact copies land under the controller's log tree — the
 # compose setup bind-mounts /var/log/ansible to the host's logs/, so a job's
@@ -184,6 +187,8 @@ for pname, entries in (data.get("pools") or {}).items():
             n, cap = (e or {}).get("node", ""), int((e or {}).get("max_concurrent") or 0)
         if n != node:
             continue
+        if cap < 0:
+            sys.exit(f"pool '{pname}' node '{node}': max_concurrent must be >= 0")
         if found is not None and found[0] != cap:
             sys.exit(
                 f"node '{node}' declared with max_concurrent={found[0]} in "
@@ -224,24 +229,41 @@ routable_via() {
 # file with a non-blocking flock; the acquired fd is held (deliberately never
 # closed) for the life of this process, so the reservation outlives any crash
 # exactly as long as the process does and releases the instant it dies.
-SLOT_FD=
+SLOT_FD= SLOT_FILE=
 acquire_slot() {
   local node="$1" cap="$2" i f
   [ "$cap" -gt 0 ] || return 0   # uncapped node
   (umask 077 && mkdir -p "$SLOTS_DIR") || return 1
   for ((i = 1; i <= cap; i++)); do
     f="$SLOTS_DIR/$node.slot.$i"
+    # A .hold marker means a previous dispatch through this slot ended with
+    # the job's fate UNKNOWN (ambiguous submit / broken results stream): the
+    # acknowledged unit may still be running on the node, so the slot stays
+    # reserved even though that dispatcher — and its flock — are gone. The
+    # operator clears the marker after confirming the unit finished.
+    [ -e "$f.hold" ] && continue
     # The braces are load-bearing: a bare `exec {fd}>>file 2>/dev/null` makes
     # BOTH redirections permanent in this shell — silencing the script's own
     # stderr (including the completion line) for the rest of its life. The
     # group scopes the stderr silence to the open attempt alone, while the
     # exec'd fd itself still persists, which is the point.
     if ! { exec {SLOT_FD}>>"$f"; } 2>/dev/null; then SLOT_FD=; continue; fi
-    if flock -n "$SLOT_FD" 2>/dev/null; then return 0; fi
+    if flock -n "$SLOT_FD" 2>/dev/null; then SLOT_FILE="$f"; return 0; fi
     { exec {SLOT_FD}>&-; } 2>/dev/null || true
     SLOT_FD=
   done
   return 1
+}
+
+# Called on the paths where the submission was (or may have been) accepted
+# but this dispatcher can no longer observe it. The flock dies with this
+# process; the marker keeps the slot reserved until a human confirms the
+# unit's fate — capacity guarantees must not evaporate with the dispatcher.
+persist_slot_hold() {
+  [ -n "$SLOT_FILE" ] || return 0
+  printf 'job=%s unit=%s node=%s\nclear with: rm %s.hold  (after confirming the unit finished)\n' \
+    "$JOB_ID" "${UNIT_ID:-unknown}" "$NODE" "$SLOT_FILE" > "$SLOT_FILE.hold" 2>/dev/null \
+    || echo "mesh-run: warning: could not persist slot hold $SLOT_FILE.hold — the node's cap may be under-enforced until the unit is confirmed done" >&2
 }
 
 # (2) healthy-node select. Skipping a candidate is allowed ONLY here, where
@@ -444,10 +466,12 @@ submit_out=$(ansible-runner transmit "$PDD" -p "$(basename "$PLAYBOOK_REAL")" 2>
   | receptorctl --socket "$SOCKET" work submit ansible-runner \
       --node "$NODE" --payload -) \
   || { meta submit-ambiguous "unit id unknown: the response was lost after the attempt left this host; inspect 'receptorctl work list' for an unmatched unit"; \
+       persist_slot_hold; \
        die "work submit to '$NODE' failed AFTER the attempt left this host — \
 the unit MAY BE RUNNING; check 'receptorctl work list' before re-running (job=$JOB_ID)"; }
 UNIT_ID=$(awk '/^Unit ID:/ {print $3}' <<<"$submit_out")
 [ -n "$UNIT_ID" ] || { meta submit-ambiguous "submit returned but no unit id was parseable; inspect 'receptorctl work list'"; \
+  persist_slot_hold; \
   die "no unit id in submit output — state unknown, \
 check 'receptorctl work list' before re-running: $submit_out"; }
 meta running
@@ -471,7 +495,8 @@ if [ -z "$art_rc_file" ]; then
   # that, so a history reader does not mistake a dropped connection for a
   # playbook failure (and nobody "retries" a possibly-succeeding job).
   meta results-incomplete "no rc artifact returned; the unit was acknowledged and may still be running — check 'receptorctl work status $UNIT_ID'"
-  die "results stream did not complete — the job MAY STILL BE RUNNING on '$NODE' (unit=$UNIT_ID); check 'receptorctl work status $UNIT_ID'"
+  persist_slot_hold
+  die "results stream did not complete — the job MAY STILL BE RUNNING on '$NODE' (unit=$UNIT_ID); check 'receptorctl work status $UNIT_ID'; its concurrency slot stays reserved via ${SLOT_FILE:+$SLOT_FILE.hold}${SLOT_FILE:- (node uncapped)}"
 fi
 rc=$(cat "$art_rc_file")
 
