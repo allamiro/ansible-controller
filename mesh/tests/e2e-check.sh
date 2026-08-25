@@ -199,7 +199,10 @@ docker run -d --rm --name mesh-e2e-rogue-ca --network "$E2E_NET" \
   -v "$PWD/mesh/tests/.e2e-pki/issued/controller-a/ca.crt:/e2e-real-ca.crt:ro" \
   -e RECEPTOR_NODE_ID=exec-rogue -e RECEPTOR_PEERS=mesh-e2e-receptor:27199 \
   -e RECEPTOR_TLS_CERT=/e2e-tls/tls.crt -e RECEPTOR_TLS_KEY=/e2e-tls/tls.key \
-  -e RECEPTOR_TLS_CA=/e2e-real-ca.crt ansible-execution-node:e2e >/dev/null \
+  -e RECEPTOR_TLS_CA=/e2e-real-ca.crt \
+  -v "$PWD/mesh/tests/.e2e-pki/work-signing/work-public.pem:/e2e-signing/work-public.pem:ro" \
+  -e RECEPTOR_WORK_PUBKEY=/e2e-signing/work-public.pem \
+  ansible-execution-node:e2e >/dev/null \
   || fail "could not start the unknown-CA rogue"
 ra=0; rogue_absent mesh-e2e-rogue-ca "^exec-rogue " || ra=$?
 docker rm -f mesh-e2e-rogue-ca >/dev/null 2>&1 || true
@@ -220,7 +223,10 @@ idlog=$(timeout 60 docker run --rm --network "$E2E_NET" \
   -v "$PWD/mesh/tests/.e2e-pki/issued/exec-e2e-a:/e2e-tls:ro" \
   -e RECEPTOR_NODE_ID=exec-imposter -e RECEPTOR_PEERS=mesh-e2e-receptor:27199 \
   -e RECEPTOR_TLS_CERT=/e2e-tls/tls.crt -e RECEPTOR_TLS_KEY=/e2e-tls/tls.key \
-  -e RECEPTOR_TLS_CA=/e2e-tls/ca.crt ansible-execution-node:e2e 2>&1) && \
+  -e RECEPTOR_TLS_CA=/e2e-tls/ca.crt \
+  -v "$PWD/mesh/tests/.e2e-pki/work-signing/work-public.pem:/e2e-signing/work-public.pem:ro" \
+  -e RECEPTOR_WORK_PUBKEY=/e2e-signing/work-public.pem \
+  ansible-execution-node:e2e 2>&1) && \
   fail "identity-mismatch node started successfully (must be rejected)"
 grep -qi "exec-imposter not found in certificate" <<<"$idlog" \
   && pass "valid cert with the WRONG node id refused at startup (identity binding enforced)" \
@@ -231,7 +237,10 @@ docker run -d --rm --name mesh-e2e-rogue-exp --network "$E2E_NET" \
   -v "$PWD/mesh/tests/.e2e-pki/issued/exec-expired:/e2e-tls:ro" \
   -e RECEPTOR_NODE_ID=exec-expired -e RECEPTOR_PEERS=mesh-e2e-receptor:27199 \
   -e RECEPTOR_TLS_CERT=/e2e-tls/tls.crt -e RECEPTOR_TLS_KEY=/e2e-tls/tls.key \
-  -e RECEPTOR_TLS_CA=/e2e-tls/ca.crt ansible-execution-node:e2e >/dev/null \
+  -e RECEPTOR_TLS_CA=/e2e-tls/ca.crt \
+  -v "$PWD/mesh/tests/.e2e-pki/work-signing/work-public.pem:/e2e-signing/work-public.pem:ro" \
+  -e RECEPTOR_WORK_PUBKEY=/e2e-signing/work-public.pem \
+  ansible-execution-node:e2e >/dev/null \
   || fail "could not start the expired-cert rogue"
 ra=0; rogue_absent mesh-e2e-rogue-exp exec-expired || ra=$?
 docker rm -f mesh-e2e-rogue-exp >/dev/null 2>&1 || true
@@ -255,7 +264,10 @@ docker run -d --rm --name mesh-e2e-probe --network "$E2E_NET" \
   -v "$PWD/mesh/tests/.e2e-pki/issued/exec-probe:/e2e-tls:ro" \
   -e RECEPTOR_NODE_ID=exec-probe -e RECEPTOR_PEERS=mesh-e2e-rogue-ingress:27199 \
   -e RECEPTOR_TLS_CERT=/e2e-tls/tls.crt -e RECEPTOR_TLS_KEY=/e2e-tls/tls.key \
-  -e RECEPTOR_TLS_CA=/e2e-tls/ca.crt ansible-execution-node:e2e >/dev/null \
+  -e RECEPTOR_TLS_CA=/e2e-tls/ca.crt \
+  -v "$PWD/mesh/tests/.e2e-pki/work-signing/work-public.pem:/e2e-signing/work-public.pem:ro" \
+  -e RECEPTOR_WORK_PUBKEY=/e2e-signing/work-public.pem \
+  ansible-execution-node:e2e >/dev/null \
   || { docker rm -f mesh-e2e-rogue-ingress >/dev/null 2>&1; fail "could not start the probe node"; }
 # Fail-closed by design: an unrecognised outcome FAILS. The diagnostics tell
 # the operator which way it went wrong — probe died, or receptor's log wording
