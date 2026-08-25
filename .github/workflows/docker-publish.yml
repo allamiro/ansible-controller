@@ -1,5 +1,15 @@
 name: Build & Publish (Docker Hub + GHCR)
 
+# Publishes three images per registry (Docker Hub + GHCR), same tag set each:
+#   ansible-controller      — docker/Dockerfile (unchanged, the original pipeline)
+#   ansible-orchestrator    — docker/mesh/Dockerfile --target orchestrator
+#   ansible-execution-node  — docker/mesh/Dockerfile --target execution-node
+# The mesh images build FROM the controller digest pushed by the SAME run, so a
+# release is internally consistent by construction: an orchestrator tagged
+# vX.Y.Z is provably layered on the controller tagged vX.Y.Z, never on whatever
+# `latest` happened to point at (mesh plan Phase 11 — extend the matrix, don't
+# fork it).
+
 on:
   push:
     branches: ["main"]
@@ -94,19 +104,62 @@ jobs:
           cache-to: type=gha,mode=max,scope=build-${{ matrix.platform }}
           outputs: type=image,"name=docker.io/${{ secrets.DOCKERHUB_USERNAME }}/ansible-controller,ghcr.io/${{ github.repository_owner }}/ansible-controller",push-by-digest=true,name-canonical=true,push=true
 
-      - name: Export digest
+      # ---- mesh images: orchestrator + execution-node (mesh plan Phase 11) ----
+      # Built FROM the controller digest THIS run just pushed to GHCR — an
+      # immutable base, so docker/mesh/Dockerfile's digest-pin guard passes with
+      # no ALLOW_MUTABLE_BASE escape and the published mesh images are
+      # reproducible for a given controller. PR runs skip them: a PR pushes no
+      # controller digest to pin to, and mesh-image.yml already builds, smokes,
+      # and Trivy-gates both targets on every mesh PR.
+      - name: Build and push orchestrator by digest
+        if: github.event_name != 'pull_request'
+        id: build-orchestrator
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./docker/mesh/Dockerfile
+          target: orchestrator
+          build-args: |
+            BASE=ghcr.io/${{ github.repository_owner }}/ansible-controller@${{ steps.build.outputs.digest }}
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=mesh-${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=mesh-${{ matrix.platform }}
+          outputs: type=image,"name=docker.io/${{ secrets.DOCKERHUB_USERNAME }}/ansible-orchestrator,ghcr.io/${{ github.repository_owner }}/ansible-orchestrator",push-by-digest=true,name-canonical=true,push=true
+
+      - name: Build and push execution-node by digest
+        if: github.event_name != 'pull_request'
+        id: build-execution-node
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./docker/mesh/Dockerfile
+          target: execution-node
+          build-args: |
+            BASE=ghcr.io/${{ github.repository_owner }}/ansible-controller@${{ steps.build.outputs.digest }}
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=mesh-${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=mesh-${{ matrix.platform }}
+          outputs: type=image,"name=docker.io/${{ secrets.DOCKERHUB_USERNAME }}/ansible-execution-node,ghcr.io/${{ github.repository_owner }}/ansible-execution-node",push-by-digest=true,name-canonical=true,push=true
+
+      # One subdirectory per image: the merge job reassembles per-image manifest
+      # lists from these, so the digests must stay attributable to their image.
+      - name: Export digests
         if: github.event_name != 'pull_request'
         run: |
-          mkdir -p "${{ runner.temp }}/digests"
-          digest="${{ steps.build.outputs.digest }}"
-          touch "${{ runner.temp }}/digests/${digest#sha256:}"
+          base="${{ runner.temp }}/digests"
+          mkdir -p "$base/controller" "$base/orchestrator" "$base/execution-node"
+          d="${{ steps.build.outputs.digest }}";                touch "$base/controller/${d#sha256:}"
+          d="${{ steps.build-orchestrator.outputs.digest }}";   touch "$base/orchestrator/${d#sha256:}"
+          d="${{ steps.build-execution-node.outputs.digest }}"; touch "$base/execution-node/${d#sha256:}"
 
-      - name: Upload digest
+      - name: Upload digests
         if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v7
         with:
           name: digests-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
-          path: ${{ runner.temp }}/digests/*
+          path: ${{ runner.temp }}/digests/**
           if-no-files-found: error
           retention-days: 1
 
@@ -192,6 +245,10 @@ jobs:
           images: |
             docker.io/${{ secrets.DOCKERHUB_USERNAME }}/ansible-controller
             ghcr.io/${{ github.repository_owner }}/ansible-controller
+            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/ansible-orchestrator
+            ghcr.io/${{ github.repository_owner }}/ansible-orchestrator
+            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/ansible-execution-node
+            ghcr.io/${{ github.repository_owner }}/ansible-execution-node
           tags: |
             type=ref,event=branch
             type=raw,value=latest,enable={{is_default_branch}}
@@ -218,15 +275,23 @@ jobs:
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
         run: |
-          for image in \
-            "docker.io/${DOCKERHUB_USERNAME}/ansible-controller" \
-            "ghcr.io/${{ github.repository_owner }}/ansible-controller"; do
-            tags=$(jq -cr --arg img "$image" \
-              '.tags | map(select(startswith($img + ":")) | "-t " + .) | join(" ")' \
-              <<< "$DOCKER_METADATA_OUTPUT_JSON")
-            # $tags and the digest list are intentionally word-split
-            # shellcheck disable=SC2046,SC2086
-            docker buildx imagetools create $tags $(printf "${image}@sha256:%s " *)
+          # <digest subdirectory> <published image name> — each image's manifest
+          # list is stitched only from the digests its own builds exported.
+          for pair in \
+            "controller ansible-controller" \
+            "orchestrator ansible-orchestrator" \
+            "execution-node ansible-execution-node"; do
+            set -- $pair; dir="$1"; name="$2"
+            for image in \
+              "docker.io/${DOCKERHUB_USERNAME}/${name}" \
+              "ghcr.io/${{ github.repository_owner }}/${name}"; do
+              tags=$(jq -cr --arg img "$image" \
+                '.tags | map(select(startswith($img + ":")) | "-t " + .) | join(" ")' \
+                <<< "$DOCKER_METADATA_OUTPUT_JSON")
+              # $tags and the digest list are intentionally word-split
+              # shellcheck disable=SC2046,SC2086
+              docker buildx imagetools create $tags $(printf "${image}@sha256:%s " "${dir}"/*)
+            done
           done
 
       - name: Install cosign
@@ -237,12 +302,14 @@ jobs:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
         run: |
           tag="sha-$(echo "$GITHUB_SHA" | cut -c1-7)"
-          for image in \
-            "docker.io/${DOCKERHUB_USERNAME}/ansible-controller" \
-            "ghcr.io/${{ github.repository_owner }}/ansible-controller"; do
-            digest=$(docker buildx imagetools inspect "${image}:${tag}" \
-              --format '{{.Manifest.Digest}}')
-            cosign sign --yes "${image}@${digest}"
+          for name in ansible-controller ansible-orchestrator ansible-execution-node; do
+            for image in \
+              "docker.io/${DOCKERHUB_USERNAME}/${name}" \
+              "ghcr.io/${{ github.repository_owner }}/${name}"; do
+              digest=$(docker buildx imagetools inspect "${image}:${tag}" \
+                --format '{{.Manifest.Digest}}')
+              cosign sign --yes "${image}@${digest}"
+            done
           done
 
       # Backstop, not the primary gate: by the time this runs the manifest is already
@@ -252,13 +319,16 @@ jobs:
       # with push: false. This one still fails loudly — it previously ran with
       # --exit-code 0 and scrolled past in a green run, which is how a scanner stops
       # being a signal. See docker-image.yml for why --ignore-unfixed.
-      - name: Fail on CRITICAL/HIGH CVEs in the published image (Trivy)
+      - name: Fail on CRITICAL/HIGH CVEs in the published images (Trivy)
         run: |
           curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
             | sh -s -- -b /usr/local/bin
-          trivy image \
-            --severity CRITICAL,HIGH \
-            --ignore-unfixed \
-            --exit-code 1 \
-            --timeout 10m \
-            "ghcr.io/${{ github.repository_owner }}/ansible-controller:sha-$(echo '${{ github.sha }}' | cut -c1-7)"
+          tag="sha-$(echo '${{ github.sha }}' | cut -c1-7)"
+          for name in ansible-controller ansible-orchestrator ansible-execution-node; do
+            trivy image \
+              --severity CRITICAL,HIGH \
+              --ignore-unfixed \
+              --exit-code 1 \
+              --timeout 10m \
+              "ghcr.io/${{ github.repository_owner }}/${name}:${tag}"
+          done

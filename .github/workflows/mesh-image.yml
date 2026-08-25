@@ -15,8 +15,9 @@ name: Mesh CI
 # entrypoint, or pip-vendor patch changes the orchestrator base, and could break
 # its install or dependency assertions without any mesh file moving — skipped
 # here, that breakage would land on main undetected until the next mesh-only PR.
-# Publishing mesh images is deliberately out of scope (mesh plan Phase 11);
-# docker-publish.yml is untouched.
+# This workflow is the PR gate only; publishing the mesh images (mesh plan
+# Phase 11) lives in docker-publish.yml, which builds them FROM the controller
+# digest it pushes in the same run.
 on:
   pull_request:
     branches: ["main"]
