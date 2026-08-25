@@ -24,3 +24,6 @@ id_rsa
 id_dsa
 id_ecdsa
 id_ed25519
+
+# e2e-generated throwaway PKI (created by mesh/tests/e2e-up.sh, never real)
+tests/.e2e-pki/

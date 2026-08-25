@@ -138,4 +138,173 @@ else
   fail "no completed round-trip with nonzero rc; output tail: $(tail -2 <<<"$fail_out")"
 fi
 
+echo "== 14. mTLS is mandatory and correctly shaped (§9.3 config assertions) =="
+for c in mesh-e2e-receptor mesh-e2e-receptor-b mesh-e2e-node-a; do
+  cfg=$(docker exec "$c" cat /etc/receptor/receptor.conf 2>/dev/null \
+        || docker exec "$c" cat /run/receptor/receptor.conf 2>/dev/null) \
+    || fail "cannot read receptor config on $c"
+  # match ACTIVE keys only — the configs' comments legitimately mention these
+  # options by name to document that they are deliberately absent
+  active=$(grep -vE '^[[:space:]]*#' <<<"$cfg")
+  grep -qE "tls-(server|client):" <<<"$active" || fail "$c has no TLS config"
+  grep -qE "^[[:space:]]*insecureskipverify[[:space:]]*:" <<<"$active" && fail "$c config sets insecureskipverify"
+  grep -qE "^[[:space:]]*skipreceptornamescheck[[:space:]]*:" <<<"$active" && fail "$c config sets skipreceptornamescheck"
+done
+for ing in mesh-e2e-receptor mesh-e2e-receptor-b; do
+  grep -q "requireclientcert: true" <<<"$(docker exec "$ing" cat /etc/receptor/receptor.conf)" \
+    || fail "$ing does not require client certificates"
+done
+pass "TLS on every hop; BOTH ingresses require client certs; no insecure escapes"
+
+# the compose network derives from the project name (e2e-up honours
+# COMPOSE_PROJECT_NAME the same way for volume seeding)
+E2E_NET="${COMPOSE_PROJECT_NAME:-mesh-e2e}_ctlnet"
+
+# succeeds only when the rogue RAN THE WHOLE TIME yet never joined — a rogue
+# that died instantly (bad mount, refused entrypoint) is a broken test setup,
+# not a proven rejection, and must FAIL the check rather than fake a pass.
+rogue_absent() { # container-name  status-pattern
+  local tries=0
+  while [ $tries -lt 5 ]; do
+    docker inspect --format '{{.State.Running}}' "$1" 2>/dev/null | grep -q true \
+      || { echo "rogue $1 is not running — test setup broken, not a rejection" >&2; return 2; }
+    st=$(docker exec mesh-e2e-receptor receptorctl --socket /run/receptor/receptor.sock status 2>/dev/null || true)
+    grep -q "$2" <<<"$st" && return 1
+    tries=$((tries+1)); sleep 2
+  done
+  return 0
+}
+
+echo "== 15. a node WITHOUT a certificate is rejected (§9.3) =="
+docker run -d --rm --name mesh-e2e-rogue-plain --network "$E2E_NET" \
+  -e RECEPTOR_NODE_ID=exec-rogue-plain -e RECEPTOR_PEERS=mesh-e2e-receptor:27199 \
+  -e RECEPTOR_INSECURE_DEV=1 ansible-execution-node:e2e >/dev/null \
+  || fail "could not start the plaintext rogue"
+ra=0; rogue_absent mesh-e2e-rogue-plain exec-rogue-plain || ra=$?
+docker rm -f mesh-e2e-rogue-plain >/dev/null 2>&1 || true
+case $ra in
+  0) pass "plaintext (certless) node never joined the mesh";;
+  1) fail "certless node JOINED the mesh";;
+  *) fail "certless-rogue test setup broken (rogue not running) — not a proven rejection";;
+esac
+
+echo "== 16. a client cert from an UNKNOWN CA is rejected by the ingress (§9.3) =="
+# The rogue must TRUST the real mesh CA (so it accepts our server cert and the
+# handshake reaches the point where the INGRESS evaluates the client cert),
+# while presenting a client cert signed by the rogue CA. That isolates the
+# property under test — requireclientcert + clientcas=mesh-CA rejecting an
+# unknown client CA — rather than the rogue merely distrusting our server.
+docker run -d --rm --name mesh-e2e-rogue-ca --network "$E2E_NET" \
+  -v "$PWD/mesh/tests/.e2e-pki/rogue/issued/exec-rogue:/e2e-tls:ro" \
+  -v "$PWD/mesh/tests/.e2e-pki/issued/controller-a/ca.crt:/e2e-real-ca.crt:ro" \
+  -e RECEPTOR_NODE_ID=exec-rogue -e RECEPTOR_PEERS=mesh-e2e-receptor:27199 \
+  -e RECEPTOR_TLS_CERT=/e2e-tls/tls.crt -e RECEPTOR_TLS_KEY=/e2e-tls/tls.key \
+  -e RECEPTOR_TLS_CA=/e2e-real-ca.crt ansible-execution-node:e2e >/dev/null \
+  || fail "could not start the unknown-CA rogue"
+ra=0; rogue_absent mesh-e2e-rogue-ca "^exec-rogue " || ra=$?
+docker rm -f mesh-e2e-rogue-ca >/dev/null 2>&1 || true
+case $ra in
+  0) pass "unknown client-CA cert rejected by the ingress";;
+  1) fail "unknown-CA node JOINED the mesh";;
+  *) fail "unknown-CA-rogue test setup broken (rogue not running) — not a proven rejection";;
+esac
+
+echo "== 17. node id ≠ certificate identity is rejected (§9.3) =="
+# A VALID mesh cert (exec-e2e-a's) presented by a node CLAIMING to be someone
+# else. Rejection here is even stronger than 15/16: receptor cross-checks its
+# OWN node id against its OWN cert at startup and refuses to build a TLS client
+# at all, so the container EXITS with an identity-mismatch error rather than
+# running-but-not-joining. Assert exactly that — a clean exit or a different
+# error would not prove the identity binding.
+idlog=$(timeout 60 docker run --rm --network "$E2E_NET" \
+  -v "$PWD/mesh/tests/.e2e-pki/issued/exec-e2e-a:/e2e-tls:ro" \
+  -e RECEPTOR_NODE_ID=exec-imposter -e RECEPTOR_PEERS=mesh-e2e-receptor:27199 \
+  -e RECEPTOR_TLS_CERT=/e2e-tls/tls.crt -e RECEPTOR_TLS_KEY=/e2e-tls/tls.key \
+  -e RECEPTOR_TLS_CA=/e2e-tls/ca.crt ansible-execution-node:e2e 2>&1) && \
+  fail "identity-mismatch node started successfully (must be rejected)"
+grep -qi "exec-imposter not found in certificate" <<<"$idlog" \
+  && pass "valid cert with the WRONG node id refused at startup (identity binding enforced)" \
+  || fail "identity-mismatch rejection not by identity binding; got: $(tail -1 <<<"$idlog")"
+
+echo "== 18. an EXPIRED node certificate is rejected (§9.3) =="
+docker run -d --rm --name mesh-e2e-rogue-exp --network "$E2E_NET" \
+  -v "$PWD/mesh/tests/.e2e-pki/issued/exec-expired:/e2e-tls:ro" \
+  -e RECEPTOR_NODE_ID=exec-expired -e RECEPTOR_PEERS=mesh-e2e-receptor:27199 \
+  -e RECEPTOR_TLS_CERT=/e2e-tls/tls.crt -e RECEPTOR_TLS_KEY=/e2e-tls/tls.key \
+  -e RECEPTOR_TLS_CA=/e2e-tls/ca.crt ansible-execution-node:e2e >/dev/null \
+  || fail "could not start the expired-cert rogue"
+ra=0; rogue_absent mesh-e2e-rogue-exp exec-expired || ra=$?
+docker rm -f mesh-e2e-rogue-exp >/dev/null 2>&1 || true
+case $ra in
+  0) pass "expired certificate rejected by the ingress";;
+  1) fail "EXPIRED-cert node JOINED the mesh";;
+  *) fail "expired-cert test setup broken (rogue not running)";;
+esac
+
+echo "== 19. a CONTROLLER cert from an unknown CA is rejected by the node (§9.3, reversed) =="
+# a rogue INGRESS presenting rogue-CA server certs; a legitimately certified
+# probe node dials it and must refuse the server. Proof is the probe's own TLS
+# verification error — the reverse direction of check 16.
+docker run -d --rm --name mesh-e2e-rogue-ingress --network "$E2E_NET" \
+  -v "$PWD/mesh/tests/.e2e-pki/rogue/issued/exec-rogue:/tls:ro" \
+  -u 0:0 --entrypoint sh \
+  quay.io/ansible/receptor:v1.6.7@sha256:6296f6cd3b0301cc7c9376e48ae15a42fc7b606235d08e94543fe77661cea4d2 \
+  -euc 'mkdir -p /tmp/rc && printf -- "---\n- node:\n    id: exec-rogue\n- tls-server:\n    name: t\n    cert: /tls/tls.crt\n    key: /tls/tls.key\n- tcp-listener:\n    port: 27199\n    tls: t\n" > /tmp/rc/r.yml && exec receptor -c /tmp/rc/r.yml' >/dev/null \
+  || fail "could not start the rogue ingress"
+docker run -d --rm --name mesh-e2e-probe --network "$E2E_NET" \
+  -v "$PWD/mesh/tests/.e2e-pki/issued/exec-probe:/e2e-tls:ro" \
+  -e RECEPTOR_NODE_ID=exec-probe -e RECEPTOR_PEERS=mesh-e2e-rogue-ingress:27199 \
+  -e RECEPTOR_TLS_CERT=/e2e-tls/tls.crt -e RECEPTOR_TLS_KEY=/e2e-tls/tls.key \
+  -e RECEPTOR_TLS_CA=/e2e-tls/ca.crt ansible-execution-node:e2e >/dev/null \
+  || { docker rm -f mesh-e2e-rogue-ingress >/dev/null 2>&1; fail "could not start the probe node"; }
+# Fail-closed by design: an unrecognised outcome FAILS. The diagnostics tell
+# the operator which way it went wrong — probe died, or receptor's log wording
+# changed — with the actual log tail, so a wording drift is a visible test
+# maintenance task rather than a silent mystery.
+verdict= plog= seen_running=0
+deadline=$((SECONDS + 30))
+while [ $SECONDS -lt $deadline ]; do
+  plog=$(docker logs mesh-e2e-probe 2>&1 || true)
+  if grep -qiE "certificate signed by unknown authority|failed to verify certificate|x509" <<<"$plog"; then verdict=refused; break; fi
+  if grep -qi "Connection established" <<<"$plog"; then verdict=connected; break; fi
+  # `docker run -d` returns before the container necessarily reaches Running,
+  # so "not running" only means "died" after it was OBSERVED running once —
+  # otherwise the first iteration could misfire before receptor comes up. The
+  # deadline still bounds a container that never starts.
+  if docker inspect --format '{{.State.Running}}' mesh-e2e-probe 2>/dev/null | grep -q true; then
+    seen_running=1
+  elif [ "$seen_running" = 1 ]; then
+    verdict=died; break
+  fi
+  sleep 2
+done
+docker rm -f mesh-e2e-probe mesh-e2e-rogue-ingress >/dev/null 2>&1 || true
+case "$verdict" in
+  refused)   pass "node refused the unknown-CA controller (TLS verification error logged)";;
+  connected) fail "node CONNECTED to an unknown-CA controller";;
+  died)      fail "probe node exited before producing a verdict; log tail: $(tail -2 <<<"$plog")";;
+  *)         fail "no refusal or connection within 30s (receptor log wording changed?); log tail: $(tail -2 <<<"$plog")";;
+esac
+
+echo "== 20. Tier-1 ingress failover (§9.7): stop sidecar A, dispatch through B =="
+docker stop mesh-e2e-receptor >/dev/null || fail "could not stop sidecar A"
+t1_out=$(docker exec mesh-e2e-orchestrator /usr/local/mesh/bin/mesh-run \
+    --node exec-e2e-a --playbook /mesh-playbooks/mesh-ping.yml \
+    --inventory /tmp/e2e-inv --ssh-key /e2e-ssh/id_ed25519 \
+    --socket /run/receptor/receptor.sock,/run/receptor/receptor-b.sock 2>&1) \
+  && grep -q "rc=0" <<<"$t1_out" \
+  && pass "dispatch succeeded through sidecar B with A down" \
+  || { docker start mesh-e2e-receptor >/dev/null 2>&1; fail "dispatch failed with A down: $(tail -2 <<<"$t1_out")"; }
+docker start mesh-e2e-receptor >/dev/null || fail "could not restart sidecar A"
+# restart must mean RECOVERED: A's receptor answering and the node visible
+# again through A — `docker start` returning 0 proves neither.
+deadline=$((SECONDS + 60)); recovered=0
+while [ $SECONDS -lt $deadline ]; do
+  st=$(docker exec mesh-e2e-receptor receptorctl --socket /run/receptor/receptor.sock status 2>/dev/null || true)
+  if grep -q "exec-e2e-a" <<<"$st"; then recovered=1; break; fi
+  sleep 3
+done
+[ "$recovered" = 1 ] && pass "sidecar A recovered: answering, node re-peered" \
+  || fail "sidecar A restarted but never recovered the node within 60s"
+
 echo "All mesh e2e regression checks passed."

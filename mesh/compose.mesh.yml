@@ -31,6 +31,11 @@ services:
     volumes:
       - receptor-runtime:/run/receptor
 
+  # TWO sidecars, A and B — Tier-1 ingress redundancy (§9.7). Execution nodes
+  # peer to both; the orchestrator's dispatcher tries A's control socket first
+  # and fails over to B's. mTLS material comes from mesh/secrets/receptor/
+  # (populated by mesh/pki/, never committed): each sidecar mounts ITS OWN
+  # issued identity plus the CA cert — and never the CA key (plan §4).
   receptor-controller:
     # Opt-in only: without `--profile mesh` this service is never created, so
     # `docker compose up` on the overlay still starts the controller alone.
@@ -50,9 +55,17 @@ services:
     image: quay.io/ansible/receptor:v1.6.7@sha256:6296f6cd3b0301cc7c9376e48ae15a42fc7b606235d08e94543fe77661cea4d2
     container_name: receptor-controller
     restart: unless-stopped
+    # Execution nodes in other networks dial this listener from outside the
+    # compose network, so it must be published on the host. Safe to expose:
+    # the listener requires a client certificate from the mesh CA before any
+    # peer is accepted (tls-server: requireclientcert), and the control socket
+    # stays a unix socket that is never network-reachable.
+    ports:
+      - "27199:27199"
     volumes:
       # Staged read-only, then installed into place by the command below.
-      - ./mesh/config/receptor/controller.yml:/mnt/receptor/controller.yml:ro
+      - ./mesh/config/receptor/controller-a.yml:/mnt/receptor/receptor.conf:ro
+      - ./mesh/secrets/receptor/issued/controller-a:/mnt/receptor/tls:ro
       - receptor-runtime:/run/receptor
     # Two startup problems are solved here, both as root, before the long-lived
     # process drops back to the image's unprivileged receptor user:
@@ -89,13 +102,52 @@ services:
       - |
         install -d -o receptor -g receptor -m 0750 /run/receptor
         install -o receptor -g receptor -m 0400 \
-          /mnt/receptor/controller.yml /etc/receptor/receptor.conf
+          /mnt/receptor/receptor.conf /etc/receptor/receptor.conf
+        install -d -o receptor -g receptor -m 0750 /etc/receptor/tls
+        install -o receptor -g receptor -m 0400 /mnt/receptor/tls/tls.key /etc/receptor/tls/tls.key
+        install -o receptor -g receptor -m 0444 /mnt/receptor/tls/tls.crt /etc/receptor/tls/tls.crt
+        install -o receptor -g receptor -m 0444 /mnt/receptor/tls/ca.crt  /etc/receptor/tls/ca.crt
         exec setpriv --reuid=receptor --regid=receptor --clear-groups \
           receptor -c /etc/receptor/receptor.conf
     # Ready means "the control socket answers", which is exactly what the
     # orchestrator needs — a listening TCP port would not prove the socket exists.
     healthcheck:
       test: ["CMD", "receptorctl", "--socket", "/run/receptor/receptor.sock", "status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  receptor-controller-b:
+    # Identical to A except: identity controller-b, socket receptor-b.sock.
+    # Same image pin; see the A block for the digest rationale.
+    profiles: [mesh]
+    image: quay.io/ansible/receptor:v1.6.7@sha256:6296f6cd3b0301cc7c9376e48ae15a42fc7b606235d08e94543fe77661cea4d2
+    container_name: receptor-controller-b
+    restart: unless-stopped
+    # B's in-container listener is also 27199; published on host port 27200 so
+    # both ingresses are reachable from outside. Same exposure rationale as A.
+    ports:
+      - "27200:27199"
+    volumes:
+      - ./mesh/config/receptor/controller-b.yml:/mnt/receptor/receptor.conf:ro
+      - ./mesh/secrets/receptor/issued/controller-b:/mnt/receptor/tls:ro
+      - receptor-runtime:/run/receptor
+    user: "0:0"
+    entrypoint: ["/usr/local/bin/dumb-init", "--", "/bin/sh", "-euc"]
+    command:
+      - |
+        install -d -o receptor -g receptor -m 0750 /run/receptor
+        install -o receptor -g receptor -m 0400 \
+          /mnt/receptor/receptor.conf /etc/receptor/receptor.conf
+        install -d -o receptor -g receptor -m 0750 /etc/receptor/tls
+        install -o receptor -g receptor -m 0400 /mnt/receptor/tls/tls.key /etc/receptor/tls/tls.key
+        install -o receptor -g receptor -m 0444 /mnt/receptor/tls/tls.crt /etc/receptor/tls/tls.crt
+        install -o receptor -g receptor -m 0444 /mnt/receptor/tls/ca.crt  /etc/receptor/tls/ca.crt
+        exec setpriv --reuid=receptor --regid=receptor --clear-groups \
+          receptor -c /etc/receptor/receptor.conf
+    healthcheck:
+      test: ["CMD", "receptorctl", "--socket", "/run/receptor/receptor-b.sock", "status"]
       interval: 30s
       timeout: 5s
       retries: 3
