@@ -62,6 +62,10 @@ conf=/run/receptor/receptor.conf
   for peer in "${peers[@]}"; do
     peer="${peer//[[:space:]]/}"
     [ -n "$peer" ] || continue
+    case "$peer" in
+      *:*) ;;
+      *) echo "ERROR: peer '$peer' invalid: missing :port" >&2; exit 1;;
+    esac
     host="${peer%:*}"; port="${peer##*:}"
     case "$host" in *[!A-Za-z0-9._-]*|'') host= ;; esac
     case "$port" in *[!0-9]*|'') port= ;; esac
