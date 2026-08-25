@@ -204,6 +204,11 @@ for pname, entries in (data.get("pools") or {}).items():
             n, raw = e, None
         else:
             n, raw = (e or {}).get("node", ""), (e or {}).get("max_concurrent")
+        # A non-string node (YAML `node: 123`) would silently never match the
+        # dispatched id and bypass its cap — reject it like the pool parser.
+        if n and not isinstance(n, str):
+            sys.exit(f"pool '{pname}': node id {n!r} invalid — node ids must be "
+                     "quoted strings ([A-Za-z0-9._-]+)")
         if n != node:
             continue
         if raw is None:
@@ -296,7 +301,12 @@ slot_scan() {
         if [ -e "$g.hold" ] || ! flock -n "$g" true 2>/dev/null; then
           [ "$gi" -gt "$max_occ" ] && max_occ="$gi"
           hc=$(head -c 16 "$g" 2>/dev/null | head -1 | tr -d '[:space:]')
-          case "$hc" in *[!0-9]*|'') ;; *) [ "$hc" -lt "$eff" ] && eff="$hc";; esac
+          # A recorded 0 means "uncapped holder": it occupies a slot but
+          # imposes no limit of its own, so it must not drag eff to zero.
+          case "$hc" in
+            *[!0-9]*|'') ;;
+            *) if [ "$hc" -gt 0 ] && [ "$hc" -lt "$eff" ]; then eff="$hc"; fi;;
+          esac
         fi
       done
       if [ "$i" -gt "$eff" ] || [ "$max_occ" -gt "$eff" ]; then
@@ -312,16 +322,48 @@ slot_scan() {
   return 1
 }
 
+# Uncapped, but NOT untracked: an uncapped job still occupies a numbered slot
+# (recording cap 0 = "imposes no limit"), so an operator who later ENABLES a
+# cap has the running work visible to the occupancy scan — flipping 0 to 1
+# must not admit a second job beside a still-running uncapped one. Best
+# effort by design: uncapped dispatch never blocks on tracking problems.
+uncapped_track() {
+  local node="$1" i f
+  for ((i = 1; i <= 4096; i++)); do
+    f="$SLOTS_DIR/$node.slot.$i"
+    [ -e "$f.hold" ] && continue
+    if ! { exec {SLOT_FD}>>"$f"; } 2>/dev/null; then SLOT_FD=; return 0; fi
+    if flock -n "$SLOT_FD" 2>/dev/null; then
+      SLOT_FILE="$f"
+      printf '0\n' > "$f" 2>/dev/null || true
+      return 0
+    fi
+    { exec {SLOT_FD}>&-; } 2>/dev/null || true
+    SLOT_FD=
+  done
+  return 0
+}
+
 acquire_slot() {
   local node="$1" cap="$2" ADM_FD out=1
-  [ "$cap" -gt 0 ] || return 0   # uncapped node
-  (umask 077 && mkdir -p "$SLOTS_DIR") || return 1
+  (umask 077 && mkdir -p "$SLOTS_DIR") 2>/dev/null \
+    || { [ "$cap" -gt 0 ] && return 1; return 0; }
   # Per-node admission lock: serializes the scan+probe so concurrent
   # dispatchers make their capacity decisions one at a time. Held only for
   # the scan, never for the job; a stuck peer bounds the wait at 30s.
-  if ! { exec {ADM_FD}>>"$SLOTS_DIR/$node.admission"; } 2>/dev/null; then return 1; fi
+  if ! { exec {ADM_FD}>>"$SLOTS_DIR/$node.admission"; } 2>/dev/null; then
+    [ "$cap" -gt 0 ] && return 1
+    return 0
+  fi
   if flock -w 30 "$ADM_FD" 2>/dev/null; then
-    slot_scan "$node" "$cap" && out=0
+    if [ "$cap" -gt 0 ]; then
+      slot_scan "$node" "$cap" && out=0
+    else
+      uncapped_track "$node"
+      out=0
+    fi
+  else
+    [ "$cap" -gt 0 ] || out=0   # uncapped proceeds even without the lock
   fi
   { exec {ADM_FD}>&-; } 2>/dev/null || true
   return "$out"
