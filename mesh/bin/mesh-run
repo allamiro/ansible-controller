@@ -21,16 +21,17 @@ set -euo pipefail
 
 die() { echo "mesh-run: ERROR: $*" >&2; exit 2; }
 
-NODE= PLAYBOOK= INVENTORY= SSH_KEY= SOCKET=/run/receptor/receptor.sock
+NODE= PLAYBOOK= INVENTORY= SSH_KEY= ANSIBLE_CFG= SOCKET=/run/receptor/receptor.sock
 JOBS_DIR=/var/lib/mesh/jobs
 while [ $# -gt 0 ]; do
   case "$1" in
-    --node)      NODE="${2:?}"; shift 2;;
-    --playbook)  PLAYBOOK="${2:?}"; shift 2;;
-    --inventory) INVENTORY="${2:?}"; shift 2;;
-    --ssh-key)   SSH_KEY="${2:?}"; shift 2;;
-    --socket)    SOCKET="${2:?}"; shift 2;;
-    --jobs-dir)  JOBS_DIR="${2:?}"; shift 2;;
+    --node)        NODE="${2:?}"; shift 2;;
+    --playbook)    PLAYBOOK="${2:?}"; shift 2;;
+    --inventory)   INVENTORY="${2:?}"; shift 2;;
+    --ssh-key)     SSH_KEY="${2:?}"; shift 2;;
+    --ansible-cfg) ANSIBLE_CFG="${2:?}"; shift 2;;
+    --socket)      SOCKET="${2:?}"; shift 2;;
+    --jobs-dir)    JOBS_DIR="${2:?}"; shift 2;;
     *) die "unknown argument: $1";;
   esac
 done
@@ -52,6 +53,18 @@ cp -a "$(dirname "$(readlink -f "$PLAYBOOK")")/." "$PDD/project/"
 # suffix (e.g. *.aws_ec2.yml), so renaming to "hosts" would reject valid
 # plugin inventories after staging.
 cp "$INVENTORY" "$PDD/inventory/$(basename "$INVENTORY")"
+# The node has no /configs mount and never ran the controller entrypoint, so a
+# playbook relying on the repo's ansible.cfg must SHIP it: --ansible-cfg stages
+# it as the project-root ansible.cfg, which ansible loads from the runner's
+# cwd. A cfg already present in the playbook's own directory wins — refusing to
+# overwrite it beats silently changing a project's declared behaviour.
+if [ -n "$ANSIBLE_CFG" ]; then
+  [ -f "$ANSIBLE_CFG" ] || die "--ansible-cfg '$ANSIBLE_CFG' not found"
+  if [ -e "$PDD/project/ansible.cfg" ]; then
+    die "the playbook directory already ships its own ansible.cfg; refusing to overwrite it"
+  fi
+  cp "$ANSIBLE_CFG" "$PDD/project/ansible.cfg"
+fi
 if [ -n "$SSH_KEY" ]; then
   [ -f "$SSH_KEY" ] || die "--ssh-key '$SSH_KEY' not found"
   # env/ssh_key is loaded into a per-job ssh-agent by the runner ON THE NODE and
@@ -62,10 +75,21 @@ fi
 
 # (5) one meta.json PER JOB — concurrency-safe by construction (plan §4), and
 # the hook Tier 2.5 recovery needs later. Status transitions are whole-file
-# rewrites of a private file, so there is no shared-file race.
+# rewrites of a private file, so there is no shared-file race. Values are
+# JSON-encoded properly (a playbook name carrying a quote or newline must not
+# yield an unparseable lifecycle record).
 meta() {
-  printf '{"job_id":"%s","node":"%s","playbook":"%s","unit_id":"%s","status":"%s"}\n' \
-    "$JOB_ID" "$NODE" "$(basename "$PLAYBOOK")" "${UNIT_ID:-}" "$1" > "$PDD/meta.json"
+  M_JOB="$JOB_ID" M_NODE="$NODE" M_PB="$(basename "$PLAYBOOK")" \
+  M_UNIT="${UNIT_ID:-}" M_ST="$1" python3 - > "$PDD/meta.json" <<'PYEOF'
+import json, os
+print(json.dumps({
+    "job_id": os.environ["M_JOB"],
+    "node": os.environ["M_NODE"],
+    "playbook": os.environ["M_PB"],
+    "unit_id": os.environ["M_UNIT"],
+    "status": os.environ["M_ST"],
+}))
+PYEOF
 }
 meta created
 
@@ -74,7 +98,9 @@ meta created
 # "nothing was executed" — this is the only place that claim is allowed.
 mesh_status=$(receptorctl --socket "$SOCKET" status 2>/dev/null) \
   || { meta submit-failed-pre; die "cannot query receptor status (nothing was executed)"; }
-grep -q "^${NODE} " <<<"$mesh_status" || grep -qw "${NODE}" <<<"$mesh_status" \
+# Exact, fixed-string match on the first column: grep -w treats '-' as a word
+# boundary and '.' as a wildcard, so 'exec-net20' would "match" exec-net20-a.
+awk -v n="$NODE" '$1 == n { found = 1 } END { exit !found }' <<<"$mesh_status" \
   || { meta submit-failed-pre; die "node '$NODE' is not in the mesh (nothing was executed)"; }
 
 # (6) transmit -> submit. receptorctl prints "Unit ID: <id>" on success. Past

@@ -114,11 +114,14 @@ case "$art" in "rc=0 "*) ;; *) fail "unexpected artifacts state: $art";; esac
 pass "artifacts complete ($art)"
 
 echo "== 12. per-job meta.json records the lifecycle =="
-meta=$(docker exec mesh-e2e-orchestrator cat /var/lib/mesh/jobs/$job_id/meta.json 2>/dev/null) \
-  || fail "meta.json missing for job $job_id"
-grep -q '"status":"succeeded"' <<<"$meta" && grep -q '"node":"exec-e2e-a"' <<<"$meta" \
-  && pass "meta.json: succeeded on exec-e2e-a" \
-  || fail "meta.json wrong: $meta"
+meta_verdict=$(docker exec mesh-e2e-orchestrator python3 -c "
+import json
+d = json.load(open('/var/lib/mesh/jobs/$job_id/meta.json'))
+print('ok' if d.get('status') == 'succeeded' and d.get('node') == 'exec-e2e-a' else 'bad: ' + json.dumps(d))
+" 2>/dev/null) || fail "meta.json missing or unparseable for job $job_id"
+[ "$meta_verdict" = ok ] \
+  && pass "meta.json parses: succeeded on exec-e2e-a" \
+  || fail "meta.json wrong — $meta_verdict"
 
 echo "== 13. a failing playbook propagates its real rc back =="
 # Fail CLOSED: a probe-level error (container down, mesh-run's own die()) must
@@ -128,7 +131,7 @@ fail_out=$(docker exec mesh-e2e-orchestrator /usr/local/mesh/bin/mesh-run \
     --node exec-e2e-a --playbook /mesh-playbooks/mesh-fail.yml \
     --inventory /tmp/e2e-inv --ssh-key /e2e-ssh/id_ed25519 2>&1) && \
   fail "mesh-run returned 0 for a playbook that must fail"
-fail_rc=$(grep -o "mesh-run: job=.* rc=[0-9]*" <<<"$fail_out" | sed -n "s/.*rc=\([0-9]*\).*/\1/p")
+fail_rc=$(grep -o "mesh-run: job=.* rc=[0-9]*" <<<"$fail_out" | sed -n "s/.*rc=\([0-9]*\).*/\1/p" || true)
 if [ -n "$fail_rc" ] && [ "$fail_rc" -ne 0 ]; then
   pass "failing playbook completed the round-trip with rc=$fail_rc"
 else
