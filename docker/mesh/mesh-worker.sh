@@ -59,18 +59,31 @@ cleanup_creds() {
 # orphaned — receptor signals the wrapper, not the process group), its exit
 # is collected, and the key is destroyed BEFORE the wrapper dies. The EXIT
 # trap covers the normal path with the same cleanup.
+#
+# Two ordering rules, both load-bearing:
+#  * traps are armed BEFORE the child is launched — a signal in the gap would
+#    otherwise take the default disposition and skip cleanup entirely;
+#  * the child's stdin is explicitly `<&0` — a background command in
+#    non-job-control bash otherwise gets /dev/null and the worker would read
+#    EOF instead of the receptor-transmitted PDD.
 rc=0
-ansible-runner worker "$@" &
-runner_pid=$!
+runner_pid=
 on_signal() {
-  kill -"$1" "$runner_pid" 2>/dev/null || true
-  wait "$runner_pid" 2>/dev/null; rc=$?
+  sig="$1"
+  if [ -n "$runner_pid" ]; then
+    kill -"$sig" "$runner_pid" 2>/dev/null || true
+    wait "$runner_pid" 2>/dev/null || rc=$?
+  else
+    case "$sig" in TERM) rc=143;; INT) rc=130;; esac
+  fi
   cleanup_creds
-  trap - "$1" EXIT
+  trap - "$sig" EXIT
   exit "$rc"
 }
 trap 'on_signal TERM' TERM
 trap 'on_signal INT'  INT
 trap cleanup_creds EXIT
+ansible-runner worker "$@" <&0 &
+runner_pid=$!
 wait "$runner_pid" || rc=$?
 exit "$rc"
