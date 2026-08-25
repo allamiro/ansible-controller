@@ -1,25 +1,32 @@
 #!/bin/bash
-# mesh-run — dispatcher (Phases 5+7): run a playbook on ONE execution node
+# mesh-run — dispatcher (Phases 5+7+8): run a playbook on an execution node
 # via receptor, returning the playbook's real exit code and its artifacts —
-# with credential hygiene (shredded transient key copies, no-log guarantee)
-# and per-job artifact export to the operator's log tree.
+# with credential hygiene, per-job artifact export, pool dispatch, and the
+# dispatch-only failover boundary.
 #
-#   mesh-run --node <node-id> --playbook <file.yml> --inventory <file> \
+#   mesh-run  --node <node-id> | --pool <name> | --zone <name>
+#             --playbook <file.yml> --inventory <file> \
 #            [--ssh-key <file>] [--socket <receptor.sock>] [--jobs-dir <dir>] \
-#            [--log-dir <dir>]
+#            [--log-dir <dir>] [--pools-file <yml>] [--zones-file <yml>]
 #
-# Runs INSIDE the orchestrator container (the e2e suite and, later, `make
-# mesh-run` invoke it there). Flow — mesh plan §2.4 steps 4-9, single node:
+# Runs INSIDE the orchestrator container. Flow — mesh plan §2.4:
 #
+#   classify (zone -> pool)  -> healthy-node select (routable + free slot)
 #   ansible-runner transmit  -> stream the private data dir over stdout
 #   receptorctl work submit  -> send it to the node's ansible-runner worktype
 #   receptorctl work results -> stream events back as the job runs
 #   ansible-runner process   -> reconstruct locally; artifacts + REAL ansible rc
 #
-# Failover does NOT belong here (plan §2.4): this submits to exactly one node
-# and never retries — a submission whose fate is unknown must never be re-sent
-# elsewhere. Pool selection and the dispatch-only failover boundary arrive with
-# Phase 8; work signing (--signwork) with Phase 9.
+# THE FAILOVER BOUNDARY (plan §2.4): failover is dispatch-only. A candidate is
+# skipped for the next one ONLY while nothing has left this host — it is not
+# routable via any live ingress, or its concurrency slots are all reserved.
+# Once one submit is attempted, there is exactly one submission: an ambiguous
+# outcome is recorded as such and NEVER re-sent anywhere.
+#
+# Per-node concurrency (plan §4/UC4) is an atomic flock RESERVATION on a slot
+# file held for the life of this process — not a work-list check, so there is
+# no check-then-act race, and a crashed dispatcher's slot frees itself when
+# the kernel closes the fd. Work signing (--signwork) arrives with Phase 9.
 set -euo pipefail
 
 die() { echo "mesh-run: ERROR: $*" >&2; exit 2; }
@@ -28,9 +35,16 @@ die() { echo "mesh-run: ERROR: $*" >&2; exit 2; }
 # socket whose receptor answers `status` is used for the whole job. Both
 # sidecars route to every node, so surviving either ingress suffices — losing
 # the orchestrator HOST itself is Tier 2 and out of scope here.
-NODE= PLAYBOOK= INVENTORY= SSH_KEY= ANSIBLE_CFG= GALAXY_DIR=
+NODE= POOL= ZONE= PLAYBOOK= INVENTORY= SSH_KEY= ANSIBLE_CFG= GALAXY_DIR=
 SOCKETS=/run/receptor/receptor.sock,/run/receptor/receptor-b.sock
 JOBS_DIR=/var/lib/mesh/jobs
+SLOTS_DIR="${MESH_SLOTS_DIR:-/var/lib/mesh/slots}"
+POOLS_FILE="${MESH_POOLS_FILE:-/etc/mesh/pools.yml}"
+# 1 when the operator chose the path (flag or env): a missing file is then an
+# error — a typo must never silently disable configured concurrency caps.
+POOLS_FILE_SET=0
+[ -n "${MESH_POOLS_FILE:-}" ] && POOLS_FILE_SET=1
+ZONES_FILE="${MESH_ZONES_FILE:-/etc/mesh/zones.yml}"
 # Operator-facing artifact copies land under the controller's log tree — the
 # compose setup bind-mounts /var/log/ansible to the host's logs/, so a job's
 # stdout/rc/job_events are readable on the host without entering the container
@@ -39,6 +53,8 @@ LOG_DIR=/var/log/ansible/runner
 while [ $# -gt 0 ]; do
   case "$1" in
     --node)        NODE="${2:?}"; shift 2;;
+    --pool)        POOL="${2:?}"; shift 2;;
+    --zone)        ZONE="${2:?}"; shift 2;;
     --playbook)    PLAYBOOK="${2:?}"; shift 2;;
     --inventory)   INVENTORY="${2:?}"; shift 2;;
     --ssh-key)     SSH_KEY="${2:?}"; shift 2;;
@@ -47,32 +63,360 @@ while [ $# -gt 0 ]; do
     --socket)      SOCKETS="${2:?}"; shift 2;;
     --jobs-dir)    JOBS_DIR="${2:?}"; shift 2;;
     --log-dir)     LOG_DIR="${2-}"; shift 2;;
+    --pools-file)  POOLS_FILE="${2:?}"; POOLS_FILE_SET=1; shift 2;;
+    --zones-file)  ZONES_FILE="${2:?}"; shift 2;;
     *) die "unknown argument: $1";;
   esac
 done
-[ -n "$NODE" ]      || die "--node is required"
 [ -f "$PLAYBOOK" ]  || die "--playbook '$PLAYBOOK' not found"
 [ -e "$INVENTORY" ] || die "--inventory '$INVENTORY' not found (file or directory)"
+case "$NODE$POOL$ZONE" in '') die "one of --node, --pool, or --zone is required";; esac
+{ [ -n "$NODE" ] && { [ -n "$POOL" ] || [ -n "$ZONE" ]; }; } \
+  && die "--node is mutually exclusive with --pool/--zone"
+{ [ -n "$POOL" ] && [ -n "$ZONE" ]; } && die "--pool and --zone are mutually exclusive"
 
-# Control-socket selection is routability-aware, not merely liveness-aware: an
-# ingress can answer `status` while it has lost (or is still reconverging) its
-# route to the requested node, while the OTHER ingress still sees it. Prefer
-# the first socket that is live AND routes to the node; remember live-but-
-# routeless sockets so the definitive gate below can distinguish "node is in
-# no ingress's mesh" from "no ingress is alive at all".
-SOCKET= LIVE_SOCKET= mesh_status=
+# (1) classify: a zone names a pool (mesh/config/zones.yml); a pool names an
+# ordered candidate list with per-node concurrency caps (pools.yml). Parsed by
+# python3+PyYAML (already in the image); a malformed file is a hard error —
+# guessing a dispatch target is worse than refusing.
+if [ -n "$ZONE" ]; then
+  POOL=$(Z_FILE="$ZONES_FILE" Z_NAME="$ZONE" python3 - <<'PYEOF'
+import os, sys, yaml
+f, zone = os.environ["Z_FILE"], os.environ["Z_NAME"]
+try:
+    data = yaml.safe_load(open(f)) or {}
+except OSError as e:
+    sys.exit(f"zones file '{f}': {e}")
+except yaml.YAMLError as e:
+    sys.exit(f"zones file '{f}' is not valid YAML: {e}")
+zones = data.get("zones") or {}
+if zone not in zones:
+    sys.exit(f"zone '{zone}' not defined in {f}")
+entry = zones[zone]
+pool = entry if isinstance(entry, str) else (entry or {}).get("pool", "")
+if not pool:
+    sys.exit(f"zone '{zone}' in {f} names no pool")
+print(pool)
+PYEOF
+) || die "zone classification failed"
+fi
+
+# Candidate list: "node cap" per line. --node is a one-entry list; its cap
+# still comes from pools.yml when the node is declared there, so the
+# concurrency reservation holds however the node was chosen.
+# Parsed to a variable FIRST so the producer's exit status gates everything:
+# a process substitution's failure is invisible to the consuming while-loop,
+# and a malformed trailing entry must fail the whole dispatch, not truncate
+# the candidate list. The parser also validates the WHOLE file's cap
+# consistency: slot files are per node, shared by every pool, so one node
+# declared with two different caps would let dispatches through different
+# pools overshoot both.
+CANDIDATES=()
+if [ -n "$POOL" ]; then
+  pool_lines=$(P_FILE="$POOLS_FILE" P_NAME="$POOL" python3 - <<'PYEOF'
+import os, sys, yaml
+f, pool = os.environ["P_FILE"], os.environ["P_NAME"]
+try:
+    data = yaml.safe_load(open(f)) or {}
+except OSError as e:
+    sys.exit(f"pools file '{f}': {e}")
+except yaml.YAMLError as e:
+    sys.exit(f"pools file '{f}' is not valid YAML: {e}")
+pools = data.get("pools") or {}
+
+def parse(pname, e):
+    node = e if isinstance(e, str) else (e or {}).get("node", "")
+    raw = None if isinstance(e, str) else (e or {}).get("max_concurrent")
+    if not node:
+        sys.exit(f"pool '{pname}' has an entry without a node id")
+    # Validated HERE, before serialization: a quoted id smuggling whitespace
+    # or newlines would otherwise split into phantom candidate records on
+    # the bash side.
+    import re
+    if not isinstance(node, str) or not re.fullmatch(r"[A-Za-z0-9._-]+", node):
+        sys.exit(f"pool '{pname}': node id {node!r} invalid ([A-Za-z0-9._-]+ only)")
+    # int() would silently truncate floats ('-0.5' -> 0 -> uncapped) and
+    # accept booleans; a malformed cap must fail closed instead.
+    if raw is None:
+        cap = 0
+    elif isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
+        sys.exit(f"pool '{pname}' node '{node}': max_concurrent must be a "
+                 f"non-negative integer, got {raw!r}")
+    else:
+        cap = raw
+    return node, cap
+
+caps = {}
+for pname, entries in pools.items():
+    if entries is not None and not isinstance(entries, list):
+        sys.exit(
+            f"pool '{pname}' must be a LIST of node entries — a mapping here "
+            "(missing '- ' markers) would be iterated as its key names")
+    for e in entries or []:
+        node, cap = parse(pname, e)
+        if node in caps and caps[node][0] != cap:
+            sys.exit(
+                f"node '{node}' declared with max_concurrent={caps[node][0]} "
+                f"in pool '{caps[node][1]}' but {cap} in pool '{pname}' — a "
+                "node's cap is global (slot files are shared across pools)")
+        caps.setdefault(node, (cap, pname))
+
+if pool not in pools:
+    sys.exit(f"pool '{pool}' not defined in {f}")
+entries = pools[pool] or []
+if not entries:
+    sys.exit(f"pool '{pool}' is empty in {f}")
+for e in entries:
+    node, cap = parse(pool, e)
+    print(f"{node} {cap}")
+PYEOF
+  ) || die "pool resolution failed"
+  while IFS= read -r line; do
+    [ -n "$line" ] && CANDIDATES+=("$line")
+  done <<<"$pool_lines"
+  [ ${#CANDIDATES[@]} -gt 0 ] || die "pool '$POOL' resolved to no candidates"
+else
+  # A cap declared for this node in pools.yml binds --node dispatches too. An
+  # ABSENT default pools file means "no caps configured" (backward
+  # compatible); but a pools file that exists yet cannot be parsed, or an
+  # explicitly passed path that is missing, is a hard error — silently
+  # treating a corrupt config as "uncapped" would defeat the cap it declares.
+  cap=$(P_FILE="$POOLS_FILE" P_NODE="$NODE" P_EXPLICIT="$POOLS_FILE_SET" python3 - <<'PYEOF'
+import os, sys, yaml
+f, node = os.environ["P_FILE"], os.environ["P_NODE"]
+explicit = os.environ["P_EXPLICIT"] == "1"
+try:
+    data = yaml.safe_load(open(f)) or {}
+except FileNotFoundError:
+    if explicit:
+        sys.exit(f"pools file '{f}' not found")
+    data = {}
+except OSError as e:
+    sys.exit(f"pools file '{f}': {e}")
+except yaml.YAMLError as e:
+    sys.exit(f"pools file '{f}' is not valid YAML: {e}")
+found = None
+for pname, entries in (data.get("pools") or {}).items():
+    if entries is not None and not isinstance(entries, list):
+        sys.exit(f"pool '{pname}' must be a LIST of node entries")
+    for e in entries or []:
+        if isinstance(e, str):
+            n, raw = e, None
+        else:
+            n, raw = (e or {}).get("node", ""), (e or {}).get("max_concurrent")
+        # Full parity with the pool parser: a missing node key (`nod:` typo),
+        # a non-string node (`node: 123`), or a malformed string
+        # (`node: "exec-a\n"`) would silently never match the dispatched id
+        # and bypass its cap.
+        import re
+        if not n:
+            sys.exit(f"pool '{pname}' has an entry without a node id")
+        if not isinstance(n, str) or not re.fullmatch(r"[A-Za-z0-9._-]+", n):
+            sys.exit(f"pool '{pname}': node id {n!r} invalid ([A-Za-z0-9._-]+ only)")
+        if n != node:
+            continue
+        if raw is None:
+            cap = 0
+        elif isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
+            sys.exit(f"pool '{pname}' node '{node}': max_concurrent must be a "
+                     f"non-negative integer, got {raw!r}")
+        else:
+            cap = raw
+        if found is not None and found[0] != cap:
+            sys.exit(
+                f"node '{node}' declared with max_concurrent={found[0]} in "
+                f"pool '{found[1]}' but {cap} in pool '{pname}' — a node's "
+                "cap is global (slot files are shared across pools)")
+        found = (cap, pname)
+print(found[0] if found else 0)
+PYEOF
+) || die "pools lookup failed"
+  CANDIDATES=("$NODE $cap")
+fi
+
+# Live-ingress inventory, once: an ingress can answer `status` while it has
+# lost (or is still reconverging) its route to a node the OTHER ingress still
+# sees, so routability is judged per candidate against every live socket.
+declare -A SOCK_ST
+LIVE_SOCKETS=()
 IFS=',' read -ra socket_list <<<"$SOCKETS"
 for cand in "${socket_list[@]}"; do
   cand="${cand//[[:space:]]/}"
   [ -S "$cand" ] || continue
   st=$(receptorctl --socket "$cand" status 2>/dev/null) || continue
-  [ -n "$LIVE_SOCKET" ] || LIVE_SOCKET="$cand"
-  if awk -v n="$NODE" '$1 == n { found = 1 } END { exit !found }' <<<"$st"; then
-    SOCKET="$cand"; mesh_status="$st"; break
-  fi
+  LIVE_SOCKETS+=("$cand"); SOCK_ST["$cand"]="$st"
 done
-[ -n "$LIVE_SOCKET" ] || die "no live receptor control socket among: $SOCKETS"
-case "$NODE" in *[!A-Za-z0-9._-]*) die "--node '$NODE' invalid";; esac
+[ ${#LIVE_SOCKETS[@]} -gt 0 ] || die "no live receptor control socket among: $SOCKETS"
+
+routable_via() {
+  local n="$1" s
+  for s in "${LIVE_SOCKETS[@]}"; do
+    if awk -v n="$n" '$1 == n { found = 1 } END { exit !found }' <<<"${SOCK_ST[$s]}"; then
+      printf '%s\n' "$s"; return 0
+    fi
+  done
+  return 1
+}
+
+# Atomic per-node concurrency reservation (plan §4): try each numbered slot
+# file with a non-blocking flock; the acquired fd is held (deliberately never
+# closed) for the life of this process, so the reservation outlives any crash
+# exactly as long as the process does and releases the instant it dies.
+SLOT_FD= SLOT_FILE= DISPATCH_STATE=pre-submit
+# Runs UNDER the per-node admission lock (see acquire_slot): acquisition and
+# the above-cap probe must be one atomic decision, or two dispatchers holding
+# different cap snapshots (a config edit mid-flight) could interleave and
+# jointly overshoot the lower cap.
+slot_scan() {
+  local node="$1" cap="$2" record="${3:-$2}" i f g gi eff max_occ hc
+  local capf="$SLOTS_DIR/$node/cap" recorded ceil
+
+  # The node's PERSISTED cap — written on every admission attempt, refused
+  # ones included, so an accepted reduction survives even when the reducing
+  # dispatch never got a slot (holders' recorded caps alone can't carry it:
+  # they drain away with their jobs). Rules, all under the admission lock:
+  # the first write and any LOWERING (including constraining an uncapped
+  # node) stick immediately; a RAISE is never automatic — a dispatcher
+  # cannot distinguish a deliberate raise from its own stale config snapshot,
+  # so raising is an explicit operator action: delete <node>.cap and the next
+  # admission records the current declaration (documented in pools.yml and
+  # the README troubleshooting table).
+  recorded=$(head -c 16 "$capf" 2>/dev/null | tr -d '[:space:]')
+  case "$recorded" in *[!0-9]*) recorded="";; esac
+  # Fail CLOSED if the durable record cannot be written: enforcing an initial
+  # or lowered cap only in this process's memory would evaporate when its
+  # holder drains, letting a stale higher-cap dispatcher overshoot later.
+  if [ -z "$recorded" ]; then
+    printf '%s\n' "$record" > "$capf" 2>/dev/null || return 1
+    recorded="$record"
+  elif [ "$record" -gt 0 ] && { [ "$recorded" -eq 0 ] || [ "$record" -lt "$recorded" ]; }; then
+    printf '%s\n' "$record" > "$capf" 2>/dev/null || return 1
+    recorded="$record"
+  fi
+  # Ceiling from the persisted cap (0 = uncapped imposes none):
+  ceil="$cap"
+  if [ -n "$recorded" ] && [ "$recorded" -gt 0 ] && [ "$recorded" -lt "$ceil" ]; then
+    ceil="$recorded"
+  fi
+
+  for ((i = 1; i <= cap; i++)); do
+    f="$SLOTS_DIR/$node/slot.$i"
+    # A .hold marker means a previous dispatch through this slot ended with
+    # the job's fate UNKNOWN (ambiguous submit / broken results stream): the
+    # acknowledged unit may still be running on the node, so the slot stays
+    # reserved even though that dispatcher — and its flock — are gone. The
+    # operator clears the marker after confirming the unit finished.
+    [ -e "$f.hold" ] && continue
+    # The braces are load-bearing: a bare `exec {fd}>>file 2>/dev/null` makes
+    # BOTH redirections permanent in this shell — silencing the script's own
+    # stderr (including the completion line) for the rest of its life. The
+    # group scopes the stderr silence to the open attempt alone, while the
+    # exec'd fd itself still persists, which is the point.
+    if ! { exec {SLOT_FD}>>"$f"; } 2>/dev/null; then SLOT_FD=; continue; fi
+    if flock -n "$SLOT_FD" 2>/dev/null; then
+      SLOT_FILE="$f"
+      # Record THIS holder's cap snapshot in its slot file (free slot files'
+      # stale contents are never read — only occupied slots are consulted).
+      # An uncapped holder records 0: "occupies, imposes no limit".
+      printf '%s\n' "$record" > "$f" 2>/dev/null || true
+      # Cap-skew defense: the EFFECTIVE cap is the minimum of this
+      # dispatcher's cap and every concurrent occupant's recorded cap. That
+      # closes the stale-snapshot race (a cap-2 dispatcher admitted after a
+      # cap-1 job cannot overshoot: it sees the recorded 1) and keeps the
+      # earlier rule that occupants above the effective cap mean "full".
+      # Consequence, by design: a cap RAISE takes effect as in-flight jobs
+      # started under the lower cap drain.
+      eff="$ceil" max_occ=0
+      for g in "$SLOTS_DIR/$node"/slot.*; do
+        [ -e "$g" ] || continue
+        case "$g" in *.hold) continue;; esac
+        gi="${g##*.slot.}"
+        case "$gi" in *[!0-9]*|'') continue;; esac
+        [ "$g" = "$f" ] && continue
+        if [ -e "$g.hold" ] || ! flock -n "$g" true 2>/dev/null; then
+          [ "$gi" -gt "$max_occ" ] && max_occ="$gi"
+          hc=$(head -c 16 "$g" 2>/dev/null | head -1 | tr -d '[:space:]')
+          # A recorded 0 means "uncapped holder": it occupies a slot but
+          # imposes no limit of its own, so it must not drag eff to zero.
+          case "$hc" in
+            *[!0-9]*|'') ;;
+            *) if [ "$hc" -gt 0 ] && [ "$hc" -lt "$eff" ]; then eff="$hc"; fi;;
+          esac
+        fi
+      done
+      if [ "$i" -gt "$eff" ] || [ "$max_occ" -gt "$eff" ]; then
+        { exec {SLOT_FD}>&-; } 2>/dev/null || true
+        SLOT_FD= SLOT_FILE=
+        return 1
+      fi
+      return 0
+    fi
+    { exec {SLOT_FD}>&-; } 2>/dev/null || true
+    SLOT_FD=
+  done
+  return 1
+}
+
+acquire_slot() {
+  local node="$1" cap="$2" ADM_FD out=1 scan_cap record
+  # "Uncapped" means no limit OF ITS OWN — it still occupies a numbered slot
+  # (recording 0, which never lowers anyone's effective cap) and still honors
+  # concurrent holders' recorded finite caps, exactly like the positive path:
+  # switching a node to 0 beside a still-running cap-1 job must not overshoot
+  # that job's cap any more than switching 2->1 may. UNCAP_SENTINEL merely
+  # bounds the scan; a node genuinely running 4096 concurrent jobs has bigger
+  # problems than slot numbering.
+  if [ "$cap" -gt 0 ]; then scan_cap="$cap" record="$cap"; else scan_cap=4096 record=0; fi
+  # Fail CLOSED on any slot-state failure, uncapped included: a slots volume
+  # that cannot be engaged (uncreatable, read-only, wedged lock) may be
+  # HIDING recorded finite caps this dispatch is obliged to honor — a 1->0
+  # config transition must not become an overshoot just because the state
+  # volume broke — and would leave this job invisible to later cap enables.
+  (umask 077 && mkdir -p "$SLOTS_DIR/$node") 2>/dev/null || return 1
+  # Per-node admission lock: serializes the scan+probe so concurrent
+  # dispatchers make their capacity decisions one at a time. Held only for
+  # the scan, never for the job; a stuck peer bounds the wait at 30s and
+  # refuses the candidate — a wedged admission lock is an anomaly no
+  # dispatch should reason past.
+  if ! { exec {ADM_FD}>>"$SLOTS_DIR/$node/admission"; } 2>/dev/null; then
+    return 1
+  fi
+  if flock -w 30 "$ADM_FD" 2>/dev/null; then
+    slot_scan "$node" "$scan_cap" "$record" && out=0
+  fi
+  { exec {ADM_FD}>&-; } 2>/dev/null || true
+  return "$out"
+}
+
+# The durable half of the reservation. The flock covers only this process's
+# lifetime; the .hold marker covers the acknowledged unit's. It is written
+# PESSIMISTICALLY before the submit attempt — a SIGKILL/OOM after submission
+# leaves no chance to write anything, so the marker must already exist — and
+# removed only when the artifacts' rc proves the unit finished. Refreshed
+# once the unit id is known so the operator sees what to check.
+persist_slot_hold() {
+  [ -n "$SLOT_FILE" ] || return 0
+  printf 'job=%s unit=%s node=%s\nclear with: rm %s.hold  (after confirming the unit finished)\n' \
+    "$JOB_ID" "${UNIT_ID:-unknown}" "$NODE" "$SLOT_FILE" > "$SLOT_FILE.hold" 2>/dev/null \
+    || { echo "mesh-run: warning: could not persist slot hold $SLOT_FILE.hold" >&2; return 1; }
+}
+release_slot_hold() {
+  [ -n "$SLOT_FILE" ] || return 0
+  rm -f "$SLOT_FILE.hold" 2>/dev/null || true
+}
+
+# (2) healthy-node select. Skipping a candidate is allowed ONLY here, where
+# nothing has left this host — that is the entire dispatch-only failover
+# boundary. The trace of skipped candidates is kept for the failure record.
+SOCKET= SELECT_NOTE=
+for entry in "${CANDIDATES[@]}"; do
+  n="${entry% *}" c="${entry##* }"
+  case "$n" in *[!A-Za-z0-9._-]*|'') die "node id '$n' invalid";; esac
+  s=$(routable_via "$n") || { SELECT_NOTE+="$n: not routable via any live ingress; "; continue; }
+  acquire_slot "$n" "$c" || { SELECT_NOTE+="$n: all $c slots reserved; "; continue; }
+  NODE="$n" SOCKET="$s"
+  break
+done
 
 # (4) unique private data dir per job — no shared state between concurrent
 # runs. Owner-only from birth (umask, not chmod-after): the staged tree holds
@@ -98,6 +442,13 @@ PDD="$JOBS_DIR/$JOB_ID"
 # never-corrupt-the-result rule the artifact export follows.
 finalize() {
   local st=$?
+  # Belt over the pessimistic pre-submit hold: if that write failed and this
+  # process still exits while in flight, try once more here (TERM/INT are
+  # trapped to exit so this trap covers catchable signals; SIGKILL is covered
+  # by the marker having been written BEFORE submission).
+  if [ "${DISPATCH_STATE:-}" = in-flight ]; then
+    persist_slot_hold || true
+  fi
   if [ -n "$SSH_KEY" ] && [ -f "$PDD/env/ssh_key" ]; then
     shred -u "$PDD/env/ssh_key" 2>/dev/null \
       || rm -f "$PDD/env/ssh_key" 2>/dev/null \
@@ -115,6 +466,10 @@ finalize() {
   return "$st"
 }
 trap finalize EXIT
+# Catchable signals must route through the EXIT trap: an untrapped TERM would
+# skip finalize, releasing an in-flight job's slot and skipping meta export.
+trap 'exit 143' TERM
+trap 'exit 130' INT
 # The playbook is resolved through symlinks ONCE, and that resolved name is
 # used for both staging and execution — staging the target directory while
 # telling the runner to execute the symlink's basename would fail when the
@@ -214,12 +569,13 @@ fi
 # optional second argument is a free-text note for states that need context —
 # notably the ambiguous-submit path, where the unit id is genuinely unknown.
 meta() {
-  M_JOB="$JOB_ID" M_NODE="$NODE" M_PB="$(basename "$PLAYBOOK")" \
+  M_JOB="$JOB_ID" M_NODE="$NODE" M_POOL="$POOL" M_PB="$(basename "$PLAYBOOK")" \
   M_UNIT="${UNIT_ID:-}" M_ST="$1" M_NOTE="${2:-}" python3 - > "$PDD/meta.json.tmp" <<'PYEOF'
 import json, os
 rec = {
     "job_id": os.environ["M_JOB"],
     "node": os.environ["M_NODE"],
+    "pool": os.environ["M_POOL"],
     "playbook": os.environ["M_PB"],
     "unit_id": os.environ["M_UNIT"],
     "status": os.environ["M_ST"],
@@ -243,8 +599,14 @@ meta created
 # the node means nothing can have been submitted, so failing here may honestly
 # say "nothing was executed" — the only place that claim is allowed.
 if [ -z "$SOCKET" ]; then
-  meta submit-failed-pre
-  die "node '$NODE' is not reachable via any live ingress ($SOCKETS) — nothing was executed"
+  meta submit-failed-pre "${SELECT_NOTE:-no candidate was selectable}"
+  if [ -n "$POOL" ]; then
+    die "no healthy node with a free slot in pool '$POOL' (${SELECT_NOTE% }) — nothing was executed"
+  fi
+  # The recorded selection reason distinguishes "unroutable" from "at
+  # capacity" — sending an operator to debug routing for a full node
+  # would waste exactly the time the record exists to save.
+  die "node '$NODE' not selectable: ${SELECT_NOTE:-not reachable via any live ingress ($SOCKETS)} — nothing was executed"
 fi
 
 # (6) transmit -> submit. receptorctl prints "Unit ID: <id>" on success. Past
@@ -253,6 +615,15 @@ fi
 # boundary (plan §2.4), an ambiguous failure is recorded as such and is NEVER
 # treated as "nothing ran" — and this dispatcher never resubmits anywhere.
 meta submitting
+# Pessimistic durable hold BEFORE anything leaves this host: a SIGKILL/OOM
+# mid-submission gets no trap, so the marker must already be on disk. It is
+# removed only when the artifacts prove the unit finished. STRICT here — and
+# only here — because nothing has been submitted yet: if the durable half of
+# the reservation cannot exist, refusing the dispatch is honest, whereas
+# submitting anyway would leave the cap unenforceable after a hard kill.
+persist_slot_hold || { meta submit-failed-pre "could not create the durable slot hold"; \
+  die "cannot create the durable slot hold ($SLOT_FILE.hold) — refusing to submit; nothing was executed"; }
+DISPATCH_STATE=in-flight
 submit_out=$(ansible-runner transmit "$PDD" -p "$(basename "$PLAYBOOK_REAL")" 2>/dev/null \
   | receptorctl --socket "$SOCKET" work submit ansible-runner \
       --node "$NODE" --payload -) \
@@ -264,6 +635,9 @@ UNIT_ID=$(awk '/^Unit ID:/ {print $3}' <<<"$submit_out")
   die "no unit id in submit output — state unknown, \
 check 'receptorctl work list' before re-running: $submit_out"; }
 meta running
+# Refresh (tolerant: already submitted, a failed refresh only loses the unit
+# id in the marker, not the reservation itself — the pre-submit write stands)
+persist_slot_hold || true
 
 # (7)(8) stream results -> process. ansible-runner process replays the play
 # output, materialises artifacts under $PDD/artifacts/ (stdout, rc,
@@ -284,9 +658,13 @@ if [ -z "$art_rc_file" ]; then
   # that, so a history reader does not mistake a dropped connection for a
   # playbook failure (and nobody "retries" a possibly-succeeding job).
   meta results-incomplete "no rc artifact returned; the unit was acknowledged and may still be running — check 'receptorctl work status $UNIT_ID'"
-  die "results stream did not complete — the job MAY STILL BE RUNNING on '$NODE' (unit=$UNIT_ID); check 'receptorctl work status $UNIT_ID'"
+  die "results stream did not complete — the job MAY STILL BE RUNNING on '$NODE' (unit=$UNIT_ID); check 'receptorctl work status $UNIT_ID'; its concurrency slot stays reserved via ${SLOT_FILE:+$SLOT_FILE.hold}${SLOT_FILE:- (node uncapped)}"
 fi
 rc=$(cat "$art_rc_file")
+# The artifacts' own rc proves the unit ran to completion: the durable hold
+# is released and the slot may now die with this process.
+DISPATCH_STATE=complete
+release_slot_hold
 
 receptorctl --socket "$SOCKET" work release "$UNIT_ID" >/dev/null 2>&1 || true
 

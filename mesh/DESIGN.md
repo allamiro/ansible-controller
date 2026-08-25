@@ -361,10 +361,10 @@ risk column; anything that touches it must pass [§9.1](#91-non-disruption-check
       EXIT trap (e2e #21); node copy dies with the released work unit
 
 ### Phase 8 — pools, failover, concurrency
-- [ ] `mesh/config/zones.yml` + `pools.yml`
-- [ ] Dispatcher: classify → healthy-node select → submit → **dispatch-only failover**
-- [ ] Per-node concurrency cap via an atomic `flock` reservation on a per-node slot file (not a `work list` check)
-- [ ] Unique PDD + artifact dir + work-unit id per concurrent job
+- [x] `mesh/config/zones.yml` + `pools.yml` (templates; mounted at `/etc/mesh/`)
+- [x] Dispatcher: classify → healthy-node select → submit → **dispatch-only failover** — e2e #23
+- [x] Per-node concurrency cap via an atomic `flock` reservation on a per-node slot file (not a `work list` check) — e2e #24
+- [x] Unique PDD + artifact dir + work-unit id per concurrent job (held since Phase 5; re-proven under contention by #24)
 
 ### Phase 9 — work signing
 - [ ] Controller work-signing private key (offline-issued); relay verification pubkey

@@ -30,6 +30,11 @@ services:
   ansible:
     volumes:
       - receptor-runtime:/run/receptor
+      # Dispatcher state must outlive the container: /var/lib/mesh holds the
+      # per-job PDDs/meta AND the concurrency slot files with their durable
+      # .hold markers. Recreating the orchestrator while a unit is still
+      # running on a node must not erase the reservation that caps that node.
+      - mesh-state:/var/lib/mesh
 
   # TWO sidecars, A and B — Tier-1 ingress redundancy (§9.7). Execution nodes
   # peer to both; the orchestrator's dispatcher tries A's control socket first
@@ -158,3 +163,7 @@ volumes:
   # socket is the mesh's authority boundary, so it stays 0600 and never leaves
   # this volume (see mesh/config/receptor/controller.yml).
   receptor-runtime:
+  # Job records + concurrency reservations (slot files and .hold markers) —
+  # persisted so orchestrator recreation cannot lift a node's cap while an
+  # acknowledged unit may still be running (plan §4/UC4).
+  mesh-state:

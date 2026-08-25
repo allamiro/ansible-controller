@@ -34,7 +34,9 @@ services:
       - e2e-ssh:/e2e-ssh:ro            # disposable key, seeded by e2e-up.sh
       - ../bin:/usr/local/mesh/bin:ro  # mesh-run dispatcher (Phase 5)
       - ./playbooks:/mesh-playbooks:ro # proof playbooks
-      - mesh-jobs:/var/lib/mesh/jobs   # per-job PDDs + artifacts + meta.json
+      - mesh-state:/var/lib/mesh       # jobs (PDDs/artifacts/meta) + slot reservations
+                                       # incl. .hold markers — models the production
+                                       # rule that reservations outlive the container
     # The suite drives the orchestrator via docker exec (as production drives it
     # via make mesh-run); no sshd runs here, so the inherited port-22 check is
     # replaced with one that actually matters to the orchestrator's job: the
@@ -136,7 +138,7 @@ networks:
 
 volumes:
   receptor-runtime:
-  mesh-jobs:
+  mesh-state:
   e2e-ssh:
   e2e-ssh-authorized:
   e2e-host-keys:

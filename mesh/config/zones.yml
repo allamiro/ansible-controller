@@ -1,0 +1,15 @@
+---
+# Zone classification — maps the zone names operators dispatch with
+# (`mesh-run --zone <name>`) to the pool that serves them (pools.yml).
+# Several zones may share one pool.
+#
+# The orchestrator reads /etc/mesh/zones.yml by default — mount this file
+# there (or pass --zones-file). To declare zones, REPLACE the empty map at
+# the bottom with a block like:
+#
+# zones:
+#   dmz:   { pool: net20 }
+#   net20: { pool: net20 }
+#   lab:   { pool: local }
+
+zones: {}

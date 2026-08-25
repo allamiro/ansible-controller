@@ -90,7 +90,7 @@ cross the wall:
 ```bash
 docker build -f docker/Dockerfile -t ansible-controller:dev .   # 1. the controller base
 mesh/tests/e2e-up.sh ansible-controller:dev                     # 2. build + start the lab (throwaway certificates issued for you)
-mesh/tests/e2e-check.sh                                         # 3. watch 22 checks prove every property above
+mesh/tests/e2e-check.sh                                         # 3. watch 24 checks prove every property above
 mesh/tests/e2e-down.sh                                          # tear it all down again
 ```
 
@@ -257,6 +257,38 @@ control host, it can be retried elsewhere — but once a node has (or even *may*
 have) accepted it, it is never re-sent. A network blip mid-job can cost you a
 retry you do by hand; it can never silently run your playbook twice.
 
+### Pools and zones
+
+Instead of naming a node, let the dispatcher pick a healthy one. Declare
+pools (ordered candidate nodes with per-node concurrency caps) and zones
+(friendly names mapping to pools) in [`mesh/config/pools.yml`](config/pools.yml)
+and [`zones.yml`](config/zones.yml), mount them at `/etc/mesh/` in the
+orchestrator, and dispatch by zone or pool:
+
+```bash
+/usr/local/mesh/bin/mesh-run --zone dmz --playbook ... --inventory ...
+/usr/local/mesh/bin/mesh-run --pool net20 --playbook ... --inventory ...
+```
+
+What the dispatcher guarantees:
+
+- **Failover only before submission.** A candidate is skipped for the next
+  one only while nothing has left the control host — it isn't routable via
+  any live ingress, or all its slots are taken. Once a submit is attempted
+  there is exactly one submission; the never-runs-twice rule above is never
+  bent for failover.
+- **Concurrency caps that can't race.** `max_concurrent` per node is enforced
+  by an atomic lock reservation held for the job's lifetime — two dispatchers
+  can't both squeeze into the last slot. Before anything is submitted, a
+  refusal frees the slot instantly; once a job is in flight its slot is also
+  backed by a durable `.hold` marker, so a crashed or killed dispatcher keeps
+  the slot reserved until you confirm the unit's fate and clear the marker
+  (see [troubleshooting](#health-and-troubleshooting)) — capacity is never
+  silently double-booked. When every candidate is saturated the dispatch is
+  refused with "nothing was executed" — re-run it when a slot frees.
+- **The record shows the choice.** `meta.json` carries both the pool and the
+  node that actually served the job.
+
 ## Node runtime Python dependencies
 
 If your playbooks use plugins that need Python packages on the machine running
@@ -307,6 +339,8 @@ each node advertises the work type that runs playbooks.
 | Ingress A is down | One door failed; the other is up | New dispatches flow through B automatically. A job that was mid-stream on A is reported incomplete — check its artifacts, re-run if safe. Restart A when convenient; nodes re-attach automatically |
 | Playbook failed on the node | The playbook itself failed — the mesh reports honestly | Read the `/var/lib/mesh/jobs/<uuid>/` artifacts: full stdout and per-task events are there, same as a local run |
 | `mesh-run` refuses to retry a job whose outcome is unknown | The never-run-twice rule (above) | Check the job's artifacts / the target's state, then re-run by hand if it's safe |
+| Dispatches report a node at capacity but nothing seems to run there | A job with an unknown outcome left a `.hold` marker keeping its slot reserved (capacity must not evaporate just because the dispatcher lost sight of an acknowledged job) | Read `/var/lib/mesh/slots/<node>/slot.<n>.hold` in the orchestrator — it names the job and unit; confirm the unit finished (`receptorctl work status <unit>`), then delete the marker |
+| You raised `max_concurrent` but the old lower cap still applies | Raises are deliberately not automatic — a dispatcher can't tell a deliberate raise from a stale config snapshot, so the lowest accepted cap persists | After editing the config upward, delete the persisted record: `rm /var/lib/mesh/slots/<node>/cap` in the orchestrator; the next dispatch records the new value |
 
 ## Getting the images
 
@@ -346,11 +380,11 @@ cosign verify \
 (dispatch → mTLS mesh → execution node → artifacts back, with ingress
 failover); the PKI toolchain for real identities; the control-plane overlay on
 your compose setup; published, signed images for all three roles; per-job
-credential hygiene and host-visible artifacts.
+credential hygiene and host-visible artifacts; pool/zone dispatch with
+per-node concurrency caps and dispatch-only failover.
 
 **Landing next** — packaged node deployment, `make mesh-run` / `make
-mesh-status`, node pools with automatic dispatch failover, and work signing.
-The full plan and its progress live in the
+mesh-status`, and work signing. The full plan and its progress live in the
 [DESIGN.md checklist](DESIGN.md#7-to-do-checklist).
 
 ## Where things live
@@ -364,7 +398,7 @@ mesh/
 ├── config/receptor/   # ingress endpoint configs (A and B)
 ├── pki/               # certificate tooling: CA, node requests, signing
 ├── secrets/           # your issued bundles (gitignored; CA key stays offline)
-└── tests/             # the ten-minute lab + its 22-check verification suite
+└── tests/             # the ten-minute lab + its 24-check verification suite
 ```
 
 Want the reasoning behind the design — why the failover boundary sits where it
