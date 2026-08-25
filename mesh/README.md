@@ -225,10 +225,13 @@ Jobs are dispatched from inside the orchestrator container with `mesh-run`
 (the lab mounts it at `/usr/local/mesh/bin/mesh-run`; a `make mesh-run`
 shortcut is on the roadmap):
 
+Paths are container paths: with the production overlay your playbooks and
+inventory are mounted under `/configs`, same as direct runs:
+
 ```bash
 /usr/local/mesh/bin/mesh-run --node exec-dmz-a \
-                             --playbook site.yml \
-                             --inventory inventory/dmz.ini \
+                             --playbook /configs/playbooks/site.yml \
+                             --inventory /configs/inventory/dmz.ini \
                              [--ssh-key /path/to/key]
 ```
 
