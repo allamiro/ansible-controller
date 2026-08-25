@@ -278,19 +278,20 @@ risk column; anything that touches it must pass [§9.1](#91-non-disruption-check
 ## 7. To-do checklist
 
 ### Phase 0 — SSH hardening (independent, can ship first)
-- [ ] Add a managed `known_hosts` mechanism + `StrictHostKeyChecking=yes` path
-- [ ] Clearly label the existing lax settings as **dev-only** override
-- [ ] Document; do **not** change the current default (flip only at a major bump)
+- [x] Add a managed `known_hosts` mechanism + `StrictHostKeyChecking=yes` path
+      (configs/ansible.cfg documents `/configs/known_hosts` + strict/accept-new)
+- [x] Clearly label the existing lax settings as **dev-only** override
+- [x] Document; do **not** change the current default (flip only at a major bump)
 
 ### Phase 1 — mesh build scaffold (controller Dockerfile untouched)
-- [ ] Add `docker/mesh/Dockerfile` with `ARG BASE` and `orchestrator`/`execution-node` targets `FROM ${BASE}`
-- [ ] Leave `docker/Dockerfile` unchanged; confirm the default (no-target) build is still the controller
-- [ ] Prove controller image smoke + Trivy = 0 on amd64 **and** arm64 (unchanged)
+- [x] Add `docker/mesh/Dockerfile` with `ARG BASE` and `orchestrator`/`execution-node` targets `FROM ${BASE}`
+- [x] Leave `docker/Dockerfile` unchanged; confirm the default (no-target) build is still the controller
+- [x] Prove controller image smoke + Trivy = 0 on amd64 **and** arm64 (unchanged)
 
 ### Phase 2 — orchestrator image (separate, FROM controller)
-- [ ] `orchestrator` target = `FROM ${BASE}` + `pip install ansible-runner receptorctl`
-- [ ] Build only via explicit `--target orchestrator`; the published controller is never rebuilt
-- [ ] `orchestrator` scan 0; controller digest unchanged
+- [x] `orchestrator` target = `FROM ${BASE}` + `pip install ansible-runner receptorctl`
+- [x] Build only via explicit `--target orchestrator`; the published controller is never rebuilt
+- [x] `orchestrator` scan 0; controller digest unchanged
 
 ### Phase 3 — controller receptor sidecar
 - [x] `mesh/config/receptor/controller.yml` (Unix control socket, no TCP control)
