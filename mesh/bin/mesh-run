@@ -740,6 +740,13 @@ done
 # was killed or the play failed: control must reach the rc-file check so a
 # broken stream is recorded as results-incomplete, not swallowed as an exit.
 rc=0; wait "$results_pid" 2>/dev/null || rc=$?
+# The pipeline is reaped: clear its pid/pgid so the EXIT trap (finalize) cannot
+# signal them during the cleanup that follows. Artifact export + meta write take
+# an arbitrary time, and on a busy host the kernel could recycle this pid — even
+# onto another mesh-run's setsid pipeline — before finalize runs; signalling the
+# stale pgid would then kill an unrelated job. Only an exit BEFORE this point
+# (an interrupt mid-stream, where the pid is still live and ours) should kill.
+results_pid= results_target=
 
 # The Processor treats a poisoned/empty stream as status=error but still exits
 # 0, so "rc==0" alone cannot be trusted: require the artifacts' own rc file,
