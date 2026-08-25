@@ -7,4 +7,12 @@
 # provider" does, on every python start in this image) corrupts the stream and
 # the controller-side `ansible-runner process` reports an error status with no
 # events. Divert stderr to the node's log; stdout carries only protocol lines.
-exec ansible-runner worker "$@" 2>>/var/lib/receptor/worker-stderr.log
+#
+# The log is size-capped: truncated whenever it exceeds ~1 MiB, so it cannot
+# grow without bound across jobs (concurrent workers append atomically via
+# O_APPEND; the cap bounds size, it is not a rotation scheme).
+log=/var/lib/receptor/worker-stderr.log
+if [ -f "$log" ] && [ "$(stat -c %s "$log" 2>/dev/null || echo 0)" -gt 1048576 ]; then
+  : > "$log"
+fi
+exec ansible-runner worker "$@" 2>>"$log"

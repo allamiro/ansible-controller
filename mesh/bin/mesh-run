@@ -44,8 +44,14 @@ case "$NODE" in *[!A-Za-z0-9._-]*) die "--node '$NODE' invalid";; esac
 JOB_ID=$(cat /proc/sys/kernel/random/uuid)
 PDD="$JOBS_DIR/$JOB_ID"
 mkdir -p "$PDD/project" "$PDD/inventory" "$PDD/env"
-cp "$PLAYBOOK" "$PDD/project/"
-cp "$INVENTORY" "$PDD/inventory/hosts"
+# The playbook's DIRECTORY is the project root: roles/, templates/, files/ and
+# task includes resolve relative to the playbook, so staging the lone YAML file
+# would strand those dependencies on the controller and fail on the node.
+cp -a "$(dirname "$(readlink -f "$PLAYBOOK")")/." "$PDD/project/"
+# Keep the inventory's basename: YAML inventory plugins verify by filename
+# suffix (e.g. *.aws_ec2.yml), so renaming to "hosts" would reject valid
+# plugin inventories after staging.
+cp "$INVENTORY" "$PDD/inventory/$(basename "$INVENTORY")"
 if [ -n "$SSH_KEY" ]; then
   [ -f "$SSH_KEY" ] || die "--ssh-key '$SSH_KEY' not found"
   # env/ssh_key is loaded into a per-job ssh-agent by the runner ON THE NODE and
@@ -63,17 +69,28 @@ meta() {
 }
 meta created
 
-# (6) transmit -> submit. The payload streams straight through; receptorctl
-# prints "Unit ID: <id>" on success. A failure here is DEFINITIVELY
-# pre-execution (nothing left this host), so exiting is safe — but only here:
-# past this point the unit may be running, and it is never resubmitted.
+# DEFINITIVELY-pre-submit gate (plan §2.4): a node absent from receptorctl
+# status has provably received nothing, so failing here may honestly say
+# "nothing was executed" — this is the only place that claim is allowed.
+mesh_status=$(receptorctl --socket "$SOCKET" status 2>/dev/null) \
+  || { meta submit-failed-pre; die "cannot query receptor status (nothing was executed)"; }
+grep -q "^${NODE} " <<<"$mesh_status" || grep -qw "${NODE}" <<<"$mesh_status" \
+  || { meta submit-failed-pre; die "node '$NODE' is not in the mesh (nothing was executed)"; }
+
+# (6) transmit -> submit. receptorctl prints "Unit ID: <id>" on success. Past
+# this point failures are AMBIGUOUS: the request may have reached the node and
+# the unit may be running even though the response was lost. Per the failover
+# boundary (plan §2.4), an ambiguous failure is recorded as such and is NEVER
+# treated as "nothing ran" — and this dispatcher never resubmits anywhere.
 meta submitting
 submit_out=$(ansible-runner transmit "$PDD" -p "$(basename "$PLAYBOOK")" 2>/dev/null \
   | receptorctl --socket "$SOCKET" work submit ansible-runner \
       --node "$NODE" --payload -) \
-  || { meta submit-failed; die "work submit to '$NODE' failed (nothing was executed)"; }
+  || { meta submit-ambiguous; die "work submit to '$NODE' failed AFTER the attempt left this host — \
+the unit MAY BE RUNNING; check 'receptorctl work list' before re-running (job=$JOB_ID)"; }
 UNIT_ID=$(awk '/^Unit ID:/ {print $3}' <<<"$submit_out")
-[ -n "$UNIT_ID" ] || { meta submit-failed; die "no unit id in submit output: $submit_out"; }
+[ -n "$UNIT_ID" ] || { meta submit-ambiguous; die "no unit id in submit output — state unknown, \
+check 'receptorctl work list' before re-running: $submit_out"; }
 meta running
 
 # (7)(8) stream results -> process. ansible-runner process replays the play

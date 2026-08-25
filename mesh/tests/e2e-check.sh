@@ -106,10 +106,12 @@ art=$(docker exec mesh-e2e-orchestrator bash -euc "
   so=\$(find \$pdd/artifacts -name stdout -type f | wc -l)
   echo \"rc=\$rc events=\$ev stdout=\$so\"") \
   || fail "could not inspect artifacts for job $job_id"
-case "$art" in
-  "rc=0 events="*) [ "${art#*stdout=}" != 0 ] && pass "artifacts complete ($art)" || fail "no stdout artifact ($art)";;
-  *) fail "unexpected artifacts state: $art";;
-esac
+ev_n=$(sed -n 's/.*events=\([0-9]*\).*/\1/p' <<<"$art")
+so_n=$(sed -n 's/.*stdout=\([0-9]*\).*/\1/p' <<<"$art")
+case "$art" in "rc=0 "*) ;; *) fail "unexpected artifacts state: $art";; esac
+[ -n "$ev_n" ] && [ "$ev_n" -gt 0 ] || fail "no job_events came back ($art)"
+[ -n "$so_n" ] && [ "$so_n" -gt 0 ] || fail "no stdout artifact ($art)"
+pass "artifacts complete ($art)"
 
 echo "== 12. per-job meta.json records the lifecycle =="
 meta=$(docker exec mesh-e2e-orchestrator cat /var/lib/mesh/jobs/$job_id/meta.json 2>/dev/null) \
@@ -119,12 +121,18 @@ grep -q '"status":"succeeded"' <<<"$meta" && grep -q '"node":"exec-e2e-a"' <<<"$
   || fail "meta.json wrong: $meta"
 
 echo "== 13. a failing playbook propagates its real rc back =="
-if docker exec mesh-e2e-orchestrator /usr/local/mesh/bin/mesh-run \
+# Fail CLOSED: a probe-level error (container down, mesh-run's own die()) must
+# not impersonate rc propagation. Proof requires mesh-run's completion line —
+# printed only after a full round-trip — carrying a nonzero artifact rc.
+fail_out=$(docker exec mesh-e2e-orchestrator /usr/local/mesh/bin/mesh-run \
     --node exec-e2e-a --playbook /mesh-playbooks/mesh-fail.yml \
-    --inventory /tmp/e2e-inv --ssh-key /e2e-ssh/id_ed25519 >/dev/null 2>&1; then
+    --inventory /tmp/e2e-inv --ssh-key /e2e-ssh/id_ed25519 2>&1) && \
   fail "mesh-run returned 0 for a playbook that must fail"
+fail_rc=$(grep -o "mesh-run: job=.* rc=[0-9]*" <<<"$fail_out" | sed -n "s/.*rc=\([0-9]*\).*/\1/p")
+if [ -n "$fail_rc" ] && [ "$fail_rc" -ne 0 ]; then
+  pass "failing playbook completed the round-trip with rc=$fail_rc"
 else
-  pass "failing playbook returned nonzero rc across the mesh"
+  fail "no completed round-trip with nonzero rc; output tail: $(tail -2 <<<"$fail_out")"
 fi
 
 echo "All mesh e2e regression checks passed."

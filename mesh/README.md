@@ -306,7 +306,7 @@ risk column; anything that touches it must pass [§9.1](#91-non-disruption-check
       stage when upstream ships one
 - [x] Override the inherited port-22 `HEALTHCHECK` with a Receptor-readiness check (node runs receptor, not sshd; runs as uid 1000)
 - [x] `docker/mesh/node-entrypoint.sh` (render node config from env; peers is a LIST — Tier 1 ready)
-- [x] `mesh/tests/` multi‑network **e2e integration environment** (controller cannot reach targets) — 8-property regression suite (`e2e-check.sh`), run by Mesh CI on every mesh change
+- [x] `mesh/tests/` multi‑network **e2e integration environment** (controller cannot reach targets) — regression suite (`e2e-check.sh`; 13 properties as of Phase 5), run by Mesh CI on every mesh change
 - [x] **No‑TLS** peering confined to the e2e environment (never in a production compose file)
 
 ### Phase 5 — prove distributed execution
