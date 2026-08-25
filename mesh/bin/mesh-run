@@ -70,6 +70,13 @@ fi
 # it as the project-root ansible.cfg, which ansible loads from the runner's
 # cwd. A cfg already present in the playbook's own directory wins — refusing to
 # overwrite it beats silently changing a project's declared behaviour.
+#
+# Absolute paths INSIDE the cfg (a known_hosts under ssh_args, vault password
+# files, ...) are a contract with the NODE's environment, not stageable per
+# job: this dispatcher cannot know which referenced files are secrets, nor
+# rewrite the cfg's paths safely. Provision such files on the node (or its
+# site image) at the paths the cfg names — the same rule as runtime Python
+# deps. Phase 6/7 bring the mesh's own host-key and credential handling.
 # Galaxy content installed at runtime (configs/requirements.yml ->
 # /configs/.galaxy) lives only on the controller; the node cannot resolve it.
 # --galaxy-dir stages that directory's roles/ and collections/ into the project

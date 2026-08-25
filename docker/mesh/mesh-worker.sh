@@ -21,8 +21,13 @@
 # of ≤16 MiB retained plus ≤1 MiB per concurrently running worker — and any
 # noise the pruning itself makes lands in this worker's own log, not the
 # stream.
-log="/var/lib/receptor/worker-$$-$(date +%s).log"
-exec 2> >(tail -c 1048576 > "$log")
+# ${EPOCHSECONDS} is a bash builtin: no subprocess runs before the diversion,
+# so nothing (not even a failing date) can print to the undiverted stderr. The
+# sink itself is also failure-proof: tail's own errors are discarded and a cat
+# fallback keeps consuming, so an unopenable log file can neither corrupt the
+# stream nor EPIPE-kill the worker.
+log="/var/lib/receptor/worker-$$-${EPOCHSECONDS}.log"
+exec 2> >(tail -c 1048576 2>/dev/null > "$log" || cat > /dev/null 2>&1)
 
 ls -t /var/lib/receptor/worker-*.log 2>/dev/null | tail -n +17 | xargs -r rm -f --
 
