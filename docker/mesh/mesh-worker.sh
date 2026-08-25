@@ -38,18 +38,39 @@ ls -t /var/lib/receptor/worker-*.log 2>/dev/null | grep -Fxv "$log" | tail -n +1
 # NOT exec: the worker owns credential cleanup (mesh plan Phase 7). The
 # transmitted PDD can carry env/ssh_key, and the unit directory persists on
 # this node until the controller releases it — which never happens when a
-# submit went ambiguous or the results stream broke. Destroying the key right
-# after execution makes cleanup independent of controller connectivity; the
+# submit went ambiguous or the results stream broke. Destroying the key when
+# the runner ends makes cleanup independent of controller connectivity; the
 # eventual release then removes an already-credential-free unit dir. receptor
 # runs this command inside the unit dir, so the search is scoped to it. Every
 # step is failure-proof: cleanup must never rewrite the runner's exit code.
+#
+# The fallback must be PER FILE, inside the -exec action: find exits 0 after
+# an error-free traversal even when the exec'd command failed, so a chained
+# second find would never run and a failed shred (ENOSPC on CoW, missing
+# shred) would strand the key.
+cleanup_creds() {
+  find . -type f -path '*/env/ssh_key' \
+    -exec sh -c 'shred -u -- "$1" 2>/dev/null || rm -f -- "$1"' _ {} \; \
+    2>/dev/null || true
+}
+
+# Signal-safe: a node/receptor restart TERMs this wrapper mid-run. The runner
+# runs as a tracked child so the signal is forwarded (it would otherwise be
+# orphaned — receptor signals the wrapper, not the process group), its exit
+# is collected, and the key is destroyed BEFORE the wrapper dies. The EXIT
+# trap covers the normal path with the same cleanup.
 rc=0
-ansible-runner worker "$@" || rc=$?
-# Fallback must be PER FILE, inside the -exec action: find exits 0 after an
-# error-free traversal even when the exec'd command failed, so chaining a
-# second find behind `||` would never run and a failed shred (ENOSPC on CoW,
-# missing shred) would strand the key.
-find . -type f -path '*/env/ssh_key' \
-  -exec sh -c 'shred -u -- "$1" 2>/dev/null || rm -f -- "$1"' _ {} \; \
-  2>/dev/null || true
+ansible-runner worker "$@" &
+runner_pid=$!
+on_signal() {
+  kill -"$1" "$runner_pid" 2>/dev/null || true
+  wait "$runner_pid" 2>/dev/null; rc=$?
+  cleanup_creds
+  trap - "$1" EXIT
+  exit "$rc"
+}
+trap 'on_signal TERM' TERM
+trap 'on_signal INT'  INT
+trap cleanup_creds EXIT
+wait "$runner_pid" || rc=$?
 exit "$rc"
