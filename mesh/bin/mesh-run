@@ -96,16 +96,25 @@ PDD="$JOBS_DIR/$JOB_ID"
 # restored: a cleanup failure (say the jobs filesystem went read-only) warns
 # but must never replace the playbook's exit code — the same
 # never-corrupt-the-result rule the artifact export follows.
-cleanup_key() {
+finalize() {
   local st=$?
   if [ -n "$SSH_KEY" ] && [ -f "$PDD/env/ssh_key" ]; then
     shred -u "$PDD/env/ssh_key" 2>/dev/null \
       || rm -f "$PDD/env/ssh_key" 2>/dev/null \
       || echo "mesh-run: warning: could not remove transient key copy $PDD/env/ssh_key" >&2
   fi
+  # The lifecycle record reaches the host-visible log tree on EVERY terminal
+  # path, not just completed round-trips: submit-ambiguous and
+  # results-incomplete are exactly the states where an operator needs the
+  # record to decide whether re-running is safe.
+  if [ -n "$LOG_DIR" ] && [ -f "$PDD/meta.json" ]; then
+    { mkdir -p "$LOG_DIR/$JOB_ID" \
+        && cp "$PDD/meta.json" "$LOG_DIR/$JOB_ID/meta.json"; } 2>/dev/null \
+      || echo "mesh-run: warning: could not export meta.json to '$LOG_DIR/$JOB_ID'; the record remains at $PDD/meta.json" >&2
+  fi
   return "$st"
 }
-trap cleanup_key EXIT
+trap finalize EXIT
 # The playbook is resolved through symlinks ONCE, and that resolved name is
 # used for both staging and execution — staging the target directory while
 # telling the runner to execute the symlink's basename would fail when the
@@ -305,7 +314,7 @@ if [ -n "$LOG_DIR" ]; then
     if [ -d "$art_dir/job_events" ]; then
       cp -a "$art_dir/job_events" "$LOG_DIR/$JOB_ID/" 2>/dev/null || export_ok=0
     fi
-    cp "$PDD/meta.json" "$LOG_DIR/$JOB_ID/meta.json" 2>/dev/null || export_ok=0
+    # meta.json itself is exported by the EXIT trap on every terminal path.
   else
     export_ok=0
   fi
