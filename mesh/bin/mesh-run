@@ -85,11 +85,13 @@ PDD="$JOBS_DIR/$JOB_ID"
 # Credential hygiene (plan Phase 7): the staged key copy exists only for the
 # transmit stream. Whatever path this dispatcher exits by — success, pre-gate
 # refusal, ambiguous submit, broken results stream — the transient copy is
-# destroyed; artifacts and meta.json are kept, the secret is not. shred beats
-# rm here because the jobs dir may live on a bind mount whose backing store
-# an operator later images/copies. NEVER enable xtrace in this script and
-# never echo the key path's contents — the no-log guarantee is part of the
-# contract.
+# removed; artifacts and meta.json are kept, the secret is not. shred adds a
+# best-effort overwrite before unlinking, but on CoW/journaled/flash storage
+# (overlayfs, btrfs, most SSDs) old blocks can survive an overwrite — the
+# guarantees that actually hold everywhere are the 0600/0700 scoping from
+# birth and prompt removal; put --jobs-dir on a tmpfs when the storage below
+# it gets imaged or snapshotted. NEVER enable xtrace in this script and never
+# echo the key path's contents — the no-log guarantee is part of the contract.
 cleanup_key() {
   if [ -n "$SSH_KEY" ] && [ -f "$PDD/env/ssh_key" ]; then
     shred -u "$PDD/env/ssh_key" 2>/dev/null || rm -f "$PDD/env/ssh_key"
@@ -279,17 +281,25 @@ if [ "$rc" -eq 0 ]; then meta succeeded; else meta "failed rc=$rc"; fi
 # non-fatal: the round-trip SUCCEEDED by this point, and a read-only/absent
 # log tree must not convert a completed job into a failure. env/ (credentials)
 # is never part of the export.
+# Every individual copy is failure-tolerant: under set -e a bare cp dying
+# mid-export (disk full, quota) would override the playbook's exit code —
+# the one thing this script promises never to do.
 if [ -n "$LOG_DIR" ]; then
   art_dir=$(dirname "$art_rc_file")
+  export_ok=1
   if mkdir -p "$LOG_DIR/$JOB_ID" 2>/dev/null; then
     for f in stdout rc status; do
-      [ -f "$art_dir/$f" ] && cp "$art_dir/$f" "$LOG_DIR/$JOB_ID/$f" 2>/dev/null
+      [ -f "$art_dir/$f" ] || continue
+      cp "$art_dir/$f" "$LOG_DIR/$JOB_ID/$f" 2>/dev/null || export_ok=0
     done
-    [ -d "$art_dir/job_events" ] && cp -a "$art_dir/job_events" "$LOG_DIR/$JOB_ID/" 2>/dev/null
-    cp "$PDD/meta.json" "$LOG_DIR/$JOB_ID/meta.json" 2>/dev/null || true
+    if [ -d "$art_dir/job_events" ]; then
+      cp -a "$art_dir/job_events" "$LOG_DIR/$JOB_ID/" 2>/dev/null || export_ok=0
+    fi
+    cp "$PDD/meta.json" "$LOG_DIR/$JOB_ID/meta.json" 2>/dev/null || export_ok=0
   else
-    echo "mesh-run: warning: log dir '$LOG_DIR' not writable; artifacts remain at $PDD/artifacts" >&2
+    export_ok=0
   fi
+  [ "$export_ok" = 1 ] || echo "mesh-run: warning: artifact export to '$LOG_DIR/$JOB_ID' incomplete; authoritative copies remain at $PDD/artifacts" >&2
 fi
 
 echo "mesh-run: job=$JOB_ID node=$NODE unit=$UNIT_ID rc=$rc artifacts=$PDD/artifacts" >&2

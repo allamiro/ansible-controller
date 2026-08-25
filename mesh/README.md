@@ -245,15 +245,17 @@ What you get back:
   `/var/lib/mesh/jobs/<uuid>/` (override with `--jobs-dir`) containing the
   full stdout, the per-task event log, and a `meta.json` describing the run
   with timestamped status transitions. Concurrent jobs never collide.
-- **Artifacts on the host** — the operator-facing set (stdout, `rc`,
+- **Artifacts on the host** — the operator-facing set (stdout, `rc`, `status`,
   `job_events/`, final `meta.json`) is also copied to
   `/var/log/ansible/runner/<uuid>/`, which the compose setup exposes on the
   host as `logs/runner/<uuid>/` — read results without entering a container.
 - **Credential hygiene** — a key passed with `--ssh-key` travels only inside
   the encrypted mesh stream, is never logged or placed in an environment
-  variable, and every transient copy is destroyed when the job ends (the
-  controller-side copy is shredded; the node-side copy lives in the work
-  unit's directory, which is deleted on release).
+  variable, and every transient copy is removed when the job ends (the
+  controller-side copy gets a best-effort overwrite before deletion — note
+  that overwrite guarantees don't hold on CoW/flash storage, so point
+  `--jobs-dir` at a tmpfs if the disk below it gets imaged; the node-side
+  copy lives in the work unit's directory, which is deleted on release).
 
 **A job never runs twice.** If a submission provably failed to leave the
 control host, it can be retried elsewhere — but once a node has (or even *may*

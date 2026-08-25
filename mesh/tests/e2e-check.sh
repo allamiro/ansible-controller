@@ -330,7 +330,7 @@ log_state=$(docker exec mesh-e2e-orchestrator bash -euc "
   d=/var/log/ansible/runner/$job_id
   [ -f \"\$d/rc\" ] && [ -f \"\$d/stdout\" ] || { echo missing-core; exit 0; }
   ev=\$(find \"\$d/job_events\" -name '*.json' 2>/dev/null | wc -l)
-  st=\$(python3 -c \"import json; print(json.load(open('\$d/meta.json')).get('status',''))\" 2>/dev/null || echo unreadable)
+  st=\$(python3 -c \"import json; print(json.load(open('\$d/meta.json')).get('status',''))\" 2>&1) || st=\"unreadable: \$(tail -1 <<<\"\$st\")\"
   echo \"rc=\$(cat \"\$d/rc\") events=\$ev meta=\$st\"")
 case "$log_state" in
   "rc=0 events="*)
