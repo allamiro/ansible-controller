@@ -481,7 +481,7 @@ unsigned_out=$(docker exec mesh-e2e-orchestrator bash -euc '
   verdict=pending st=
   deadline=$((SECONDS + 30))
   while [ $SECONDS -lt $deadline ]; do
-    st=$(receptorctl --socket /run/receptor/receptor.sock work status "$unit" 2>&1 || true)
+    st=$(receptorctl --socket /run/receptor/receptor.sock work list --unit_id "$unit" 2>&1 || true)
     if grep -qiE "Failed|Succeeded|Rejected|Error" <<<"$st"; then
       if grep -qiE "sign|verif" <<<"$st"; then verdict=refused; else verdict=terminal-unsigned-gap; fi
       break
@@ -544,5 +544,61 @@ grep -q "EXECUTED-ON=${b_host} " <<<"$b_out" \
 node_down=$(node_compose down 2>&1) \
   && pass "packaged node torn down with the same file" \
   || fail "compose.node.yml down failed: $(tail -3 <<<"$node_down")"
+
+echo "== 27. a node that DIED is never hung on: skipped pre-submit, or the watchdog aborts (issue #77) =="
+# Two independent guards, one property: mesh-run must TERMINATE on a dead node,
+# never block forever. (a) routable_via reads the ROUTE table, not the Known
+# Node table (which keeps a disconnected node listed) — so a node that has
+# died is skipped pre-submit; (b) if a node dies AFTER submit, a liveness
+# watchdog stops the results stream. Stop the suite's node and dispatch to it
+# under a hard timeout: a regression (submit-then-block) trips the timeout and
+# fails. MESH_RESULTS_GRACE is shortened so the watchdog path, if taken, is
+# quick. Fail CLOSED: an unrecognised outcome fails.
+docker stop mesh-e2e-node-a >/dev/null || fail "could not stop the execution node"
+dead_start=$SECONDS
+# `|| dead_rc=$?` (not a bare assignment) so mesh-run's expected nonzero exit on
+# a dead node does not trip `set -e` before the outcome is judged. A hard timeout
+# bounds a regression: coreutils `timeout` exits 124, the macOS perl-shim (top of
+# this file) exits 142 on SIGALRM — both mean "hung".
+dead_rc=0
+dead_out=$(timeout 90 docker exec \
+  -e MESH_RESULTS_GRACE=10 -e MESH_RESULTS_POLL=3 \
+  mesh-e2e-orchestrator /usr/local/mesh/bin/mesh-run \
+    --node exec-e2e-a --playbook /mesh-playbooks/mesh-ping.yml \
+    --inventory /tmp/e2e-inv --ssh-key /e2e-ssh/id_ed25519 2>&1) || dead_rc=$?
+docker start mesh-e2e-node-a >/dev/null || fail "could not restart the execution node"
+case $dead_rc in
+  124|142) fail "mesh-run HUNG on a dead node (submitted, then blocked in work results) — issue #77 regressed";;
+  0)       fail "mesh-run reported SUCCESS dispatching to a stopped node: $(tail -1 <<<"$dead_out")";;
+esac
+if grep -qiE "not routable|not selectable|nothing was executed" <<<"$dead_out"; then
+  pass "dead node skipped pre-submit; failed fast in $((SECONDS - dead_start))s, nothing executed"
+elif grep -qiE "results stream did not complete|unroutable for" <<<"$dead_out"; then
+  pass "dead node's stream aborted by the liveness watchdog in $((SECONDS - dead_start))s (never hung)"
+else
+  fail "unexpected outcome on a dead node (rc=$dead_rc): $(tail -2 <<<"$dead_out")"
+fi
+# The node must re-join before the suite ends (a local re-run reuses this env).
+deadline=$((SECONDS + 60)); rejoined=0
+while [ $SECONDS -lt $deadline ]; do
+  st=$(docker exec mesh-e2e-receptor receptorctl --socket /run/receptor/receptor.sock status 2>/dev/null || true)
+  if grep -q 'exec-e2e-a' <<<"$st"; then rejoined=1; break; fi
+  sleep 3
+done
+[ "$rejoined" = 1 ] && pass "execution node re-joined after restart" \
+  || fail "execution node did not re-join within 60s of restart"
+# If the watchdog path ran it left a results-incomplete unit + .hold marker;
+# clear both so the environment is clean for a re-run. `work list` emits JSON by
+# default (an empty mesh is the literal {}), so json.load parses it directly;
+# the whole block is best-effort (2>/dev/null, || true), so even a future output
+# change only skips the unit sweep and still removes the .hold markers below.
+docker exec mesh-e2e-orchestrator sh -c '
+  for u in $(receptorctl --socket /run/receptor/receptor.sock work list 2>/dev/null \
+             | python3 -c "import sys,json;[print(k) for k in json.load(sys.stdin)]" 2>/dev/null); do
+    receptorctl --socket /run/receptor/receptor.sock work cancel "$u" >/dev/null 2>&1 || true
+    receptorctl --socket /run/receptor/receptor.sock work release "$u" >/dev/null 2>&1 || true
+  done
+  rm -f /var/lib/mesh/slots/*/slot.*.hold 2>/dev/null || true
+' || true
 
 echo "All mesh e2e regression checks passed."

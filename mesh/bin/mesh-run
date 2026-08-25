@@ -253,12 +253,40 @@ for cand in "${socket_list[@]}"; do
 done
 [ ${#LIVE_SOCKETS[@]} -gt 0 ] || die "no live receptor control socket among: $SOCKETS"
 
+# True iff node $1 is a DESTINATION in the Route table of receptor `status`
+# text $2. Reachability must be read from the Route table, not by matching the
+# node name anywhere in `status`: the Known Node table keeps a DISCONNECTED
+# node listed (column 1), so the old anywhere-match selected a node that had
+# already died, submitted to it, and then blocked forever in `work results`
+# (the node never starts the unit). A node drops out of the Route table within
+# seconds of losing its last connection; one that never connected is absent
+# from both tables, so the phantom-candidate test (check 23) is unaffected.
+route_has() {
+  awk -v n="$1" '
+    /^Route[[:space:]]+Via[[:space:]]*$/ { inroute = 1; next }
+    inroute && NF == 0                   { inroute = 0 }
+    inroute && $1 == n                   { found = 1 }
+    END { exit !found }
+  ' <<<"$2"
+}
+
 routable_via() {
   local n="$1" s
   for s in "${LIVE_SOCKETS[@]}"; do
-    if awk -v n="$n" '$1 == n { found = 1 } END { exit !found }' <<<"${SOCK_ST[$s]}"; then
+    if route_has "$n" "${SOCK_ST[$s]}"; then
       printf '%s\n' "$s"; return 0
     fi
+  done
+  return 1
+}
+
+# The watchdog re-queries (the SOCK_ST snapshot is from selection time); a node
+# is live only while it is routable via at least one CURRENTLY-answering ingress.
+node_routable_live() {
+  local n="$1" s st
+  for s in "${LIVE_SOCKETS[@]}"; do
+    st=$(receptorctl --socket "$s" status 2>/dev/null) || continue
+    route_has "$n" "$st" && return 0
   done
   return 1
 }
@@ -649,9 +677,55 @@ persist_slot_hold || true
 # job_events/), and exits with the PLAYBOOK's rc. The unit is released
 # explicitly only AFTER results were fully fetched — `submit --rm` could
 # release it before retrieval.
+# The stream runs in the BACKGROUND for two reasons: a trapped TERM/INT then
+# interrupts the `wait` (a foreground blocking pipeline defers the trap, so
+# `make mesh-run` could not be stopped and finalize was skipped), and a
+# watchdog can stop it. If the node stops being routable via EVERY live ingress
+# and stays gone past a grace period (nodes redial in ~10s, so a brief blip or
+# a single-ingress restart never trips it), the stream can never complete —
+# stop waiting and fall through to the results-incomplete path below rather
+# than blocking forever. The node's true outcome is unknown either way; the
+# .hold marker keeps its slot and nothing is ever re-sent.
+# The pipeline runs in its OWN process group (setsid) so the watchdog can
+# terminate the WHOLE pipeline — receptorctl AND ansible-runner — not just a
+# wrapper shell. Orphaned children would otherwise keep running AND keep the
+# INHERITED slot-lock fd open, holding a capped node at capacity even after an
+# operator clears the .hold marker. (Fallback without setsid: TERM the subshell;
+# its children still exit when the ingress tears the stream down, just less
+# promptly.) Backgrounding also lets a trapped TERM/INT interrupt the wait, so
+# `make mesh-run` is interruptible and finalize is not skipped.
 rc=0
-receptorctl --socket "$SOCKET" work results "$UNIT_ID" 2>/dev/null \
-  | ansible-runner process "$PDD" || rc=$?
+if command -v setsid >/dev/null 2>&1; then
+  setsid sh -c 'receptorctl --socket "$1" work results "$2" 2>/dev/null | ansible-runner process "$3"' \
+    _ "$SOCKET" "$UNIT_ID" "$PDD" & results_pid=$!; results_target="-$results_pid"
+else
+  ( receptorctl --socket "$SOCKET" work results "$UNIT_ID" 2>/dev/null \
+      | ansible-runner process "$PDD" ) & results_pid=$!; results_target="$results_pid"
+fi
+grace="${MESH_RESULTS_GRACE:-30}" gone_since=
+while kill -0 "$results_pid" 2>/dev/null; do
+  sleep "${MESH_RESULTS_POLL:-5}"
+  kill -0 "$results_pid" 2>/dev/null || break
+  if node_routable_live "$NODE"; then gone_since=; continue; fi
+  gone_since="${gone_since:-$SECONDS}"
+  if [ $((SECONDS - gone_since)) -ge "$grace" ]; then
+    echo "mesh-run: node '$NODE' unroutable for >${grace}s during result streaming;" \
+         "stopping the stream (unit=$UNIT_ID may still be running on it)" >&2
+    # Whole group: TERM, a moment to unwind, then KILL. "$results_target" is
+    # the negative pgid under setsid (kills receptorctl + ansible-runner too),
+    # or the subshell pid in the fallback.
+    kill -TERM "$results_target" 2>/dev/null || true
+    sleep 2
+    kill -KILL "$results_target" 2>/dev/null || true
+    break
+  fi
+done
+# One wait reaps the pipeline whether it finished on its own or was killed; its
+# status is only a hint — the artifacts' own rc file below is the real gate.
+# `|| rc=$?` (not `; rc=$?`) so `set -e` does not exit here when the pipeline
+# was killed or the play failed: control must reach the rc-file check so a
+# broken stream is recorded as results-incomplete, not swallowed as an exit.
+rc=0; wait "$results_pid" 2>/dev/null || rc=$?
 
 # The Processor treats a poisoned/empty stream as status=error but still exits
 # 0, so "rc==0" alone cannot be trusted: require the artifacts' own rc file,
@@ -662,8 +736,8 @@ if [ -z "$art_rc_file" ]; then
   # well still be running to completion on the node. The status says exactly
   # that, so a history reader does not mistake a dropped connection for a
   # playbook failure (and nobody "retries" a possibly-succeeding job).
-  meta results-incomplete "no rc artifact returned; the unit was acknowledged and may still be running — check 'receptorctl work status $UNIT_ID'"
-  die "results stream did not complete — the job MAY STILL BE RUNNING on '$NODE' (unit=$UNIT_ID); check 'receptorctl work status $UNIT_ID'; its concurrency slot stays reserved via ${SLOT_FILE:+$SLOT_FILE.hold}${SLOT_FILE:- (node uncapped)}"
+  meta results-incomplete "no rc artifact returned; the unit was acknowledged and may still be running — check 'receptorctl work list --unit_id $UNIT_ID'"
+  die "results stream did not complete — the job MAY STILL BE RUNNING on '$NODE' (unit=$UNIT_ID); check 'receptorctl work list --unit_id $UNIT_ID'; its concurrency slot stays reserved via ${SLOT_FILE:+$SLOT_FILE.hold}${SLOT_FILE:- (node uncapped)}"
 fi
 rc=$(cat "$art_rc_file")
 # The artifacts' own rc proves the unit ran to completion: the durable hold
