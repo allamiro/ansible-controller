@@ -257,19 +257,26 @@ docker run -d --rm --name mesh-e2e-probe --network "$E2E_NET" \
   -e RECEPTOR_TLS_CERT=/e2e-tls/tls.crt -e RECEPTOR_TLS_KEY=/e2e-tls/tls.key \
   -e RECEPTOR_TLS_CA=/e2e-tls/ca.crt ansible-execution-node:e2e >/dev/null \
   || { docker rm -f mesh-e2e-rogue-ingress >/dev/null 2>&1; fail "could not start the probe node"; }
-verdict=
+# Fail-closed by design: an unrecognised outcome FAILS. The diagnostics tell
+# the operator which way it went wrong — probe died, or receptor's log wording
+# changed — with the actual log tail, so a wording drift is a visible test
+# maintenance task rather than a silent mystery.
+verdict= plog=
 deadline=$((SECONDS + 30))
 while [ $SECONDS -lt $deadline ]; do
   plog=$(docker logs mesh-e2e-probe 2>&1 || true)
-  if grep -qiE "certificate signed by unknown authority|failed to verify certificate" <<<"$plog"; then verdict=refused; break; fi
+  if grep -qiE "certificate signed by unknown authority|failed to verify certificate|x509" <<<"$plog"; then verdict=refused; break; fi
   if grep -qi "Connection established" <<<"$plog"; then verdict=connected; break; fi
+  docker inspect --format '{{.State.Running}}' mesh-e2e-probe 2>/dev/null | grep -q true \
+    || { verdict=died; break; }
   sleep 2
 done
 docker rm -f mesh-e2e-probe mesh-e2e-rogue-ingress >/dev/null 2>&1 || true
 case "$verdict" in
   refused)   pass "node refused the unknown-CA controller (TLS verification error logged)";;
   connected) fail "node CONNECTED to an unknown-CA controller";;
-  *)         fail "probe produced neither a refusal nor a connection within 30s";;
+  died)      fail "probe node exited before producing a verdict; log tail: $(tail -2 <<<"$plog")";;
+  *)         fail "no refusal or connection within 30s (receptor log wording changed?); log tail: $(tail -2 <<<"$plog")";;
 esac
 
 echo "== 20. Tier-1 ingress failover (§9.7): stop sidecar A, dispatch through B =="
