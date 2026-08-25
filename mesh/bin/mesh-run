@@ -265,6 +265,35 @@ SLOT_FD= SLOT_FILE= DISPATCH_STATE=pre-submit
 # jointly overshoot the lower cap.
 slot_scan() {
   local node="$1" cap="$2" record="${3:-$2}" i f g gi eff max_occ hc
+  local capf="$SLOTS_DIR/$node.cap" recorded occupied=0 ceil
+
+  # The node's PERSISTED cap — written on every admission attempt, refused
+  # ones included, so an accepted reduction survives even when the reducing
+  # dispatch never got a slot (holders' recorded caps alone can't carry it:
+  # they drain away with their jobs). Rules, all under the admission lock:
+  # lowering (or first write) always sticks; raising — or clearing to
+  # uncapped — requires an IDLE node, so nothing admitted under the lower
+  # cap can be overshot while it still runs.
+  recorded=$(head -c 16 "$capf" 2>/dev/null | tr -d '[:space:]')
+  case "$recorded" in *[!0-9]*) recorded="";; esac
+  for g in "$SLOTS_DIR/$node".slot.*; do
+    [ -e "$g" ] || continue
+    case "$g" in *.hold) continue;; esac
+    if [ -e "$g.hold" ] || ! flock -n "$g" true 2>/dev/null; then occupied=1; break; fi
+  done
+  if [ -z "$recorded" ] || [ "$occupied" -eq 0 ]; then
+    printf '%s\n' "$record" > "$capf" 2>/dev/null || true
+    recorded="$record"
+  elif [ "$record" -gt 0 ] && { [ "$recorded" -eq 0 ] || [ "$record" -lt "$recorded" ]; }; then
+    printf '%s\n' "$record" > "$capf" 2>/dev/null || true
+    recorded="$record"
+  fi
+  # Ceiling from the persisted cap (0 = uncapped imposes none):
+  ceil="$cap"
+  if [ -n "$recorded" ] && [ "$recorded" -gt 0 ] && [ "$recorded" -lt "$ceil" ]; then
+    ceil="$recorded"
+  fi
+
   for ((i = 1; i <= cap; i++)); do
     f="$SLOTS_DIR/$node.slot.$i"
     # A .hold marker means a previous dispatch through this slot ended with
@@ -292,7 +321,7 @@ slot_scan() {
       # earlier rule that occupants above the effective cap mean "full".
       # Consequence, by design: a cap RAISE takes effect as in-flight jobs
       # started under the lower cap drain.
-      eff="$cap" max_occ=0
+      eff="$ceil" max_occ=0
       for g in "$SLOTS_DIR/$node".slot.*; do
         [ -e "$g" ] || continue
         case "$g" in *.hold) continue;; esac
