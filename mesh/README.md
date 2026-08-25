@@ -145,22 +145,24 @@ mesh/tests/e2e-check.sh                                         # the 20-propert
 mesh/tests/e2e-down.sh                                          # tear down (destroys the throwaway PKI)
 ```
 
-For a real deployment, the control plane comes up as a profile-gated overlay —
-`make up` alone never starts any of it:
+The lab is the complete distributed path end to end — its orchestrator
+dispatches real playbooks with `mesh-run` through mTLS to the execution node —
+and it is the **supported way to run the full path today**.
+
+For a production deployment, what ships today is the **control plane**: issue
+real identities with the [PKI scripts](#3-pki-workflow), then bring up the
+profile-gated overlay — `make up` alone never starts any of it:
 
 ```bash
 docker compose -f docker-compose.yml -f mesh/compose.mesh.yml --profile mesh up -d
 ```
 
-and jobs are dispatched from inside the orchestrator:
-
-```bash
-mesh-run --node exec-net20-a \
-         --playbook playbooks/ping.yml \
-         --inventory configs/inventory/hosts.ini
-```
-
-`make mesh-run` / `mesh-status` convenience targets land with plan Phase 10.
+That starts both receptor ingress sidecars (A and B) beside the controller and
+mounts the shared control socket. Dispatching from it additionally needs the
+`ansible-orchestrator` image in place of the stock controller (the stock image
+carries no `receptorctl`/`mesh-run`) and your execution nodes enrolled per
+[§3](#3-pki-workflow) — the packaged wiring for both, with `make mesh-run` /
+`mesh-status` targets, lands with plan Phases 8–10.
 
 ## 5. Testing
 

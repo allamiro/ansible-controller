@@ -328,8 +328,10 @@ Key properties:
 - **HA built in** — redundant receptor ingress sidecars with dispatcher
   failover (Tier 1), designed for active/active orchestrators later.
 - **Same supply chain** — the `ansible-orchestrator` and
-  `ansible-execution-node` images build `FROM` the controller's digest and
-  ship with the same multi-arch manifests, cosign signatures, and CVE gate:
+  `ansible-execution-node` images build `FROM` the controller's digest and are
+  published by the same release pipeline (mesh Phase 11): multi-arch
+  manifests, cosign signatures, and the CVE gate, on Docker Hub and GHCR
+  alike:
 
 ```bash
 docker pull ghcr.io/allamiro/ansible-orchestrator:latest

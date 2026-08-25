@@ -5,9 +5,9 @@
 > of record.
 
 > **Status: approved; landing one phase per PR.** This document describes how
-> distributed Ansible execution and control‑plane HA are added to this repository
+> distributed Ansible execution and control-plane HA are added to this repository
 > *without changing the existing controller image or its behaviour*. It remains
-> the design of record — the checklist in [§7](#7-todo-checklist) tracks what has
+> the design of record — the checklist in [§7](#7-to-do-checklist) tracks what has
 > actually shipped, and the phases still unticked are plan, not code.
 
 ---
@@ -21,27 +21,27 @@ Add a second execution path to the existing Ansible controller:
   **pools per zone**. The controller becomes an *orchestrator*; execution happens
   on the nodes, not on the controller.
 
-The mesh differentiates **local** targets (a directly‑reachable zone) from
+The mesh differentiates **local** targets (a directly-reachable zone) from
 **network** targets (segmented zones reachable only through a node), and provides
-HA at two independent layers: **execution‑node pools** and the **control plane**.
+HA at two independent layers: **execution-node pools** and the **control plane**.
 
 Built on **Receptor + Ansible Runner + mTLS** only. No web UI, REST API, database,
-message broker, or scheduler service — see [§11 Non‑goals](#11-explicitly-deferred--non-goals).
+message broker, or scheduler service — see [§11 Non-goals](#11-explicitly-deferred--non-goals).
 
 ---
 
-## 1. Non‑disruption guarantees (how the existing controller is protected)
+## 1. Non-disruption guarantees (how the existing controller is protected)
 
-These are load‑bearing. The existing controller must be provably unchanged until
+These are load-bearing. The existing controller must be provably unchanged until
 an operator opts in.
 
 | # | Guarantee | Enforced by |
 |---|-----------|-------------|
-| 1 | Root `docker-compose.yml`, `Makefile` direct targets, and the **controller image** stay identical | `docker/Dockerfile` is **untouched**; mesh images build from a separate `docker/mesh/Dockerfile` `FROM` the controller and never modify it; controller proven byte/scan‑identical (see [§9.1](#91-non-disruption-checks-run-every-mesh-pr)) |
-| 2 | `make up` / `make down` / `make run` behave exactly as today | Sidecar and nodes are **Compose‑profile‑gated** (`--profile mesh`); default `up` never starts them |
+| 1 | Root `docker-compose.yml`, `Makefile` direct targets, and the **controller image** stay identical | `docker/Dockerfile` is **untouched**; mesh images build from a separate `docker/mesh/Dockerfile` `FROM` the controller and never modify it; controller proven byte/scan-identical (see [§9.1](#91-non-disruption-checks-run-every-mesh-pr)) |
+| 2 | `make up` / `make down` / `make run` behave exactly as today | Sidecar and nodes are **Compose-profile-gated** (`--profile mesh`); default `up` never starts them |
 | 3 | The controller build context is unchanged | `mesh/` is excluded via `.dockerignore` |
 | 4 | The release pipeline (#54–#57: cosign, semver, Trivy gate) is untouched | Node/relay images are **not** added to `docker-publish.yml` until a deliberate later phase |
-| 5 | The CVE posture stays clean | Mesh images build `FROM` the controller, inheriting its pip‑vendor patch + pebble removal automatically; every mesh image is scanned by the same gate before it can publish |
+| 5 | The CVE posture stays clean | Mesh images build `FROM` the controller, inheriting its pip-vendor patch + pebble removal automatically; every mesh image is scanned by the same gate before it can publish |
 
 **Rule:** any mesh PR whose CI shows a change to the controller image scan (still 0
 CRITICAL/HIGH) or a failing controller smoke test is rejected, not merged.
@@ -76,10 +76,10 @@ DISTRIBUTED (new)
 
 HA is provided at two layers that fail and recover independently:
 
-- **Execution‑node HA** — multiple nodes per zone; dispatch fails over between them.
-- **Control‑plane HA** — see [§3](#3-ha-decisions-agreed). Tier 1 (ingress
+- **Execution-node HA** — multiple nodes per zone; dispatch fails over between them.
+- **Control-plane HA** — see [§3](#3-ha-decisions-agreed). Tier 1 (ingress
   redundancy) is native to Receptor; Tier 2 (active/active orchestrators) is
-  designed‑for but built later.
+  designed-for but built later.
 
 ### 2.3 HA topology (target design)
 
@@ -154,26 +154,26 @@ list`/`status`) instead of inferred from a failed call.
 
 | Tier | What | Decision |
 |------|------|----------|
-| **1** | **≥2 Receptor ingress sidecars** on the control host (orchestrator fails its control socket over between them) **+** execution nodes multi‑peer with redial | **Build now.** Native, cheap, real. Survives losing one sidecar/ingress; losing the orchestrator *host* is Tier 2. |
-| **2** | Active/active orchestrators (VIP/DNS, shared config+PKI, git playbooks) | **Design for it, build when a real 2‑host target exists.** Interim recovery = documented fast orchestrator restart (state is external, so seconds). |
-| **2.5** | Recover an in‑flight job’s live stream onto the surviving orchestrator | **Don’t build the recovery logic.** But write a per-job `meta.json` now (for status/history) so the logic is nearly free later. Meaningless until Tier 2 exists. |
+| **1** | **≥2 Receptor ingress sidecars** on the control host (orchestrator fails its control socket over between them) **+** execution nodes multi-peer with redial | **Build now.** Native, cheap, real. Survives losing one sidecar/ingress; losing the orchestrator *host* is Tier 2. |
+| **2** | Active/active orchestrators (VIP/DNS, shared config+PKI, git playbooks) | **Design for it, build when a real 2-host target exists.** Interim recovery = documented fast orchestrator restart (state is external, so seconds). |
+| **2.5** | Recover an in-flight job’s live stream onto the surviving orchestrator | **Don’t build the recovery logic.** But write a per-job `meta.json` now (for status/history) so the logic is nearly free later. Meaningless until Tier 2 exists. |
 | **3** | Full stateful HA (real state store) | **Don’t.** That store is a database; if ever truly required, evaluate adopting **AWX** instead of reimplementing it. |
 
-**In‑flight failure posture (interim):** if an orchestrator dies mid‑job, the job
-keeps running on the execution node (Receptor is store‑and‑forward); the live
-stream is lost; recovery is re‑query artifacts or re‑run (playbooks are idempotent).
+**In-flight failure posture (interim):** if an orchestrator dies mid-job, the job
+keeps running on the execution node (Receptor is store-and-forward); the live
+stream is lost; recovery is re-query artifacts or re-run (playbooks are idempotent).
 
 ---
 
-## 4. Day‑one invariants (make HA cheap later, cost ~0 now)
+## 4. Day-one invariants (make HA cheap later, cost ~0 now)
 
-Hold these from the first mesh commit even in the single‑orchestrator build:
+Hold these from the first mesh commit even in the single-orchestrator build:
 
 | Invariant | Why | Cost now |
 |-----------|-----|----------|
-| Orchestrator holds **no local‑only state** — all state on mountable/shared storage or git | One→two orchestrators becomes config, not a rewrite | discipline only |
+| Orchestrator holds **no local-only state** — all state on mountable/shared storage or git | One→two orchestrators becomes config, not a rewrite | discipline only |
 | Every job gets a **stable UUID** and a **per-job `jobs/<uuid>/meta.json`** (one file per job — concurrency-safe by construction) | Status/history today; Tier 2.5 recovery later | small; wanted anyway |
-| Execution nodes peer to a **list** of ingress addresses (even a list of one) | Tier 1 becomes "add controller‑B to the list" | ~0 |
+| Execution nodes peer to a **list** of ingress addresses (even a list of one) | Tier 1 becomes "add controller-B to the list" | ~0 |
 | CA private key **never** on a runtime container | CA is not a runtime SPOF; signing is offline | ~0 |
 
 **PKI material is never committed to git.** The CA, certs, keys, and CSRs all live
@@ -259,27 +259,27 @@ risk column; anything that touches it must pass [§9.1](#91-non-disruption-check
 
 | Ph | Goal | Touches controller image? | Guardrail before merge |
 |----|------|---------------------------|------------------------|
-| 0 | SSH hardening: add managed `known_hosts` / strict path, label dev override; **do not flip default** | Config only, opt‑in | Existing direct run still works with current default |
+| 0 | SSH hardening: add managed `known_hosts` / strict path, label dev override; **do not flip default** | Config only, opt-in | Existing direct run still works with current default |
 | 1 | Add `docker/mesh/Dockerfile` scaffold (`FROM` controller); **`docker/Dockerfile` untouched** | No — controller build unchanged | Controller smoke + Trivy = 0 unchanged, both arches ([§9.1](#91-non-disruption-checks-run-every-mesh-pr)) |
 | 2 | `orchestrator` target in `docker/mesh/Dockerfile` (`FROM` controller + `ansible-runner` + `receptorctl`) | No — separate image, explicit `--target` | Controller digest unchanged; `orchestrator` scan 0 |
-| 3 | `receptor-controller` sidecar + shared socket volume, **profile‑gated** | No (opt‑in) | `make up` unchanged |
+| 3 | `receptor-controller` sidecar + shared socket volume, **profile-gated** | No (opt-in) | `make up` unchanged |
 | 4 | `execution-node` target in `docker/mesh/Dockerfile` (`FROM` controller + `receptor` + `ansible-runner`; entrypoint runs receptor; HEALTHCHECK → receptor readiness) + test lab, **no TLS (dev only)** | No | Local build only; never published |
 | 5 | Prove `transmit → work submit → worker → process` across the mesh | No | Positive tests [§9.2](#92-positive-distributed-execution-tests) |
-| 6 | PKI scripts + **mandatory mTLS** + **Tier‑1** (2nd receptor sidecar, orchestrator control‑socket failover, node multi‑peer) | No | Negative mTLS + Tier‑1 tests [§9.3](#93-negative-mtls-tests)/[§9.7](#97-control-plane-tier-1-ingress-redundancy) |
-| 7 | Target SSH credential handling + artifacts + per-job `meta.json` | No | SSH‑negative test [§9.4](#94-target-ssh-negative-test) |
-| 8 | Pools + failover dispatcher (execution‑node HA) + concurrency caps | No | HA + concurrency tests [§9.5](#95-execution-node-ha-failover)/[§9.6](#96-concurrency--parallelism) |
-| 9 | Work signing (`--signwork`) — authorises the future third‑party boundary | No | Signed‑work test; unsigned rejected |
+| 6 | PKI scripts + **mandatory mTLS** + **Tier-1** (2nd receptor sidecar, orchestrator control-socket failover, node multi-peer) | No | Negative mTLS + Tier-1 tests [§9.3](#93-negative-mtls-tests)/[§9.7](#97-control-plane-tier-1-ingress-redundancy) |
+| 7 | Target SSH credential handling + artifacts + per-job `meta.json` | No | SSH-negative test [§9.4](#94-target-ssh-negative-test) |
+| 8 | Pools + failover dispatcher (execution-node HA) + concurrency caps | No | HA + concurrency tests [§9.5](#95-execution-node-ha-failover)/[§9.6](#96-concurrency--parallelism) |
+| 9 | Work signing (`--signwork`) — authorises the future third-party boundary | No | Signed-work test; unsigned rejected |
 | 10 | Makefile convenience targets + docs/runbook | Appends only | Existing targets still work |
 | 11 | *(optional, later)* publish + cosign + scan node image | Release pipeline | Extend the matrix, don’t fork it |
-| — | **Deferred:** Tier 2 active/active; fan‑out sharding; auto‑routing engine | — | Built only when a real driver exists |
+| — | **Deferred:** Tier 2 active/active; fan-out sharding; auto-routing engine | — | Built only when a real driver exists |
 
 ---
 
-## 7. To‑do checklist
+## 7. To-do checklist
 
 ### Phase 0 — SSH hardening (independent, can ship first)
 - [ ] Add a managed `known_hosts` mechanism + `StrictHostKeyChecking=yes` path
-- [ ] Clearly label the existing lax settings as **dev‑only** override
+- [ ] Clearly label the existing lax settings as **dev-only** override
 - [ ] Document; do **not** change the current default (flip only at a major bump)
 
 ### Phase 1 — mesh build scaffold (controller Dockerfile untouched)
@@ -311,8 +311,8 @@ risk column; anything that touches it must pass [§9.1](#91-non-disruption-check
       stage when upstream ships one
 - [x] Override the inherited port-22 `HEALTHCHECK` with a Receptor-readiness check (node runs receptor, not sshd; runs as uid 1000)
 - [x] `docker/mesh/node-entrypoint.sh` (render node config from env; peers is a LIST — Tier 1 ready)
-- [x] `mesh/tests/` multi‑network **e2e integration environment** (controller cannot reach targets) — regression suite (`e2e-check.sh`; 20 properties as of Phase 6), run by Mesh CI on every mesh change
-- [x] **No‑TLS** peering confined to the e2e environment (never in a production compose file)
+- [x] `mesh/tests/` multi-network **e2e integration environment** (controller cannot reach targets) — regression suite (`e2e-check.sh`; 20 properties as of Phase 6), run by Mesh CI on every mesh change
+- [x] **No-TLS** peering confined to the e2e environment (never in a production compose file)
 
 ### Phase 5 — prove distributed execution
 - [x] `mesh/bin/mesh-run` (minimal: transmit → submit → worker → process) —
@@ -324,7 +324,7 @@ risk column; anything that touches it must pass [§9.1](#91-non-disruption-check
       non-JSON line (OpenSSL greets stderr at every python start) makes the
       controller-side Processor abort at its first read
 - [x] Positive test: controller can’t SSH target directly; `mesh-run` succeeds (e2e check 9)
-- [x] "Prove‑on‑node" playbook shows node id, not controller (e2e check 10, both directions)
+- [x] "Prove-on-node" playbook shows node id, not controller (e2e check 10, both directions)
 - [x] Real ansible rc + artifacts (stdout, rc, job_events) return to the controller (checks 11–13, including nonzero rc propagation)
 
 ### Phase 6 — PKI + mandatory mTLS
@@ -333,9 +333,9 @@ risk column; anything that touches it must pass [§9.1](#91-non-disruption-check
       signing is gated on the CSR carrying EXACTLY the authorised node id
 - [x] Idempotent CA init (STOP if CA exists unless `--force`); CA key never in
       any runtime mount — only `issued/` bundles reach containers
-- [x] Node‑id ⇄ cert identity checking on; `insecureskipverify` /
+- [x] Node-id ⇄ cert identity checking on; `insecureskipverify` /
       `skipreceptornamescheck` never set (e2e asserts their absence as active keys)
-- [x] Multi‑ingress peer list (Tier 1): nodes peer to A **and** B; the
+- [x] Multi-ingress peer list (Tier 1): nodes peer to A **and** B; the
       dispatcher fails its control socket over between the two sidecars
 - [x] All negative mTLS tests pass — the full §9.3 matrix (e2e 15–19):
       certless node, unknown client CA, valid-cert-wrong-identity, EXPIRED
@@ -360,19 +360,19 @@ risk column; anything that touches it must pass [§9.1](#91-non-disruption-check
 
 ### Phase 8 — pools, failover, concurrency
 - [ ] `mesh/config/zones.yml` + `pools.yml`
-- [ ] Dispatcher: classify → healthy‑node select → submit → **dispatch‑only failover**
-- [ ] Per‑node concurrency cap via an atomic `flock` reservation on a per-node slot file (not a `work list` check)
-- [ ] Unique PDD + artifact dir + work‑unit id per concurrent job
+- [ ] Dispatcher: classify → healthy-node select → submit → **dispatch-only failover**
+- [ ] Per-node concurrency cap via an atomic `flock` reservation on a per-node slot file (not a `work list` check)
+- [ ] Unique PDD + artifact dir + work-unit id per concurrent job
 
 ### Phase 9 — work signing
-- [ ] Controller work‑signing private key (offline‑issued); relay verification pubkey
+- [ ] Controller work-signing private key (offline-issued); relay verification pubkey
 - [ ] `verifysignature: true` on node worktype; submit with `--signwork`
 - [ ] Test: unsigned work rejected
 
 ### Phase 10 — Make targets + docs
 - [ ] `mesh-up`, `mesh-down`, `mesh-status`, `mesh-ping`, `mesh-run`
 - [ ] Runbook: create/enroll/sign/install/verify/run/rotate/revoke/troubleshoot
-- [ ] Confirm every pre‑existing Make target still works
+- [ ] Confirm every pre-existing Make target still works
 
 ---
 
@@ -382,20 +382,20 @@ risk column; anything that touches it must pass [§9.1](#91-non-disruption-check
 |----|----------|------------------|
 | UC1 | **Local scan** via colocated local execution node | Runs on `exec-local-*`, not on the controller |
 | UC2 | **Network scan** into segmented `net20` | Runs on `exec-net20-*`; controller has no route to the target |
-| UC3 | **Execution‑node failover** — `exec-net20-a` down at dispatch | `exec-net20-b` serves; job succeeds |
-| UC4 | **Concurrency** — many jobs across zones at once | Isolated PDDs/artifacts; **one `meta.json` per UUID** (no shared-file race); per‑node cap enforced by an atomic `flock` reservation (not a check-then-act race) |
-| UC5 | **Control‑plane ingress failover (Tier 1)** — one receptor sidecar down | Orchestrator fails its control socket over to the 2nd sidecar; nodes reconnect via it; new dispatch works. (Losing the orchestrator *host* is Tier 2.) |
-| UC6 | **Third‑party node (future)** — external team runs `exec-partner-*` | mTLS admits it (your CA signed it); work‑signing means it *executes* but cannot *submit* |
+| UC3 | **Execution-node failover** — `exec-net20-a` down at dispatch | `exec-net20-b` serves; job succeeds |
+| UC4 | **Concurrency** — many jobs across zones at once | Isolated PDDs/artifacts; **one `meta.json` per UUID** (no shared-file race); per-node cap enforced by an atomic `flock` reservation (not a check-then-act race) |
+| UC5 | **Control-plane ingress failover (Tier 1)** — one receptor sidecar down | Orchestrator fails its control socket over to the 2nd sidecar; nodes reconnect via it; new dispatch works. (Losing the orchestrator *host* is Tier 2.) |
+| UC6 | **Third-party node (future)** — external team runs `exec-partner-*` | mTLS admits it (your CA signed it); work-signing means it *executes* but cannot *submit* |
 | UC7 | **Direct legacy mode** — `make run PLAYBOOK=ping.yml` | Unchanged; does **not** traverse Receptor |
 | UC8 | **Unauthorised node** — cert from unknown CA / wrong node id | Rejected by the controller |
 | UC9 | **Target SSH failure** — bad/removed job SSH key | Receptor + Runner reach the node; SSH to target fails; job returns FAILED |
-| UC10 | **Certificate rotation** — a node’s cert expires/rotates | Re‑CSR → sign → install → reconnect, no CA‑key exposure |
+| UC10 | **Certificate rotation** — a node’s cert expires/rotates | Re-CSR → sign → install → reconnect, no CA-key exposure |
 
 ---
 
 ## 9. Verification & test mechanisms
 
-### 9.1 Non‑disruption checks (run every mesh PR)
+### 9.1 Non-disruption checks (run every mesh PR)
 The controller must be provably untouched:
 
 ```bash
@@ -414,7 +414,7 @@ docker compose -f docker-compose.yml -f mesh/compose.mesh.yml --profile mesh \
 #   - Trivy CRITICAL/HIGH == 0 on amd64 AND arm64  (#55 gate)
 ```
 
-### 9.2 Positive distributed‑execution tests
+### 9.2 Positive distributed-execution tests
 ```text
 1. Prove the controller CANNOT reach the target directly (no route / SSH fails).
 2. make mesh-run ZONE=net20 PLAYBOOK=ping.yml  → SUCCESS on the controller CLI.
@@ -441,7 +441,7 @@ Remove/replace the job SSH credential, then mesh-run:
 Proves Receptor identity and target SSH identity are separate.
 ```
 
-### 9.5 Execution‑node HA (failover)
+### 9.5 Execution-node HA (failover)
 ```text
 - Pool net20 = [exec-net20-a, exec-net20-b]; stop exec-net20-a.
 - mesh-run ZONE=net20 → dispatcher selects exec-net20-b → SUCCESS.
@@ -462,7 +462,7 @@ Proves Receptor identity and target SSH identity are separate.
   once — the surplus queues on the lock; they do not all submit to the same node.
 ```
 
-### 9.7 Control‑plane Tier 1 (ingress redundancy)
+### 9.7 Control-plane Tier 1 (ingress redundancy)
 ```text
 - Control host runs TWO receptor sidecars (A, B); execution nodes peer to both.
 - Orchestrator control socket targets A, with B configured as failover.
@@ -478,10 +478,10 @@ Proves Receptor identity and target SSH identity are separate.
 - `make run` still executes directly (regression proven).
 - `make mesh-run ZONE=net20 PLAYBOOK=ping.yml` runs on the node and returns rc + output.
 - Controller has **no** direct network path to the target (proven).
-- mTLS mutual, node‑id checking on, `insecureskipverify` never set.
+- mTLS mutual, node-id checking on, `insecureskipverify` never set.
 - No CA private key inside any runtime container.
-- Execution‑node HA: pool failover works (dispatch‑only).
-- Control‑plane HA Tier 1: 2nd receptor sidecar + orchestrator control‑socket failover works.
+- Execution-node HA: pool failover works (dispatch-only).
+- Control-plane HA Tier 1: 2nd receptor sidecar + orchestrator control-socket failover works.
 - Per-job `meta.json` written per UUID — concurrency-safe (Tier 2.5 enablement).
 - Controller image scan == 0 CRITICAL/HIGH, both arches; existing pipeline untouched.
 - No UI, API, database, broker, or scheduler introduced.
@@ -490,13 +490,13 @@ Proves Receptor identity and target SSH identity are separate.
 
 ---
 
-## 11. Explicitly deferred / non‑goals
+## 11. Explicitly deferred / non-goals
 
-- **Tier 2 active/active orchestrators** — designed‑for (stateless invariant), built when a real 2‑host target exists.
-- **Tier 2.5 in‑flight recovery logic** — enabled by the per-job `meta.json` files; logic built with Tier 2.
+- **Tier 2 active/active orchestrators** — designed-for (stateless invariant), built when a real 2-host target exists.
+- **Tier 2.5 in-flight recovery logic** — enabled by the per-job `meta.json` files; logic built with Tier 2.
 - **Tier 3 stateful HA** — not built; if ever required, evaluate AWX.
-- **Fan‑out sharding** (one job split across nodes) — after single‑job‑to‑pool is solid.
-- **Auto‑routing engine** (subnet → zone) — static `zones.yml` only, for now.
+- **Fan-out sharding** (one job split across nodes) — after single-job-to-pool is solid.
+- **Auto-routing engine** (subnet → zone) — static `zones.yml` only, for now.
 - **Publishing the node image** — until the flow is proven (Phase 11).
 - No web UI, REST API, database, message broker, Kafka/RabbitMQ/ActiveMQ, Airflow,
   scheduler service, custom worker/enrollment/auth server.
@@ -507,15 +507,15 @@ Proves Receptor identity and target SSH identity are separate.
 
 1. **Local execution:** ship a colocated *local* execution node (so even local
    scans avoid the controller), or is legacy `make run` the local path and nodes
-   are network‑only initially?
+   are network-only initially?
 2. **Deployment target for Tier 2:** two VMs, or an orchestrator (k8s)? Determines
    when/how Tier 2 becomes real.
 3. **Command naming — RESOLVED.** Distributed jobs use
    **`make mesh-run ZONE=<zone> PLAYBOOK=<pb>`**, joining the existing `mesh-*`
    namespace (`mesh-up`, `mesh-down`, `mesh-status`, `mesh-ping`). `make run` stays
    as the direct/legacy path, unchanged. `ZONE` unifies local (`ZONE=local`) and
-   network (`ZONE=net20`), so no separate verbs are needed; when auto‑routing lands,
+   network (`ZONE=net20`), so no separate verbs are needed; when auto-routing lands,
    `ZONE` becomes optional and is classified from `zones.yml` — no new verb.
    Rejected: `control-run` (the control plane does not execute) and `relay-run`
-   (mislabels an execution node as a pass‑through). The source spec’s
-   `relay-run`/`RELAY=` may be kept as back‑compat aliases if desired.
+   (mislabels an execution node as a pass-through). The source spec’s
+   `relay-run`/`RELAY=` may be kept as back-compat aliases if desired.
