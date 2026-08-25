@@ -37,6 +37,16 @@ check_dns()  { case "$1" in ''|-*|*[!A-Za-z0-9.-]*) die "DNS name '$1' invalid: 
 check_rfc3339() {
   [[ "$1" =~ ^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](Z|[+-][0-9]{2}:[0-9]{2})$ ]] \
     || die "'$1' is not RFC3339 (expected e.g. 2027-01-01T00:00:00Z)"
+  # Calendar validity, portably: shape alone admits Feb 31, and a GNU `date`
+  # round-trip is no help — it NORMALISES 2026-02-31 to March 3 instead of
+  # rejecting it. Pure arithmetic, correct for leap years.
+  local y=${1:0:4} m=${1:5:2} d=${1:8:2} max=31
+  y=$((10#$y)); d=$((10#$d))
+  case "$m" in
+    04|06|09|11) max=30;;
+    02) if (( (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 )); then max=29; else max=28; fi;;
+  esac
+  (( d <= max )) || die "'$1' is not a real date (month $m has $max days in $y)"
 }
 check_relpath() {
   case "$1" in ''|/*|*[!A-Za-z0-9._/-]*) die "path '$1' invalid: relative, [A-Za-z0-9._/-]+";; esac

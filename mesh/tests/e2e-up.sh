@@ -31,7 +31,14 @@ export MESH_SECRETS="$PKI_DIR"
 # earlier run can leave a partial bundle, and half a bundle must regenerate,
 # not get mounted into a container to fail obscurely there.
 bundle_ok() { [ -f "$1/tls.crt" ] && [ -f "$1/tls.key" ] && [ -f "$1/ca.crt" ]; }
-[ -f "$PKI_DIR/ca/ca.key" ] || mesh/pki/mesh-ca-init.sh "mesh-e2e throwaway CA"
+# The CA must be a COMPLETE pair. Half a pair is unrecoverable in place
+# (init refuses an existing crt; issuance needs both), and this CA is a
+# throwaway — so an incomplete pair wipes the WHOLE e2e PKI and starts over:
+# a new CA orphans every previously issued bundle anyway.
+if ! { [ -f "$PKI_DIR/ca/ca.key" ] && [ -f "$PKI_DIR/ca/ca.crt" ]; }; then
+  rm -rf "$PKI_DIR"
+  mesh/pki/mesh-ca-init.sh "mesh-e2e throwaway CA"
+fi
 bundle_ok "$PKI_DIR/issued/controller-a" || { rm -rf "$PKI_DIR/issued/controller-a"; mesh/pki/controller-cert.sh controller-a mesh-e2e-receptor; }
 bundle_ok "$PKI_DIR/issued/controller-b" || { rm -rf "$PKI_DIR/issued/controller-b"; mesh/pki/controller-cert.sh controller-b mesh-e2e-receptor-b; }
 if ! bundle_ok "$PKI_DIR/issued/exec-e2e-a"; then
@@ -43,7 +50,10 @@ if ! bundle_ok "$PKI_DIR/issued/exec-e2e-a"; then
 fi
 # a SECOND, unrelated CA — the §9.3 unknown-CA negative test needs a cert
 # that is cryptographically valid but signed by a stranger
-[ -f "$PKI_DIR/rogue/ca/ca.key" ] || MESH_SECRETS="$PKI_DIR/rogue" mesh/pki/mesh-ca-init.sh "rogue CA"
+if ! { [ -f "$PKI_DIR/rogue/ca/ca.key" ] && [ -f "$PKI_DIR/rogue/ca/ca.crt" ]; }; then
+  rm -rf "$PKI_DIR/rogue"
+  MESH_SECRETS="$PKI_DIR/rogue" mesh/pki/mesh-ca-init.sh "rogue CA"
+fi
 bundle_ok "$PKI_DIR/rogue/issued/exec-rogue" || { rm -rf "$PKI_DIR/rogue/issued/exec-rogue"; MESH_SECRETS="$PKI_DIR/rogue" mesh/pki/controller-cert.sh exec-rogue; }
 # uid-1000 readability for material mounted into uid-1000 containers
 docker run --rm -u 0:0 -v "$PKI_DIR:/pki" --entrypoint sh ansible-execution-node:e2e -euc '
