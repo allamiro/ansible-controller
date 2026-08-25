@@ -101,10 +101,16 @@ fi
 # Candidate list: "node cap" per line. --node is a one-entry list; its cap
 # still comes from pools.yml when the node is declared there, so the
 # concurrency reservation holds however the node was chosen.
+# Parsed to a variable FIRST so the producer's exit status gates everything:
+# a process substitution's failure is invisible to the consuming while-loop,
+# and a malformed trailing entry must fail the whole dispatch, not truncate
+# the candidate list. The parser also validates the WHOLE file's cap
+# consistency: slot files are per node, shared by every pool, so one node
+# declared with two different caps would let dispatches through different
+# pools overshoot both.
 CANDIDATES=()
 if [ -n "$POOL" ]; then
-  while IFS= read -r line; do CANDIDATES+=("$line"); done < <(
-    P_FILE="$POOLS_FILE" P_NAME="$POOL" python3 - <<'PYEOF'
+  pool_lines=$(P_FILE="$POOLS_FILE" P_NAME="$POOL" python3 - <<'PYEOF'
 import os, sys, yaml
 f, pool = os.environ["P_FILE"], os.environ["P_NAME"]
 try:
@@ -114,21 +120,40 @@ except OSError as e:
 except yaml.YAMLError as e:
     sys.exit(f"pools file '{f}' is not valid YAML: {e}")
 pools = data.get("pools") or {}
+
+def parse(pname, e):
+    node = e if isinstance(e, str) else (e or {}).get("node", "")
+    cap = 0 if isinstance(e, str) else int((e or {}).get("max_concurrent") or 0)
+    if not node:
+        sys.exit(f"pool '{pname}' has an entry without a node id")
+    if cap < 0:
+        sys.exit(f"pool '{pname}' node '{node}': max_concurrent must be >= 0")
+    return node, cap
+
+caps = {}
+for pname, entries in pools.items():
+    for e in entries or []:
+        node, cap = parse(pname, e)
+        if node in caps and caps[node][0] != cap:
+            sys.exit(
+                f"node '{node}' declared with max_concurrent={caps[node][0]} "
+                f"in pool '{caps[node][1]}' but {cap} in pool '{pname}' — a "
+                "node's cap is global (slot files are shared across pools)")
+        caps.setdefault(node, (cap, pname))
+
 if pool not in pools:
     sys.exit(f"pool '{pool}' not defined in {f}")
 entries = pools[pool] or []
 if not entries:
     sys.exit(f"pool '{pool}' is empty in {f}")
 for e in entries:
-    node = e if isinstance(e, str) else (e or {}).get("node", "")
-    cap = 0 if isinstance(e, str) else int((e or {}).get("max_concurrent") or 0)
-    if not node:
-        sys.exit(f"pool '{pool}' has an entry without a node id")
-    if cap < 0:
-        sys.exit(f"pool '{pool}' node '{node}': max_concurrent must be >= 0")
+    node, cap = parse(pool, e)
     print(f"{node} {cap}")
 PYEOF
   ) || die "pool resolution failed"
+  while IFS= read -r line; do
+    [ -n "$line" ] && CANDIDATES+=("$line")
+  done <<<"$pool_lines"
   [ ${#CANDIDATES[@]} -gt 0 ] || die "pool '$POOL' resolved to no candidates"
 else
   # A cap declared for this node in pools.yml binds --node dispatches too. An
@@ -150,11 +175,22 @@ except OSError as e:
     sys.exit(f"pools file '{f}': {e}")
 except yaml.YAMLError as e:
     sys.exit(f"pools file '{f}' is not valid YAML: {e}")
-for entries in (data.get("pools") or {}).values():
+found = None
+for pname, entries in (data.get("pools") or {}).items():
     for e in entries or []:
-        if not isinstance(e, str) and (e or {}).get("node") == node:
-            print(int(e.get("max_concurrent") or 0)); sys.exit()
-print(0)
+        if isinstance(e, str):
+            n, cap = e, 0
+        else:
+            n, cap = (e or {}).get("node", ""), int((e or {}).get("max_concurrent") or 0)
+        if n != node:
+            continue
+        if found is not None and found[0] != cap:
+            sys.exit(
+                f"node '{node}' declared with max_concurrent={found[0]} in "
+                f"pool '{found[1]}' but {cap} in pool '{pname}' — a node's "
+                "cap is global (slot files are shared across pools)")
+        found = (cap, pname)
+print(found[0] if found else 0)
 PYEOF
 ) || die "pools lookup failed"
   CANDIDATES=("$NODE $cap")

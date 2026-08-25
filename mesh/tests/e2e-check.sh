@@ -405,15 +405,21 @@ slow_pid=$!
 # docker-exec/python start could otherwise let job 2 win the empty slot and
 # spuriously fail the check. flock -n on the same file from a probe process
 # fails exactly while job 1's reservation is alive.
+# flock -n exits 1 on contention specifically; any other nonzero (docker exec
+# failing, container down) is a PROBE error and must be reported as such, not
+# mistaken for a held slot.
 slot_held=0
 deadline=$((SECONDS + 30))
 while [ $SECONDS -lt $deadline ]; do
-  if docker exec mesh-e2e-orchestrator sh -c \
-       'flock -n /var/lib/mesh/slots/exec-e2e-a.slot.1 true' 2>/dev/null; then
-    sleep 1   # not held (or not created yet) — keep waiting
-  else
-    slot_held=1; break
-  fi
+  probe_rc=0
+  probe_out=$(docker exec mesh-e2e-orchestrator sh -c \
+    'flock -n /var/lib/mesh/slots/exec-e2e-a.slot.1 true' 2>&1) || probe_rc=$?
+  case "$probe_rc" in
+    0) sleep 1;;             # free (or not created yet) — keep waiting
+    1) slot_held=1; break;;  # contention: job 1 holds the reservation
+    *) kill "$slow_pid" 2>/dev/null || true
+       fail "slot probe errored (rc=$probe_rc): $probe_out";;
+  esac
 done
 [ "$slot_held" = 1 ] || { kill "$slow_pid" 2>/dev/null || true; fail "slow job never reserved the slot within 30s: $(tail -3 "$slow_log")"; }
 cap_out=$(docker exec mesh-e2e-orchestrator /usr/local/mesh/bin/mesh-run \
