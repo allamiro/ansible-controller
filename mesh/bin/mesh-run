@@ -135,6 +135,10 @@ def parse(pname, e):
 
 caps = {}
 for pname, entries in pools.items():
+    if entries is not None and not isinstance(entries, list):
+        sys.exit(
+            f"pool '{pname}' must be a LIST of node entries — a mapping here "
+            "(missing '- ' markers) would be iterated as its key names")
     for e in entries or []:
         node, cap = parse(pname, e)
         if node in caps and caps[node][0] != cap:
@@ -180,6 +184,8 @@ except yaml.YAMLError as e:
     sys.exit(f"pools file '{f}' is not valid YAML: {e}")
 found = None
 for pname, entries in (data.get("pools") or {}).items():
+    if entries is not None and not isinstance(entries, list):
+        sys.exit(f"pool '{pname}' must be a LIST of node entries")
     for e in entries or []:
         if isinstance(e, str):
             n, cap = e, 0
@@ -229,7 +235,7 @@ routable_via() {
 # file with a non-blocking flock; the acquired fd is held (deliberately never
 # closed) for the life of this process, so the reservation outlives any crash
 # exactly as long as the process does and releases the instant it dies.
-SLOT_FD= SLOT_FILE=
+SLOT_FD= SLOT_FILE= DISPATCH_STATE=pre-submit
 acquire_slot() {
   local node="$1" cap="$2" i f
   [ "$cap" -gt 0 ] || return 0   # uncapped node
@@ -303,6 +309,13 @@ PDD="$JOBS_DIR/$JOB_ID"
 # never-corrupt-the-result rule the artifact export follows.
 finalize() {
   local st=$?
+  # A reserved slot whose job is in flight must survive ANY exit — die()
+  # paths, and catchable signals (TERM/INT are trapped to exit so this trap
+  # runs). DISPATCH_STATE is 'in-flight' from the moment a submit attempt
+  # starts until the artifacts' rc proves the unit finished.
+  if [ "${DISPATCH_STATE:-}" = in-flight ]; then
+    persist_slot_hold
+  fi
   if [ -n "$SSH_KEY" ] && [ -f "$PDD/env/ssh_key" ]; then
     shred -u "$PDD/env/ssh_key" 2>/dev/null \
       || rm -f "$PDD/env/ssh_key" 2>/dev/null \
@@ -320,6 +333,10 @@ finalize() {
   return "$st"
 }
 trap finalize EXIT
+# Catchable signals must route through the EXIT trap: an untrapped TERM would
+# skip finalize, releasing an in-flight job's slot and skipping meta export.
+trap 'exit 143' TERM
+trap 'exit 130' INT
 # The playbook is resolved through symlinks ONCE, and that resolved name is
 # used for both staging and execution — staging the target directory while
 # telling the runner to execute the symlink's basename would fail when the
@@ -462,16 +479,15 @@ fi
 # boundary (plan §2.4), an ambiguous failure is recorded as such and is NEVER
 # treated as "nothing ran" — and this dispatcher never resubmits anywhere.
 meta submitting
+DISPATCH_STATE=in-flight
 submit_out=$(ansible-runner transmit "$PDD" -p "$(basename "$PLAYBOOK_REAL")" 2>/dev/null \
   | receptorctl --socket "$SOCKET" work submit ansible-runner \
       --node "$NODE" --payload -) \
   || { meta submit-ambiguous "unit id unknown: the response was lost after the attempt left this host; inspect 'receptorctl work list' for an unmatched unit"; \
-       persist_slot_hold; \
        die "work submit to '$NODE' failed AFTER the attempt left this host — \
 the unit MAY BE RUNNING; check 'receptorctl work list' before re-running (job=$JOB_ID)"; }
 UNIT_ID=$(awk '/^Unit ID:/ {print $3}' <<<"$submit_out")
 [ -n "$UNIT_ID" ] || { meta submit-ambiguous "submit returned but no unit id was parseable; inspect 'receptorctl work list'"; \
-  persist_slot_hold; \
   die "no unit id in submit output — state unknown, \
 check 'receptorctl work list' before re-running: $submit_out"; }
 meta running
@@ -495,10 +511,12 @@ if [ -z "$art_rc_file" ]; then
   # that, so a history reader does not mistake a dropped connection for a
   # playbook failure (and nobody "retries" a possibly-succeeding job).
   meta results-incomplete "no rc artifact returned; the unit was acknowledged and may still be running — check 'receptorctl work status $UNIT_ID'"
-  persist_slot_hold
   die "results stream did not complete — the job MAY STILL BE RUNNING on '$NODE' (unit=$UNIT_ID); check 'receptorctl work status $UNIT_ID'; its concurrency slot stays reserved via ${SLOT_FILE:+$SLOT_FILE.hold}${SLOT_FILE:- (node uncapped)}"
 fi
 rc=$(cat "$art_rc_file")
+# The artifacts' own rc proves the unit ran to completion: the slot may now
+# die with this process, and finalize must not persist a hold for it.
+DISPATCH_STATE=complete
 
 receptorctl --socket "$SOCKET" work release "$UNIT_ID" >/dev/null 2>&1 || true
 
