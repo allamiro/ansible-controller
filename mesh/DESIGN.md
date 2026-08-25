@@ -284,7 +284,9 @@ risk column; anything that touches it must pass [§9.1](#91-non-disruption-check
 - [x] Document; do **not** change the current default (flip only at a major bump)
 
 ### Phase 1 — mesh build scaffold (controller Dockerfile untouched)
-- [x] Add `docker/mesh/Dockerfile` with `ARG BASE` and `orchestrator`/`execution-node` targets `FROM ${BASE}`
+- [x] Add `docker/mesh/Dockerfile` with `ARG BASE`; `orchestrator` builds
+      `FROM ${BASE}` and `execution-node` deliberately builds
+      `FROM orchestrator` (the Phase 4 deviation recorded below)
 - [x] Leave `docker/Dockerfile` unchanged; confirm the default (no-target) build is still the controller
 - [x] Prove controller image smoke + Trivy = 0 on amd64 **and** arm64 (unchanged)
 
