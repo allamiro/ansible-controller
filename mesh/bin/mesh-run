@@ -74,17 +74,28 @@ fi
 # /configs/.galaxy) lives only on the controller; the node cannot resolve it.
 # --galaxy-dir stages that directory's roles/ and collections/ into the project
 # root, where ansible's adjacent-to-playbook search paths find them without any
-# path configuration. Collisions with content the playbook directory already
-# ships are refused rather than merged.
+# path configuration. Local and Galaxy content MERGE per entry — a project with
+# its own roles/ can still pull distinct Galaxy roles — and only a same-name
+# clash refuses, because silently shadowing either copy would change behaviour.
+#
+# Python packages a plugin/collection needs at RUNTIME (pip-requirements.txt,
+# e.g. boto3 for amazon.aws) are NOT a per-job concern and are not staged: they
+# belong in the node image — extend it site-locally the same way the controller
+# bakes its deps (FROM execution-node + pip install -r), tracked in the plan's
+# Phase 7 checklist.
 if [ -n "$GALAXY_DIR" ]; then
   [ -d "$GALAXY_DIR" ] || die "--galaxy-dir '$GALAXY_DIR' is not a directory"
   for sub in roles collections; do
-    if [ -d "$GALAXY_DIR/$sub" ]; then
-      if [ -e "$PDD/project/$sub" ]; then
-        die "the playbook directory already ships '$sub/'; refusing to overlay --galaxy-dir on top"
+    [ -d "$GALAXY_DIR/$sub" ] || continue
+    mkdir -p "$PDD/project/$sub"
+    for entry in "$GALAXY_DIR/$sub"/* "$GALAXY_DIR/$sub"/.[!.]*; do
+      [ -e "$entry" ] || continue
+      name=$(basename "$entry")
+      if [ -e "$PDD/project/$sub/$name" ]; then
+        die "'$sub/$name' exists in both the playbook directory and --galaxy-dir; resolve the clash rather than letting one silently shadow the other"
       fi
-      cp -a "$GALAXY_DIR/$sub" "$PDD/project/$sub"
-    fi
+      cp -a "$entry" "$PDD/project/$sub/$name"
+    done
   done
 fi
 if [ -n "$ANSIBLE_CFG" ]; then
