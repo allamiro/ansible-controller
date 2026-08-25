@@ -85,18 +85,28 @@ fi
 # Phase 7 checklist.
 if [ -n "$GALAXY_DIR" ]; then
   [ -d "$GALAXY_DIR" ] || die "--galaxy-dir '$GALAXY_DIR' is not a directory"
-  for sub in roles collections; do
-    [ -d "$GALAXY_DIR/$sub" ] || continue
-    mkdir -p "$PDD/project/$sub"
-    for entry in "$GALAXY_DIR/$sub"/* "$GALAXY_DIR/$sub"/.[!.]*; do
+  # merge_tree SRC DST DEPTH: copy per entry, descending DEPTH levels before
+  # collision-checking. Roles collide at roles/<name> (depth 1); collections
+  # nest as collections/ansible_collections/<namespace>/<name>, so the check
+  # must descend to the collection itself (depth 3) — a shared wrapper or
+  # namespace directory is expected, not a clash.
+  merge_tree() {
+    local src="$1" dst="$2" depth="$3" entry name
+    mkdir -p "$dst"
+    for entry in "$src"/* "$src"/.[!.]*; do
       [ -e "$entry" ] || continue
       name=$(basename "$entry")
-      if [ -e "$PDD/project/$sub/$name" ]; then
-        die "'$sub/$name' exists in both the playbook directory and --galaxy-dir; resolve the clash rather than letting one silently shadow the other"
+      if [ "$depth" -gt 1 ] && [ -d "$entry" ] && [ -d "$dst/$name" ]; then
+        merge_tree "$entry" "$dst/$name" $((depth - 1))
+      elif [ -e "$dst/$name" ]; then
+        die "'${dst#"$PDD/project/"}/$name' exists in both the playbook directory and --galaxy-dir; resolve the clash rather than letting one silently shadow the other"
+      else
+        cp -a "$entry" "$dst/$name"
       fi
-      cp -a "$entry" "$PDD/project/$sub/$name"
     done
-  done
+  }
+  [ -d "$GALAXY_DIR/roles" ]       && merge_tree "$GALAXY_DIR/roles"       "$PDD/project/roles"       1
+  [ -d "$GALAXY_DIR/collections" ] && merge_tree "$GALAXY_DIR/collections" "$PDD/project/collections" 3
 fi
 if [ -n "$ANSIBLE_CFG" ]; then
   [ -f "$ANSIBLE_CFG" ] || die "--ansible-cfg '$ANSIBLE_CFG' not found"

@@ -15,9 +15,12 @@
 # exits — the tail is where a failing job's traceback lives, unlike a head
 # capture that would keep startup noise and drop the error. Worst case on disk
 # ≈ 1 MiB + (concurrent workers × 1 MiB); it cannot fill the disk.
+# Rotation instead of a size threshold: each worker moves the current log to
+# .1 (keeping the previous worker's tail for comparison) and appends its own
+# window to a fresh file. The on-disk bound is strict — ≤ 1 MiB in .1 plus
+# ≤ 1 MiB per concurrently running worker — with no threshold edge to leak
+# past (a -gt check let an exactly-1MiB log survive and grow by appends).
 log=/var/lib/receptor/worker-stderr.log
-if [ -f "$log" ] && [ "$(stat -c %s "$log" 2>/dev/null || echo 0)" -gt 1048576 ]; then
-  : > "$log"
-fi
+[ -f "$log" ] && mv -f "$log" "$log.1"
 exec 2> >(tail -c 1048576 >> "$log")
 exec ansible-runner worker "$@"
