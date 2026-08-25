@@ -190,21 +190,15 @@ mounts, and the direct execution path are untouched — omit `--profile mesh`
 and none of this exists.
 
 **To dispatch from this host you also need the orchestrator image** — the
-stock controller deliberately carries no `receptorctl`/`mesh-run`. Until
-[#67](https://github.com/allamiro/ansible-controller/pull/67) publishes it,
-build it from your checkout and point the `ansible` service at it:
-
-```bash
-docker build -f docker/mesh/Dockerfile --target orchestrator \
-  --build-arg BASE=ansible-controller:dev --build-arg ALLOW_MUTABLE_BASE=1 \
-  -t ansible-orchestrator:local .
-```
+stock controller deliberately carries no `receptorctl`/`mesh-run`. Point the
+`ansible` service at the published image (see
+[Getting the images](#getting-the-images)):
 
 ```yaml
 # orchestrator.override.yml — add as one more -f file on the compose command
 services:
   ansible:
-    image: ansible-orchestrator:local
+    image: ghcr.io/allamiro/ansible-orchestrator:latest
 ```
 
 ### Step 3 — connect your execution nodes
@@ -325,12 +319,19 @@ release you already run:
 | `ansible-orchestrator` | Controller + the dispatcher (`mesh-run`, `receptorctl`) | Control host |
 | `ansible-execution-node` | Orchestrator + the mesh agent (hardened build, no SSH server) | Inside each closed network |
 
-Signed multi-arch images on Docker Hub and GHCR are landing with the current
-release cycle ([#67](https://github.com/allamiro/ansible-controller/pull/67));
-until they're published, build them from your checkout — the
-[lab scripts](#try-it-in-ten-minutes) do exactly this — with
-`docker/mesh/Dockerfile` (targets `orchestrator` and `execution-node`). Once
-published, verify a pull the same way as the controller:
+All three ship per release to Docker Hub and GHCR — multi-arch, cosign-signed,
+Trivy-gated — with the mesh images built `FROM` the exact controller digest
+pushed by the same run:
+
+```bash
+docker pull ghcr.io/allamiro/ansible-orchestrator:latest
+docker pull ghcr.io/allamiro/ansible-execution-node:latest
+```
+
+Prefer building from your checkout instead? The
+[lab scripts](#try-it-in-ten-minutes) do exactly that with
+`docker/mesh/Dockerfile` (targets `orchestrator` and `execution-node`).
+Verify a pulled image the same way as the controller:
 
 ```bash
 cosign verify \
@@ -344,12 +345,13 @@ cosign verify \
 **Working now** — the full distributed path in the [lab](#try-it-in-ten-minutes)
 (dispatch → mTLS mesh → execution node → artifacts back, with ingress
 failover); the PKI toolchain for real identities; the control-plane overlay on
-your compose setup.
+your compose setup; published, signed images for all three roles; per-job
+credential hygiene and host-visible artifacts.
 
-**Landing next** — published images ([#67](https://github.com/allamiro/ansible-controller/pull/67)),
-packaged node deployment, `make mesh-run` / `make mesh-status`, node pools with
-automatic dispatch failover, and per-job credential injection. The full plan
-and its progress live in the [DESIGN.md checklist](DESIGN.md#7-to-do-checklist).
+**Landing next** — packaged node deployment, `make mesh-run` / `make
+mesh-status`, node pools with automatic dispatch failover, and work signing.
+The full plan and its progress live in the
+[DESIGN.md checklist](DESIGN.md#7-to-do-checklist).
 
 ## Where things live
 
