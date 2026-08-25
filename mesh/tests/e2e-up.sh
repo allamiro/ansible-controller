@@ -25,20 +25,20 @@ echo "==> issuing the e2e PKI (mesh/pki/ scripts against a throwaway CA)"
 # outside every runtime mount, exactly the plan §4 rule the suite must model.
 PKI_DIR="$PWD/mesh/tests/.e2e-pki"
 export MESH_SECRETS="$PKI_DIR"
-if [ ! -f "$PKI_DIR/ca/ca.key" ]; then
-  mesh/pki/mesh-ca-init.sh "mesh-e2e throwaway CA"
-fi
-if [ ! -f "$PKI_DIR/issued/controller-a/tls.crt" ]; then
-  mesh/pki/controller-cert.sh controller-a mesh-e2e-receptor
-  mesh/pki/controller-cert.sh controller-b mesh-e2e-receptor-b
-  mesh/pki/node-csr.sh exec-e2e-a
+# Each identity regenerates independently: an interrupted earlier run must not
+# leave later identities permanently missing behind a single guard.
+[ -f "$PKI_DIR/ca/ca.key" ] || mesh/pki/mesh-ca-init.sh "mesh-e2e throwaway CA"
+[ -f "$PKI_DIR/issued/controller-a/tls.crt" ] || mesh/pki/controller-cert.sh controller-a mesh-e2e-receptor
+[ -f "$PKI_DIR/issued/controller-b/tls.crt" ] || mesh/pki/controller-cert.sh controller-b mesh-e2e-receptor-b
+if [ ! -f "$PKI_DIR/issued/exec-e2e-a/tls.key" ]; then
+  [ -f "$PKI_DIR/csr/exec-e2e-a.csr" ] || mesh/pki/node-csr.sh exec-e2e-a
   mesh/pki/node-sign.sh csr/exec-e2e-a.csr exec-e2e-a
   cp "$PKI_DIR/csr/exec-e2e-a.key" "$PKI_DIR/issued/exec-e2e-a/tls.key"
-  # a SECOND, unrelated CA — the §9.3 unknown-CA negative test needs a cert
-  # that is cryptographically valid but signed by a stranger
-  MESH_SECRETS="$PKI_DIR/rogue" mesh/pki/mesh-ca-init.sh "rogue CA"
-  MESH_SECRETS="$PKI_DIR/rogue" mesh/pki/controller-cert.sh exec-rogue
 fi
+# a SECOND, unrelated CA — the §9.3 unknown-CA negative test needs a cert
+# that is cryptographically valid but signed by a stranger
+[ -f "$PKI_DIR/rogue/ca/ca.key" ] || MESH_SECRETS="$PKI_DIR/rogue" mesh/pki/mesh-ca-init.sh "rogue CA"
+[ -f "$PKI_DIR/rogue/issued/exec-rogue/tls.crt" ] || MESH_SECRETS="$PKI_DIR/rogue" mesh/pki/controller-cert.sh exec-rogue
 # uid-1000 readability for material mounted into uid-1000 containers
 docker run --rm -u 0:0 -v "$PKI_DIR:/pki" --entrypoint sh ansible-execution-node:e2e -euc '
   chown -R 1000:1000 /pki/issued /pki/rogue/issued 2>/dev/null || true

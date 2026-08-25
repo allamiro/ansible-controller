@@ -6,14 +6,15 @@
 . "$(dirname "$0")/common.sh"
 
 ID="${1:?usage: node-csr.sh <node-id> [extra-dns-name ...]}"; shift || true
-case "$ID" in *[!A-Za-z0-9._-]*) die "node id '$ID' invalid";; esac
+check_id "$ID"
+for d in "$@"; do check_dns "$d"; done
 
-DNS="dnsname=$ID"
-for d in "$@"; do DNS="$DNS dnsname=$d"; done
-
-rimg "mkdir -p /pki/csr && cd /pki/csr \
-  && receptor --cert-makereq commonname='$ID' bits=2048 $DNS nodeid=$ID \
-       outreq=$ID.csr outkey=$ID.key \
-  && chmod 600 $ID.key && chmod 644 $ID.csr"
+rimg ID="$ID" EXTRA_DNS="$*" -- '
+  mkdir -p /pki/csr && cd /pki/csr
+  set -- dnsname="$ID"
+  for d in $EXTRA_DNS; do set -- "$@" dnsname="$d"; done
+  receptor --cert-makereq commonname="$ID" bits=2048 "$@" nodeid="$ID" \
+    outreq="$ID.csr" outkey="$ID.key"
+  chmod 600 "$ID.key" && chmod 644 "$ID.csr"'
 echo "request: $MESH_SECRETS/csr/$ID.csr   (key stays here: $MESH_SECRETS/csr/$ID.key)"
-echo "send ONLY the .csr to the CA host, then: mesh/pki/node-sign.sh csr/$ID.csr $ID"
+echo "send ONLY the .csr to the CA host, then: mesh/pki/node-sign.sh csr/$ID.csr $ID${*:+ $*}"

@@ -55,6 +55,11 @@ if [ "${RECEPTOR_INSECURE_DEV:-0}" = 1 ]; then
 else
   for v in RECEPTOR_TLS_CERT RECEPTOR_TLS_KEY RECEPTOR_TLS_CA; do
     [ -n "${!v:-}" ] || { echo "ERROR: $v is required — the mesh is mTLS-only (set RECEPTOR_INSECURE_DEV=1 only for throwaway experiments)" >&2; exit 1; }
+    # same injection rule as every other rendered value: these paths land in
+    # YAML, so a newline or YAML syntax in one could add receptor actions
+    case "${!v}" in
+      *[!A-Za-z0-9._/-]*|'') echo "ERROR: $v '${!v}' invalid: [A-Za-z0-9._/-]+ only" >&2; exit 1;;
+    esac
     [ -f "${!v}" ]   || { echo "ERROR: $v '${!v}' not found" >&2; exit 1; }
   done
 fi

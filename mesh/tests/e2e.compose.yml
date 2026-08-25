@@ -42,8 +42,11 @@ services:
     # `disable: true` also breaks `up --wait` on older compose releases, which
     # error on a service with no check at all.)
     entrypoint: ["sleep", "infinity"]
+    # Healthy = at least one ingress ANSWERS on the shared volume. A plain
+    # `test -S` would stay green on the stale socket file a stopped sidecar
+    # leaves behind (the volume outlives the process).
     healthcheck:
-      test: ["CMD", "test", "-S", "/run/receptor/receptor.sock"]
+      test: ["CMD-SHELL", "receptorctl --socket /run/receptor/receptor.sock status >/dev/null 2>&1 || receptorctl --socket /run/receptor/receptor-b.sock status >/dev/null 2>&1"]
       interval: 10s
       timeout: 5s
       retries: 5

@@ -336,8 +336,10 @@ risk column; anything that touches it must pass [§9.1](#91-non-disruption-check
       valid-cert-wrong-identity nodes all refused) + Tier-1 failover proven
       (e2e 18: sidecar A stopped, dispatch through B succeeds)
 - [x] mTLS is MANDATORY: the node entrypoint refuses to start without cert,
-      key, and CA (`RECEPTOR_INSECURE_DEV=1` is a loud, dev-only escape used
-      by nothing in production or the e2e suite)
+      key, and CA. `RECEPTOR_INSECURE_DEV=1` is a loud, dev-only escape: no
+      production file sets it, and the e2e suite uses it in exactly one place —
+      as the ATTACKER in negative check 15, proving a plaintext node is
+      rejected by the mesh
 
 ### Phase 7 — credentials, artifacts, job index
 - [ ] `env/ssh_key` in the transmit payload; never logged/echoed
