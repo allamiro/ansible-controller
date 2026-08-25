@@ -333,19 +333,19 @@ acquire_slot() {
   # bounds the scan; a node genuinely running 4096 concurrent jobs has bigger
   # problems than slot numbering.
   if [ "$cap" -gt 0 ]; then scan_cap="$cap" record="$cap"; else scan_cap=4096 record=0; fi
-  # A slots dir that cannot even be created holds no recorded caps to honor:
-  # capped dispatch refuses (its own cap would be unenforceable), uncapped
-  # proceeds untracked.
-  (umask 077 && mkdir -p "$SLOTS_DIR") 2>/dev/null \
-    || { [ "$cap" -gt 0 ] && return 1; return 0; }
+  # Fail CLOSED on any slot-state failure, uncapped included: a slots volume
+  # that cannot be engaged (uncreatable, read-only, wedged lock) may be
+  # HIDING recorded finite caps this dispatch is obliged to honor — a 1->0
+  # config transition must not become an overshoot just because the state
+  # volume broke — and would leave this job invisible to later cap enables.
+  (umask 077 && mkdir -p "$SLOTS_DIR") 2>/dev/null || return 1
   # Per-node admission lock: serializes the scan+probe so concurrent
   # dispatchers make their capacity decisions one at a time. Held only for
   # the scan, never for the job; a stuck peer bounds the wait at 30s and
   # refuses the candidate — a wedged admission lock is an anomaly no
   # dispatch should reason past.
   if ! { exec {ADM_FD}>>"$SLOTS_DIR/$node.admission"; } 2>/dev/null; then
-    [ "$cap" -gt 0 ] && return 1
-    return 0
+    return 1
   fi
   if flock -w 30 "$ADM_FD" 2>/dev/null; then
     slot_scan "$node" "$scan_cap" "$record" && out=0
