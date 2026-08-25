@@ -35,6 +35,10 @@ services:
       # .hold markers. Recreating the orchestrator while a unit is still
       # running on a node must not erase the reservation that caps that node.
       - mesh-state:/var/lib/mesh
+      # Pool/zone declarations, live-editable on the host: mesh-run reads them
+      # per dispatch, so config changes need no restart (and no rebuild).
+      - ./mesh/config/pools.yml:/etc/mesh/pools.yml:ro
+      - ./mesh/config/zones.yml:/etc/mesh/zones.yml:ro
 
   # TWO sidecars, A and B — Tier-1 ingress redundancy (§9.7). Execution nodes
   # peer to both; the orchestrator's dispatcher tries A's control socket first

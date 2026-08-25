@@ -221,6 +221,9 @@ docker pull ghcr.io/allamiro/ansible-controller:latest
 | `make galaxy-force` | Re-install / update Galaxy content to the pinned versions |
 | `make pip` | Install extra Python packages from `configs/pip-requirements.txt` |
 | `make lint` | Lint everything under `playbooks/` with ansible-lint |
+| `make mesh-up` / `mesh-down` | Start/stop the [distributed execution mesh](mesh/README.md) control plane |
+| `make mesh-status` / `mesh-ping NODE=x` | Mesh health from both ingresses / round-trip one node |
+| `make mesh-run NODE=x PLAYBOOK=y.yml` | Dispatch a playbook to a mesh node (or `POOL=` / `ZONE=`) |
 | `make logs` | Tail container logs |
 
 ---
