@@ -92,10 +92,18 @@ PDD="$JOBS_DIR/$JOB_ID"
 # birth and prompt removal; put --jobs-dir on a tmpfs when the storage below
 # it gets imaged or snapshotted. NEVER enable xtrace in this script and never
 # echo the key path's contents — the no-log guarantee is part of the contract.
+# Every step is ||-guarded and the incoming exit status is captured and
+# restored: a cleanup failure (say the jobs filesystem went read-only) warns
+# but must never replace the playbook's exit code — the same
+# never-corrupt-the-result rule the artifact export follows.
 cleanup_key() {
+  local st=$?
   if [ -n "$SSH_KEY" ] && [ -f "$PDD/env/ssh_key" ]; then
-    shred -u "$PDD/env/ssh_key" 2>/dev/null || rm -f "$PDD/env/ssh_key"
+    shred -u "$PDD/env/ssh_key" 2>/dev/null \
+      || rm -f "$PDD/env/ssh_key" 2>/dev/null \
+      || echo "mesh-run: warning: could not remove transient key copy $PDD/env/ssh_key" >&2
   fi
+  return "$st"
 }
 trap cleanup_key EXIT
 # The playbook is resolved through symlinks ONCE, and that resolved name is
@@ -179,9 +187,11 @@ if [ -n "$SSH_KEY" ]; then
   # env/ssh_key is loaded into a per-job ssh-agent by the runner ON THE NODE
   # and travels only inside the mTLS receptor stream — it is never an argument,
   # never in the environment, never logged (Phase 7). The staged copy here is
-  # 0600 under a 0700 job dir and is shredded on exit by the trap above; the
-  # node-side copy lives inside receptor's per-unit directory, which `work
-  # release` deletes after results are fetched.
+  # removed on exit by the trap above; the node-side copy is destroyed by
+  # mesh-worker itself right after execution — independent of controller
+  # connectivity, so an ambiguous submit or broken results stream cannot
+  # strand a key in the unit dir — and `work release` later removes the
+  # already-credential-free unit dir.
   install -m 600 "$SSH_KEY" "$PDD/env/ssh_key"
 fi
 

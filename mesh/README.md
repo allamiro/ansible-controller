@@ -255,7 +255,8 @@ What you get back:
   controller-side copy gets a best-effort overwrite before deletion — note
   that overwrite guarantees don't hold on CoW/flash storage, so point
   `--jobs-dir` at a tmpfs if the disk below it gets imaged; the node-side
-  copy lives in the work unit's directory, which is deleted on release).
+  copy is destroyed by the worker itself the moment execution finishes, even
+  if the controller never reconnects).
 
 **A job never runs twice.** If a submission provably failed to leave the
 control host, it can be retried elsewhere — but once a node has (or even *may*
