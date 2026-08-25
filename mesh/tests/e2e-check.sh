@@ -76,4 +76,55 @@ v=$(docker exec mesh-e2e-node-a receptor --version)
 [ "$v" = "1.6.7" ] && pass "receptor 1.6.7 (patched module set, asserted at build)" \
   || fail "unexpected receptor version: $v"
 
+echo "== 9. distributed playbook run succeeds (transmit -> submit -> worker -> process) =="
+docker exec mesh-e2e-orchestrator bash -euc '
+  printf "mesh-e2e-target ansible_user=ansible ansible_ssh_common_args=\"-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null\"\n" > /tmp/e2e-inv
+' || fail "could not write inventory on the orchestrator"
+run_out=$(docker exec mesh-e2e-orchestrator /usr/local/mesh/bin/mesh-run \
+    --node exec-e2e-a --playbook /mesh-playbooks/mesh-ping.yml \
+    --inventory /tmp/e2e-inv --ssh-key /e2e-ssh/id_ed25519 2>&1) \
+  && pass "mesh-run rc=0 across the mesh" \
+  || fail "mesh-run failed: $(tail -3 <<<"$run_out")"
+
+echo "== 10. the play EXECUTED on the node, not on the controller =="
+node_host=$(docker exec mesh-e2e-node-a hostname)
+orch_host=$(docker exec mesh-e2e-orchestrator hostname)
+grep -q "EXECUTED-ON=${node_host} " <<<"$run_out" \
+  && pass "EXECUTED-ON=${node_host} (the execution node)" \
+  || fail "play did not report executing on the node (${node_host}); output: $(grep -o "EXECUTED-ON=[^ ]*" <<<"$run_out" | head -1)"
+grep -q "EXECUTED-ON=${orch_host} " <<<"$run_out" \
+  && fail "play executed on the ORCHESTRATOR (${orch_host})" \
+  || pass "and not on the orchestrator (${orch_host})"
+
+echo "== 11. artifacts returned to the controller side =="
+job_id=$(grep -o "job=[0-9a-f-]*" <<<"$run_out" | cut -d= -f2)
+[ -n "$job_id" ] || fail "no job id in mesh-run output"
+art=$(docker exec mesh-e2e-orchestrator bash -euc "
+  pdd=/var/lib/mesh/jobs/$job_id
+  rc=\$(find \$pdd/artifacts -name rc -type f -exec cat {} \; | head -1)
+  ev=\$(find \$pdd/artifacts -path \"*job_events*\" -name \"*.json\" | wc -l)
+  so=\$(find \$pdd/artifacts -name stdout -type f | wc -l)
+  echo \"rc=\$rc events=\$ev stdout=\$so\"") \
+  || fail "could not inspect artifacts for job $job_id"
+case "$art" in
+  "rc=0 events="*) [ "${art#*stdout=}" != 0 ] && pass "artifacts complete ($art)" || fail "no stdout artifact ($art)";;
+  *) fail "unexpected artifacts state: $art";;
+esac
+
+echo "== 12. per-job meta.json records the lifecycle =="
+meta=$(docker exec mesh-e2e-orchestrator cat /var/lib/mesh/jobs/$job_id/meta.json 2>/dev/null) \
+  || fail "meta.json missing for job $job_id"
+grep -q '"status":"succeeded"' <<<"$meta" && grep -q '"node":"exec-e2e-a"' <<<"$meta" \
+  && pass "meta.json: succeeded on exec-e2e-a" \
+  || fail "meta.json wrong: $meta"
+
+echo "== 13. a failing playbook propagates its real rc back =="
+if docker exec mesh-e2e-orchestrator /usr/local/mesh/bin/mesh-run \
+    --node exec-e2e-a --playbook /mesh-playbooks/mesh-fail.yml \
+    --inventory /tmp/e2e-inv --ssh-key /e2e-ssh/id_ed25519 >/dev/null 2>&1; then
+  fail "mesh-run returned 0 for a playbook that must fail"
+else
+  pass "failing playbook returned nonzero rc across the mesh"
+fi
+
 echo "All mesh e2e regression checks passed."

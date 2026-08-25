@@ -1,0 +1,104 @@
+#!/bin/bash
+# mesh-run — minimal Phase 5 dispatcher: run a playbook on ONE execution node
+# via receptor, returning the playbook's real exit code and its artifacts.
+#
+#   mesh-run --node <node-id> --playbook <file.yml> --inventory <file> \
+#            [--ssh-key <file>] [--socket <receptor.sock>] [--jobs-dir <dir>]
+#
+# Runs INSIDE the orchestrator container (the e2e suite and, later, `make
+# mesh-run` invoke it there). Flow — mesh plan §2.4 steps 4-9, single node:
+#
+#   ansible-runner transmit  -> stream the private data dir over stdout
+#   receptorctl work submit  -> send it to the node's ansible-runner worktype
+#   receptorctl work results -> stream events back as the job runs
+#   ansible-runner process   -> reconstruct locally; artifacts + REAL ansible rc
+#
+# Failover does NOT belong here (plan §2.4): this submits to exactly one node
+# and never retries — a submission whose fate is unknown must never be re-sent
+# elsewhere. Pool selection and the dispatch-only failover boundary arrive with
+# Phase 8; work signing (--signwork) with Phase 9.
+set -euo pipefail
+
+die() { echo "mesh-run: ERROR: $*" >&2; exit 2; }
+
+NODE= PLAYBOOK= INVENTORY= SSH_KEY= SOCKET=/run/receptor/receptor.sock
+JOBS_DIR=/var/lib/mesh/jobs
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --node)      NODE="${2:?}"; shift 2;;
+    --playbook)  PLAYBOOK="${2:?}"; shift 2;;
+    --inventory) INVENTORY="${2:?}"; shift 2;;
+    --ssh-key)   SSH_KEY="${2:?}"; shift 2;;
+    --socket)    SOCKET="${2:?}"; shift 2;;
+    --jobs-dir)  JOBS_DIR="${2:?}"; shift 2;;
+    *) die "unknown argument: $1";;
+  esac
+done
+[ -n "$NODE" ]      || die "--node is required"
+[ -f "$PLAYBOOK" ]  || die "--playbook '$PLAYBOOK' not found"
+[ -f "$INVENTORY" ] || die "--inventory '$INVENTORY' not found"
+[ -S "$SOCKET" ]    || die "receptor control socket '$SOCKET' not found"
+case "$NODE" in *[!A-Za-z0-9._-]*) die "--node '$NODE' invalid";; esac
+
+# (4) unique private data dir per job — no shared state between concurrent runs
+JOB_ID=$(cat /proc/sys/kernel/random/uuid)
+PDD="$JOBS_DIR/$JOB_ID"
+mkdir -p "$PDD/project" "$PDD/inventory" "$PDD/env"
+cp "$PLAYBOOK" "$PDD/project/"
+cp "$INVENTORY" "$PDD/inventory/hosts"
+if [ -n "$SSH_KEY" ]; then
+  [ -f "$SSH_KEY" ] || die "--ssh-key '$SSH_KEY' not found"
+  # env/ssh_key is loaded into a per-job ssh-agent by the runner ON THE NODE and
+  # travels only inside the receptor stream. Phase 7 hardens handling further
+  # (no-log guarantees, secure cleanup of transient copies).
+  install -m 600 "$SSH_KEY" "$PDD/env/ssh_key"
+fi
+
+# (5) one meta.json PER JOB — concurrency-safe by construction (plan §4), and
+# the hook Tier 2.5 recovery needs later. Status transitions are whole-file
+# rewrites of a private file, so there is no shared-file race.
+meta() {
+  printf '{"job_id":"%s","node":"%s","playbook":"%s","unit_id":"%s","status":"%s"}\n' \
+    "$JOB_ID" "$NODE" "$(basename "$PLAYBOOK")" "${UNIT_ID:-}" "$1" > "$PDD/meta.json"
+}
+meta created
+
+# (6) transmit -> submit. The payload streams straight through; receptorctl
+# prints "Unit ID: <id>" on success. A failure here is DEFINITIVELY
+# pre-execution (nothing left this host), so exiting is safe — but only here:
+# past this point the unit may be running, and it is never resubmitted.
+meta submitting
+submit_out=$(ansible-runner transmit "$PDD" -p "$(basename "$PLAYBOOK")" 2>/dev/null \
+  | receptorctl --socket "$SOCKET" work submit ansible-runner \
+      --node "$NODE" --payload -) \
+  || { meta submit-failed; die "work submit to '$NODE' failed (nothing was executed)"; }
+UNIT_ID=$(awk '/^Unit ID:/ {print $3}' <<<"$submit_out")
+[ -n "$UNIT_ID" ] || { meta submit-failed; die "no unit id in submit output: $submit_out"; }
+meta running
+
+# (7)(8) stream results -> process. ansible-runner process replays the play
+# output, materialises artifacts under $PDD/artifacts/ (stdout, rc,
+# job_events/), and exits with the PLAYBOOK's rc. The unit is released
+# explicitly only AFTER results were fully fetched — `submit --rm` could
+# release it before retrieval.
+rc=0
+receptorctl --socket "$SOCKET" work results "$UNIT_ID" 2>/dev/null \
+  | ansible-runner process "$PDD" || rc=$?
+
+# The Processor treats a poisoned/empty stream as status=error but still exits
+# 0, so "rc==0" alone cannot be trusted: require the artifacts' own rc file,
+# written only when the stream round-trip actually completed.
+art_rc_file=$(find "$PDD/artifacts" -maxdepth 2 -name rc -type f 2>/dev/null | head -1)
+if [ -z "$art_rc_file" ]; then
+  meta "failed no-artifacts"
+  die "no rc artifact came back — the results stream did not complete (job may still be running on '$NODE', unit=$UNIT_ID)"
+fi
+rc=$(cat "$art_rc_file")
+
+receptorctl --socket "$SOCKET" work release "$UNIT_ID" >/dev/null 2>&1 || true
+
+if [ "$rc" -eq 0 ]; then meta succeeded; else meta "failed rc=$rc"; fi
+echo "mesh-run: job=$JOB_ID node=$NODE unit=$UNIT_ID rc=$rc artifacts=$PDD/artifacts" >&2
+
+# (9) the playbook's own exit code is the contract
+exit "$rc"

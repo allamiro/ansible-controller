@@ -82,9 +82,13 @@ conf=/run/receptor/receptor.conf
   fi
 
   # The unit of work this node accepts: an ansible-runner worker fed a streamed
-  # private data dir (transmit -> work submit). allowruntimeparams lets the
-  # submitter pass runner args; verifysignature flips on in Phase 9.
-  printf -- '- work-command:\n    worktype: ansible-runner\n    command: ansible-runner\n    params: worker\n    allowruntimeparams: true\n'
+  # private data dir (transmit -> work submit). mesh-worker wraps the runner to
+  # keep stderr OUT of the results stream: receptor merges the command's stderr
+  # into the unit stdout, and a single non-JSON line (OpenSSL greets stderr on
+  # every python start here) breaks the controller-side Processor at its first
+  # read. allowruntimeparams lets the submitter pass runner args;
+  # verifysignature flips on in Phase 9.
+  printf -- '- work-command:\n    worktype: ansible-runner\n    command: /usr/local/bin/mesh-worker\n    allowruntimeparams: true\n'
 } > "$conf"
 
 exec receptor -c "$conf"

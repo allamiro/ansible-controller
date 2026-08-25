@@ -310,9 +310,17 @@ risk column; anything that touches it must pass [§9.1](#91-non-disruption-check
 - [x] **No‑TLS** peering confined to the e2e environment (never in a production compose file)
 
 ### Phase 5 — prove distributed execution
-- [ ] `mesh/bin/mesh-run` (minimal: transmit → submit → worker → process)
-- [ ] Positive test: controller can’t SSH target directly; `mesh-run` succeeds
-- [ ] "Prove‑on‑node" playbook shows node id, not controller
+- [x] `mesh/bin/mesh-run` (minimal: transmit → submit → worker → process) —
+      per-job UUID + `jobs/<uuid>/meta.json` lifecycle from the first commit
+      (day-one invariants, §4); success requires the artifacts' own `rc` file,
+      because a broken results stream leaves `ansible-runner process` exiting 0
+- [x] Node-side `mesh-worker` wrapper keeps the results stream protocol-pure —
+      receptor merges the work command's stderr into the unit stdout, and one
+      non-JSON line (OpenSSL greets stderr at every python start) makes the
+      controller-side Processor abort at its first read
+- [x] Positive test: controller can’t SSH target directly; `mesh-run` succeeds (e2e check 9)
+- [x] "Prove‑on‑node" playbook shows node id, not controller (e2e check 10, both directions)
+- [x] Real ansible rc + artifacts (stdout, rc, job_events) return to the controller (checks 11–13, including nonzero rc propagation)
 
 ### Phase 6 — PKI + mandatory mTLS
 - [ ] `mesh/pki/`: `mesh-ca-init.sh`, `controller-cert.sh`, `node-csr.sh`, `node-sign.sh`
