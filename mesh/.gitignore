@@ -27,3 +27,9 @@ id_ed25519
 
 # e2e-generated throwaway PKI (created by mesh/tests/e2e-up.sh, never real)
 tests/.e2e-pki/
+
+# node-host settings for compose.node.yml (copied from node.env.example) —
+# host-specific, never shared through the repo
+.env
+*.env
+!node.env.example

@@ -233,6 +233,8 @@ ansible-controller/
     ├── README.md               # operator overview (diagrams, quick start)
     ├── DESIGN.md               # this document
     ├── compose.mesh.yml        # overlay: sidecar + local exec-node, profile-gated
+    ├── compose.node.yml        # node-side deployment file: one node, env-driven
+    ├── node.env.example        # its settings (node id, ingress addresses, image)
     ├── config/
     │   ├── zones.yml            # inventory group / network → zone (local | net20…)
     │   ├── pools.yml            # zone → [node_id, node_id]  (HA membership)
@@ -385,6 +387,9 @@ risk column; anything that touches it must pass [§9.1](#91-non-disruption-check
       — [`mesh/RUNBOOK.md`](RUNBOOK.md)
 - [x] Confirm every pre-existing Make target still works (unchanged; verified
       by `make -n` across the full target list)
+- [x] `mesh/compose.node.yml` + `node.env.example` — the packaged node-side
+      deployment (the RUNBOOK's `docker run` as a file); e2e #26 starts a node
+      from it, unmodified, and dispatches work to it
 
 ---
 

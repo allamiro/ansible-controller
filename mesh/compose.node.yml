@@ -1,0 +1,79 @@
+# Execution node — the node-side deployment file.
+#
+# This is the RUNBOOK's `docker run` as a file you keep on the node host: one
+# execution node that dials OUT to both control-plane ingresses over mutual
+# TLS and verifies the control plane's signature on every unit of work before
+# executing it. Nothing dials INTO a node, so no ports are published.
+#
+# Everything host-specific comes from the environment, or from a .env file
+# beside this file (see node.env.example):
+#
+#   RECEPTOR_NODE_ID       required  the identity in this node's certificate,
+#                                    e.g. exec-dmz-a
+#   RECEPTOR_PEERS         required  ingress A and B as host:port, comma-separated
+#   MESH_NODE_IMAGE        optional  default ghcr.io/allamiro/ansible-execution-node:latest
+#                                    — pin a version, or your site-built tag
+#                                    (README, "Node runtime Python dependencies")
+#   MESH_NODE_TLS_DIR      optional  directory holding tls.crt, tls.key, ca.crt;
+#                                    default ./secrets/receptor/issued/<node id>,
+#                                    exactly where the RUNBOOK's enrollment
+#                                    assembles the bundle
+#   MESH_NODE_WORK_PUBKEY  optional  the work-signing PUBLIC key (never the
+#                                    private half); default
+#                                    ./secrets/receptor/work-signing/work-public.pem
+#   RECEPTOR_LOG_LEVEL     optional  debug|info|warning|error (default info)
+#   MESH_NODE_PROJECT      optional  Compose project name (default mesh-node);
+#                                    only needed to run several nodes on one host
+#
+# Relative paths resolve against this file's directory, so the defaults work
+# both from a checkout (`docker compose -f mesh/compose.node.yml up -d` at the
+# repository root) and from a copy of this file placed beside a secrets/ tree
+# on a node host that has no checkout at all. The container reads the bundle
+# as uid 1000, so on a Linux host the issued directory must be readable by
+# that uid (`chown -R 1000:1000`, as the RUNBOOK's enrollment step does).
+#
+# The node joins its own private bridge by default — it needs only outbound
+# reachability to the ingresses and to its targets. To place it on an existing
+# network instead (a macvlan into the closed segment, another stack's network),
+# add an override file; mesh/tests/e2e.node-override.yml is the shape.
+#
+# One node per host is the default (project "mesh-node"). To run several on
+# one host — a lab, or one node per zone on a jump host — give each its own
+# env file with a distinct MESH_NODE_PROJECT. Compose project names allow
+# only lowercase letters, digits, "-" and "_", while a node id may carry
+# uppercase and dots, so the project name is deliberately NOT derived from
+# the node id:
+#   docker compose -f mesh/compose.node.yml --env-file dmz.env up -d --wait
+#
+# `up --wait` returns when the node is HEALTHY, not merely started: the image
+# carries a HEALTHCHECK (receptorctl status on the node's control socket), and
+# compose honours image-level checks.
+#
+# Proven, not just documented: e2e check 26 (mesh/tests/e2e-check.sh) starts
+# a node from THIS file on every mesh change and dispatches work to it.
+
+name: ${MESH_NODE_PROJECT:-mesh-node}
+
+services:
+  exec-node:
+    image: ${MESH_NODE_IMAGE:-ghcr.io/allamiro/ansible-execution-node:latest}
+    container_name: mesh-node-${RECEPTOR_NODE_ID:?RECEPTOR_NODE_ID is required - the identity in this node's certificate, e.g. exec-dmz-a}
+    restart: unless-stopped
+    environment:
+      RECEPTOR_NODE_ID: ${RECEPTOR_NODE_ID}
+      RECEPTOR_PEERS: ${RECEPTOR_PEERS:?RECEPTOR_PEERS is required - both ingresses, e.g. ctrl.example.com:27199,ctrl.example.com:27200}
+      RECEPTOR_LOG_LEVEL: ${RECEPTOR_LOG_LEVEL:-info}
+      # Fixed in-container paths; the host side of each is a mount below.
+      RECEPTOR_TLS_CERT: /etc/receptor/tls/tls.crt
+      RECEPTOR_TLS_KEY: /etc/receptor/tls/tls.key
+      RECEPTOR_TLS_CA: /etc/receptor/tls/ca.crt
+      RECEPTOR_WORK_PUBKEY: /etc/receptor/signing/work-public.pem
+    # Rendered config + control socket on tmpfs, never the writable layer
+    # (uid/gid: the image pre-creates this dir for uid 1000, but a tmpfs mount
+    # would shadow it root-owned without these options).
+    tmpfs:
+      - /run/receptor:uid=1000,gid=1000,mode=0750
+    volumes:
+      - ${MESH_NODE_TLS_DIR:-./secrets/receptor/issued/${RECEPTOR_NODE_ID}}:/etc/receptor/tls:ro
+      # public HALF only — the signing private key never reaches a node
+      - ${MESH_NODE_WORK_PUBKEY:-./secrets/receptor/work-signing/work-public.pem}:/etc/receptor/signing/work-public.pem:ro

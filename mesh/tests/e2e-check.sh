@@ -11,6 +11,15 @@ set -euo pipefail
 pass() { printf '  PASS  %s\n' "$1"; }
 fail() { printf '  FAIL  %s\n' "$1"; exit 1; }
 
+# Check 17 bounds a host-side `docker run` with `timeout`. macOS ships no
+# timeout(1), and the lab is advertised for any docker-capable host, so fall
+# back to perl (present on every macOS and Linux box): the alarm survives the
+# exec, and the bounded command dies on SIGALRM exactly as it would on
+# timeout's SIGTERM — a nonzero status either way, which is all check 17 uses.
+if ! command -v timeout >/dev/null 2>&1; then
+  timeout() { perl -e 'alarm shift @ARGV; exec @ARGV' -- "$@"; }
+fi
+
 # The node redials with backoff; give a fresh environment up to 60s to converge.
 deadline=$((SECONDS + 60))
 while :; do
@@ -490,5 +499,50 @@ case "$unsigned_out" in
   *)
     fail "no signature-specific refusal for unsigned work: $unsigned_out";;
 esac
+
+echo "== 26. the packaged node compose file joins the mesh and runs work (mesh/compose.node.yml) =="
+# mesh/compose.node.yml is the node-side deployment file operators run. Start
+# a SECOND node from it exactly as the README says to — identity, peers, image,
+# and bundle through its documented variables; the networks through the
+# documented override shape (e2e.node-override.yml joins the suite's networks
+# the way a site override joins a macvlan) — then prove it joined through an
+# ingress and executed signed work on the target. Fail CLOSED: a file that no
+# longer starts, a node that starts but never joins, and one that joins but
+# does not run the play all fail. The suite's own COMPOSE_PROJECT_NAME must not
+# leak into this project (it would collide with the lab's), hence env -u.
+node_compose() {
+  env -u COMPOSE_PROJECT_NAME \
+    MESH_NODE_PROJECT=mesh-e2e-node-b \
+    RECEPTOR_NODE_ID=exec-e2e-b \
+    RECEPTOR_PEERS=mesh-e2e-receptor:27199,mesh-e2e-receptor-b:27199 \
+    MESH_NODE_IMAGE=ansible-execution-node:e2e \
+    MESH_NODE_TLS_DIR="$PWD/mesh/tests/.e2e-pki/issued/exec-e2e-b" \
+    MESH_NODE_WORK_PUBKEY="$PWD/mesh/tests/.e2e-pki/work-signing/work-public.pem" \
+    E2E_PROJECT="${COMPOSE_PROJECT_NAME:-mesh-e2e}" \
+    docker compose -f mesh/compose.node.yml -f mesh/tests/e2e.node-override.yml "$@"
+}
+node_up=$(node_compose up -d --wait --wait-timeout 90 2>&1) \
+  && pass "compose.node.yml started mesh-node-exec-e2e-b healthy (the image's HEALTHCHECK: receptorctl status on its control socket)" \
+  || { docker logs mesh-node-exec-e2e-b 2>&1 | tail -20 || true; fail "packaged node did not come up healthy: $(tail -3 <<<"$node_up")"; }
+deadline=$((SECONDS + 60)); joined=0
+while [ $SECONDS -lt $deadline ]; do
+  st=$(docker exec mesh-e2e-receptor receptorctl --socket /run/receptor/receptor.sock status 2>/dev/null || true)
+  if grep -q "exec-e2e-b" <<<"$st"; then joined=1; break; fi
+  sleep 3
+done
+[ "$joined" = 1 ] \
+  && pass "exec-e2e-b joined via ingress A (mTLS + work verification rendered from the file's env)" \
+  || { docker logs mesh-node-exec-e2e-b 2>&1 | tail -20 || true; fail "exec-e2e-b never appeared in receptorctl status within 60s"; }
+b_out=$(docker exec mesh-e2e-orchestrator /usr/local/mesh/bin/mesh-run \
+    --node exec-e2e-b --playbook /mesh-playbooks/mesh-ping.yml \
+    --inventory /tmp/e2e-inv --ssh-key /e2e-ssh/id_ed25519 2>&1) \
+  || fail "mesh-run to the packaged node failed: $(tail -3 <<<"$b_out")"
+b_host=$(docker exec mesh-node-exec-e2e-b hostname)
+grep -q "EXECUTED-ON=${b_host} " <<<"$b_out" \
+  && pass "play executed on the packaged node (${b_host}) with rc=0 across the mesh" \
+  || fail "play did not report executing on exec-e2e-b (${b_host}): $(grep -o "EXECUTED-ON=[^ ]*" <<<"$b_out" | head -1)"
+node_down=$(node_compose down 2>&1) \
+  && pass "packaged node torn down with the same file" \
+  || fail "compose.node.yml down failed: $(tail -3 <<<"$node_down")"
 
 echo "All mesh e2e regression checks passed."

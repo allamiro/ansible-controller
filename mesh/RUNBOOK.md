@@ -37,6 +37,11 @@ Keep on the **offline machine**: `ca/ca.key` (forever) and
 
 ## 2. Enroll an execution node
 
+Every `mesh/pki/` script reads and writes the secrets tree
+`mesh/secrets/receptor/` (`MESH_SECRETS`); the `csr/`, `issued/`, and
+`work-signing/` paths below are relative to it, and the packaged node file's
+defaults point at the same tree.
+
 ```bash
 # ON THE NODE HOST — key + signing request; the key never leaves:
 mesh/pki/node-csr.sh exec-dmz-a
@@ -53,20 +58,41 @@ chmod 600 issued/exec-dmz-a/tls.key
 #   work-signing/work-public.pem  (from the offline machine — public half only)
 ```
 
-Run the node container with the bundle and the public key mounted:
+Start the node from the packaged file. Put `compose.node.yml` and
+`node.env.example` (both in `mesh/`) on the node host beside the
+`secrets/receptor/` tree the steps above produced — the file's defaults point
+at `secrets/receptor/issued/<node id>/` and
+`secrets/receptor/work-signing/work-public.pem`, mounted read-only:
 
 ```bash
-docker run -d --name mesh-node --restart unless-stopped \
-  -v "$PWD/issued/exec-dmz-a":/tls:ro \
-  -v "$PWD/work-public.pem":/signing/work-public.pem:ro \
+chown -R 1000:1000 secrets/receptor/issued/exec-dmz-a   # the container reads the bundle as uid 1000
+cp node.env.example .env                                # set RECEPTOR_NODE_ID and RECEPTOR_PEERS
+docker compose -f compose.node.yml up -d --wait
+docker compose -f compose.node.yml logs -f              # both ingress connections come up
+```
+
+The rendered receptor config lives on tmpfs, the node restarts with its host,
+and every setting — image tag, bundle location, log level, several nodes on
+one host — is documented at the top of the file.
+
+<details>
+<summary>Equivalent <code>docker run</code>, for a host without compose</summary>
+
+```bash
+docker run -d --name mesh-node-exec-dmz-a --restart unless-stopped \
+  --tmpfs /run/receptor:uid=1000,gid=1000,mode=0750 \
+  -v "$PWD/secrets/receptor/issued/exec-dmz-a":/etc/receptor/tls:ro \
+  -v "$PWD/secrets/receptor/work-signing/work-public.pem":/etc/receptor/signing/work-public.pem:ro \
   -e RECEPTOR_NODE_ID=exec-dmz-a \
   -e RECEPTOR_PEERS=ctrl.example.com:27199,ctrl.example.com:27200 \
-  -e RECEPTOR_TLS_CERT=/tls/tls.crt \
-  -e RECEPTOR_TLS_KEY=/tls/tls.key \
-  -e RECEPTOR_TLS_CA=/tls/ca.crt \
-  -e RECEPTOR_WORK_PUBKEY=/signing/work-public.pem \
+  -e RECEPTOR_TLS_CERT=/etc/receptor/tls/tls.crt \
+  -e RECEPTOR_TLS_KEY=/etc/receptor/tls/tls.key \
+  -e RECEPTOR_TLS_CA=/etc/receptor/tls/ca.crt \
+  -e RECEPTOR_WORK_PUBKEY=/etc/receptor/signing/work-public.pem \
   ghcr.io/allamiro/ansible-execution-node:latest
 ```
+
+</details>
 
 Add the node to `mesh/config/pools.yml` (and a zone in `zones.yml`) so pool
 dispatch can select it — config is read per dispatch, no restart needed.
@@ -163,5 +189,5 @@ The places to look:
 | `receptorctl work list` (either socket) | units the mesh still tracks — the first stop after an ambiguous submit |
 
 The e2e suite doubles as a diagnostic vocabulary: every failure mode it
-proves (25 checks) is one the mesh is supposed to refuse — if production
+proves (26 checks) is one the mesh is supposed to refuse — if production
 shows different behavior than the lab, compare configurations first.

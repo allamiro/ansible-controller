@@ -1,0 +1,18 @@
+# e2e override for mesh/compose.node.yml (check 26). The packaged node file
+# receives its identity, peers, image, and bundle through its documented
+# variables (see e2e-check.sh); the one thing the suite has to add is WHICH
+# networks the node sits on — the same override shape a site uses to put a
+# node on a macvlan into its closed segment. Both suite networks: ctlnet to
+# reach the ingresses, targetnet to reach the managed target (the control
+# plane is on no route to the target — the property check 4 proves).
+services:
+  exec-node:
+    networks: [ctlnet, targetnet]
+
+networks:
+  ctlnet:
+    external: true
+    name: ${E2E_PROJECT:-mesh-e2e}_ctlnet
+  targetnet:
+    external: true
+    name: ${E2E_PROJECT:-mesh-e2e}_targetnet
