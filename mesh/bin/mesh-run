@@ -269,7 +269,7 @@ SLOT_FD= SLOT_FILE= DISPATCH_STATE=pre-submit
 # jointly overshoot the lower cap.
 slot_scan() {
   local node="$1" cap="$2" record="${3:-$2}" i f g gi eff max_occ hc
-  local capf="$SLOTS_DIR/$node.cap" recorded ceil
+  local capf="$SLOTS_DIR/$node/cap" recorded ceil
 
   # The node's PERSISTED cap — written on every admission attempt, refused
   # ones included, so an accepted reduction survives even when the reducing
@@ -300,7 +300,7 @@ slot_scan() {
   fi
 
   for ((i = 1; i <= cap; i++)); do
-    f="$SLOTS_DIR/$node.slot.$i"
+    f="$SLOTS_DIR/$node/slot.$i"
     # A .hold marker means a previous dispatch through this slot ended with
     # the job's fate UNKNOWN (ambiguous submit / broken results stream): the
     # acknowledged unit may still be running on the node, so the slot stays
@@ -327,7 +327,7 @@ slot_scan() {
       # Consequence, by design: a cap RAISE takes effect as in-flight jobs
       # started under the lower cap drain.
       eff="$ceil" max_occ=0
-      for g in "$SLOTS_DIR/$node".slot.*; do
+      for g in "$SLOTS_DIR/$node"/slot.*; do
         [ -e "$g" ] || continue
         case "$g" in *.hold) continue;; esac
         gi="${g##*.slot.}"
@@ -378,7 +378,7 @@ acquire_slot() {
   # the scan, never for the job; a stuck peer bounds the wait at 30s and
   # refuses the candidate — a wedged admission lock is an anomaly no
   # dispatch should reason past.
-  if ! { exec {ADM_FD}>>"$SLOTS_DIR/$node.admission"; } 2>/dev/null; then
+  if ! { exec {ADM_FD}>>"$SLOTS_DIR/$node/admission"; } 2>/dev/null; then
     return 1
   fi
   if flock -w 30 "$ADM_FD" 2>/dev/null; then
@@ -603,7 +603,10 @@ if [ -z "$SOCKET" ]; then
   if [ -n "$POOL" ]; then
     die "no healthy node with a free slot in pool '$POOL' (${SELECT_NOTE% }) — nothing was executed"
   fi
-  die "node '$NODE' is not reachable via any live ingress ($SOCKETS)${SELECT_NOTE:+ (${SELECT_NOTE% })} — nothing was executed"
+  # The recorded selection reason distinguishes "unroutable" from "at
+  # capacity" — sending an operator to debug routing for a full node
+  # would waste exactly the time the record exists to save.
+  die "node '$NODE' not selectable: ${SELECT_NOTE:-not reachable via any live ingress ($SOCKETS)} — nothing was executed"
 fi
 
 # (6) transmit -> submit. receptorctl prints "Unit ID: <id>" on success. Past

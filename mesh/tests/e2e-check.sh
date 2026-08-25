@@ -413,7 +413,7 @@ deadline=$((SECONDS + 30))
 while [ $SECONDS -lt $deadline ]; do
   probe_rc=0
   probe_out=$(docker exec mesh-e2e-orchestrator sh -c \
-    'flock -n /var/lib/mesh/slots/exec-e2e-a.slot.1 true' 2>&1) || probe_rc=$?
+    'flock -n /var/lib/mesh/slots/exec-e2e-a/slot.1 true' 2>&1) || probe_rc=$?
   case "$probe_rc" in
     0) sleep 1;;             # free (or not created yet) — keep waiting
     1) slot_held=1; break;;  # contention: job 1 holds the reservation
