@@ -1,10 +1,10 @@
 # Distributed Execution Mesh — Design & Implementation Plan
 
-> **Status: PLAN. Nothing here is implemented yet.** This directory is a review
-> artifact. It describes how distributed Ansible execution and control‑plane HA
-> will be added to this repository *without changing the existing controller
-> image or its behaviour*. Code lands only after this plan is approved, one
-> phase per PR.
+> **Status: approved; landing one phase per PR.** This document describes how
+> distributed Ansible execution and control‑plane HA are added to this repository
+> *without changing the existing controller image or its behaviour*. It remains
+> the design of record — the checklist in [§7](#7-todo-checklist) tracks what has
+> actually shipped, and the phases still unticked are plan, not code.
 
 ---
 
@@ -288,10 +288,13 @@ risk column; anything that touches it must pass [§9.1](#91-non-disruption-check
 - [ ] `orchestrator` scan 0; controller digest unchanged
 
 ### Phase 3 — controller receptor sidecar
-- [ ] `mesh/config/receptor/controller.yml` (v2, Unix control socket, no TCP control)
-- [ ] `mesh/compose.mesh.yml` with `receptor-controller` under `profiles: [mesh]`
-- [ ] Shared named volume `receptor-runtime:/run/receptor`
-- [ ] Verify `make up` still starts controller **only**
+- [x] `mesh/config/receptor/controller.yml` (Unix control socket, no TCP control)
+      — receptor 1.6.7 takes a YAML **list** of action maps; it rejects the
+      mapping/`version: 2` style with `cannot unmarshal !!map into []interface {}`
+- [x] `mesh/compose.mesh.yml` with `receptor-controller` under `profiles: [mesh]`
+- [x] Shared named volume `receptor-runtime:/run/receptor`
+- [x] Verify `make up` still starts controller **only**
+- [x] Sidecar drops to the unprivileged `receptor` uid; control socket is 0600
 
 ### Phase 4 — execution node + dev lab
 - [ ] `execution-node` target = `FROM ${BASE}` + `receptor` + `ansible-runner` (Phase 5 submits `ansible-runner worker` here)
