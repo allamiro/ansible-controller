@@ -29,6 +29,10 @@
 log="/var/lib/receptor/worker-$$-${EPOCHSECONDS}.log"
 exec 2> >(tail -c 1048576 2>/dev/null > "$log" || cat > /dev/null 2>&1)
 
-ls -t /var/lib/receptor/worker-*.log 2>/dev/null | tail -n +17 | xargs -r rm -f --
+# Keep the newest 15 PRIOR logs: the sink above runs asynchronously, so this
+# worker's own file may or may not exist yet when the prune runs. Counting
+# only survivors-that-are-not-us makes the bound exact either way — at most
+# 15 prior + this worker's = 16 retained, ≤1 MiB each.
+ls -t /var/lib/receptor/worker-*.log 2>/dev/null | grep -Fxv "$log" | tail -n +16 | xargs -r rm -f --
 
 exec ansible-runner worker "$@"
