@@ -307,4 +307,42 @@ done
 [ "$recovered" = 1 ] && pass "sidecar A recovered: answering, node re-peered" \
   || fail "sidecar A restarted but never recovered the node within 60s"
 
+echo "== 21. transient SSH key copy is destroyed after the job (Phase 7) =="
+# The job from check 9 staged /e2e-ssh/id_ed25519 into its PDD env/. The
+# artifacts and meta.json must survive; the key copy must not. Fail CLOSED:
+# a missing PDD means the probe itself is wrong, not that cleanup worked.
+key_state=$(docker exec mesh-e2e-orchestrator bash -euc "
+  pdd=/var/lib/mesh/jobs/$job_id
+  [ -d \"\$pdd\" ] || { echo no-pdd; exit 0; }
+  if [ -e \"\$pdd/env/ssh_key\" ]; then echo key-present; else echo key-gone; fi")
+case "$key_state" in
+  key-gone)    pass "staged env/ssh_key removed; artifacts retained";;
+  key-present) fail "transient ssh key copy still present in the job dir";;
+  no-pdd)      fail "job dir for $job_id vanished — cannot prove key cleanup";;
+  *)           fail "key-cleanup probe returned '$key_state'";;
+esac
+
+echo "== 22. artifacts published to the operator log tree (Phase 7) =="
+# mesh-run exports stdout/rc/job_events/meta.json per job to
+# /var/log/ansible/runner/<job-id>/ — the tree the compose setup exposes on
+# the host as logs/runner/. The final meta must carry the terminal status.
+log_state=$(docker exec mesh-e2e-orchestrator bash -euc "
+  d=/var/log/ansible/runner/$job_id
+  [ -f \"\$d/rc\" ] && [ -f \"\$d/stdout\" ] || { echo missing-core; exit 0; }
+  ev=\$(find \"\$d/job_events\" -name '*.json' 2>/dev/null | wc -l)
+  st=\$(python3 -c \"import json; print(json.load(open('\$d/meta.json')).get('status',''))\" 2>/dev/null || echo unreadable)
+  echo \"rc=\$(cat \"\$d/rc\") events=\$ev meta=\$st\"")
+case "$log_state" in
+  "rc=0 events="*)
+    ev_n=$(sed -n 's/.*events=\([0-9]*\).*/\1/p' <<<"$log_state")
+    meta_st=$(sed -n 's/.*meta=\(.*\)$/\1/p' <<<"$log_state")
+    if [ -n "$ev_n" ] && [ "$ev_n" -gt 0 ] && [ "$meta_st" = succeeded ]; then
+      pass "log tree complete ($log_state)"
+    else
+      fail "log tree incomplete: $log_state"
+    fi;;
+  missing-core) fail "no rc/stdout under /var/log/ansible/runner/$job_id";;
+  *)            fail "unexpected log-tree state: $log_state";;
+esac
+
 echo "All mesh e2e regression checks passed."

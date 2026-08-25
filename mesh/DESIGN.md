@@ -349,14 +349,16 @@ risk column; anything that touches it must pass [§9.1](#91-non-disruption-check
       rejected by the mesh
 
 ### Phase 7 — credentials, artifacts, job index
-- [ ] `env/ssh_key` in the transmit payload; never logged/echoed
-- [ ] Node runtime Python deps (pip-requirements.txt equivalents, e.g. boto3
+- [x] `env/ssh_key` in the transmit payload; never logged/echoed
+- [x] Node runtime Python deps (pip-requirements.txt equivalents, e.g. boto3
       for cloud inventory plugins): document the site-image extension pattern
       (`FROM execution-node` + `pip install -r`) — per-job staging of compiled
-      packages is the wrong layer
-- [ ] Artifacts to `logs/runner/<job-id>/` (stdout, rc, job_events)
-- [ ] Write a per-job `jobs/<uuid>/meta.json` (one file per job — concurrency-safe)
-- [ ] Secure cleanup of transient key copies
+      packages is the wrong layer (README "Node runtime Python dependencies")
+- [x] Artifacts to `logs/runner/<job-id>/` (stdout, rc, job_events) — e2e #22
+- [x] Write a per-job `jobs/<uuid>/meta.json` (one file per job — concurrency-safe,
+      RFC 3339 `updated` on every transition)
+- [x] Secure cleanup of transient key copies — controller copy shredded via
+      EXIT trap (e2e #21); node copy dies with the released work unit
 
 ### Phase 8 — pools, failover, concurrency
 - [ ] `mesh/config/zones.yml` + `pools.yml`

@@ -90,7 +90,7 @@ cross the wall:
 ```bash
 docker build -f docker/Dockerfile -t ansible-controller:dev .   # 1. the controller base
 mesh/tests/e2e-up.sh ansible-controller:dev                     # 2. build + start the lab (throwaway certificates issued for you)
-mesh/tests/e2e-check.sh                                         # 3. watch 20 checks prove every property above
+mesh/tests/e2e-check.sh                                         # 3. watch 22 checks prove every property above
 mesh/tests/e2e-down.sh                                          # tear it all down again
 ```
 
@@ -243,13 +243,53 @@ What you get back:
   read from the run's own record, so scripts and CI can trust `$?`.
 - **A job directory** — every run gets a unique ID and a directory under
   `/var/lib/mesh/jobs/<uuid>/` (override with `--jobs-dir`) containing the
-  full stdout, the per-task event log, and a `meta.json` describing the run.
-  Concurrent jobs never collide.
+  full stdout, the per-task event log, and a `meta.json` describing the run
+  with timestamped status transitions. Concurrent jobs never collide.
+- **Artifacts on the host** — the operator-facing set (stdout, `rc`,
+  `job_events/`, final `meta.json`) is also copied to
+  `/var/log/ansible/runner/<uuid>/`, which the compose setup exposes on the
+  host as `logs/runner/<uuid>/` — read results without entering a container.
+- **Credential hygiene** — a key passed with `--ssh-key` travels only inside
+  the encrypted mesh stream, is never logged or placed in an environment
+  variable, and every transient copy is destroyed when the job ends (the
+  controller-side copy is shredded; the node-side copy lives in the work
+  unit's directory, which is deleted on release).
 
 **A job never runs twice.** If a submission provably failed to leave the
 control host, it can be retried elsewhere — but once a node has (or even *may*
 have) accepted it, it is never re-sent. A network blip mid-job can cost you a
 retry you do by hand; it can never silently run your playbook twice.
+
+## Node runtime Python dependencies
+
+If your playbooks use plugins that need Python packages on the machine running
+Ansible — cloud inventory SDKs like `boto3` are the classic case — those
+packages must exist **on the execution node**, since that's where the playbook
+runs. They are deliberately *not* shipped per job (staging compiled packages
+through the job stream is the wrong layer: slow, arch-specific, and
+unauditable). Extend the node image once instead, exactly the way the
+controller bakes its own dependencies:
+
+```dockerfile
+# Dockerfile.site-node
+FROM ansible-execution-node:latest
+USER root
+COPY node-requirements.txt /tmp/node-requirements.txt
+RUN pip3 install --no-cache-dir --break-system-packages -r /tmp/node-requirements.txt \
+ && rm /tmp/node-requirements.txt
+USER ansible
+```
+
+```bash
+docker build -f Dockerfile.site-node -t ansible-execution-node:site .
+# run this tag on your node hosts
+```
+
+Pin versions in `node-requirements.txt` and rebuild the site image when the
+base updates — nodes stay reproducible and every dependency is visible in one
+file.
+
+---
 
 ## Health and troubleshooting
 
@@ -319,7 +359,7 @@ mesh/
 ├── config/receptor/   # ingress endpoint configs (A and B)
 ├── pki/               # certificate tooling: CA, node requests, signing
 ├── secrets/           # your issued bundles (gitignored; CA key stays offline)
-└── tests/             # the ten-minute lab + its 20-check verification suite
+└── tests/             # the ten-minute lab + its 22-check verification suite
 ```
 
 Want the reasoning behind the design — why the failover boundary sits where it
