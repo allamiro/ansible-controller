@@ -29,7 +29,12 @@ docker run --rm -u root \
   -v mesh-e2e_e2e-ssh:/w -v mesh-e2e_e2e-ssh-authorized:/a \
   --entrypoint bash ansible-orchestrator:e2e -euc '
   [ -f /w/id_ed25519 ] || ssh-keygen -q -t ed25519 -N "" -f /w/id_ed25519
-  chmod 644 /w/id_ed25519 /w/id_ed25519.pub
+  # Private key: owner-only and owned by uid 1000 (the user dispatch runs as on
+  # both the orchestrator and the node) — OpenSSH refuses group/world-readable
+  # private keys outright ("UNPROTECTED PRIVATE KEY"). Public half stays 0644.
+  chown 1000:1000 /w/id_ed25519 /w/id_ed25519.pub
+  chmod 600 /w/id_ed25519
+  chmod 644 /w/id_ed25519.pub
   install -d -m 0700 -o 1000 -g 1000 /a
   install -m 600 -o 1000 -g 1000 /w/id_ed25519.pub /a/authorized_keys
 '

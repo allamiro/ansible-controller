@@ -22,6 +22,7 @@ on:
     branches: ["main"]
     paths:
       - "docker/**"
+      - "mesh/**"
       - ".dockerignore"
       - ".trivyignore"
       - ".github/workflows/mesh-image.yml"
@@ -29,6 +30,7 @@ on:
     branches: ["main"]
     paths:
       - "docker/**"
+      - "mesh/**"
       - ".dockerignore"
       - ".trivyignore"
       - ".github/workflows/mesh-image.yml"
