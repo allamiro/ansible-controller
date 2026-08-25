@@ -22,6 +22,8 @@
 #                                    private half); default
 #                                    ./secrets/receptor/work-signing/work-public.pem
 #   RECEPTOR_LOG_LEVEL     optional  debug|info|warning|error (default info)
+#   MESH_NODE_PROJECT      optional  Compose project name (default mesh-node);
+#                                    only needed to run several nodes on one host
 #
 # Relative paths resolve against this file's directory, so the defaults work
 # both from a checkout (`docker compose -f mesh/compose.node.yml up -d` at the
@@ -35,19 +37,27 @@
 # network instead (a macvlan into the closed segment, another stack's network),
 # add an override file; mesh/tests/e2e.node-override.yml is the shape.
 #
-# The project is named after the node, so several nodes can share one host
-# (a lab, or one node per zone on a jump host), each with its own env file:
+# One node per host is the default (project "mesh-node"). To run several on
+# one host — a lab, or one node per zone on a jump host — give each its own
+# env file with a distinct MESH_NODE_PROJECT. Compose project names allow
+# only lowercase letters, digits, "-" and "_", while a node id may carry
+# uppercase and dots, so the project name is deliberately NOT derived from
+# the node id:
 #   docker compose -f mesh/compose.node.yml --env-file dmz.env up -d --wait
+#
+# `up --wait` returns when the node is HEALTHY, not merely started: the image
+# carries a HEALTHCHECK (receptorctl status on the node's control socket), and
+# compose honours image-level checks.
 #
 # Proven, not just documented: e2e check 26 (mesh/tests/e2e-check.sh) starts
 # a node from THIS file on every mesh change and dispatches work to it.
 
-name: mesh-node-${RECEPTOR_NODE_ID:?RECEPTOR_NODE_ID is required - the identity in this node's certificate, e.g. exec-dmz-a}
+name: ${MESH_NODE_PROJECT:-mesh-node}
 
 services:
   exec-node:
     image: ${MESH_NODE_IMAGE:-ghcr.io/allamiro/ansible-execution-node:latest}
-    container_name: mesh-node-${RECEPTOR_NODE_ID}
+    container_name: mesh-node-${RECEPTOR_NODE_ID:?RECEPTOR_NODE_ID is required - the identity in this node's certificate, e.g. exec-dmz-a}
     restart: unless-stopped
     environment:
       RECEPTOR_NODE_ID: ${RECEPTOR_NODE_ID}

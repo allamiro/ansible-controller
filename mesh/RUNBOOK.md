@@ -37,6 +37,11 @@ Keep on the **offline machine**: `ca/ca.key` (forever) and
 
 ## 2. Enroll an execution node
 
+Every `mesh/pki/` script reads and writes the secrets tree
+`mesh/secrets/receptor/` (`MESH_SECRETS`); the `csr/`, `issued/`, and
+`work-signing/` paths below are relative to it, and the packaged node file's
+defaults point at the same tree.
+
 ```bash
 # ON THE NODE HOST — key + signing request; the key never leaves:
 mesh/pki/node-csr.sh exec-dmz-a

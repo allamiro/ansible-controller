@@ -512,6 +512,7 @@ echo "== 26. the packaged node compose file joins the mesh and runs work (mesh/c
 # leak into this project (it would collide with the lab's), hence env -u.
 node_compose() {
   env -u COMPOSE_PROJECT_NAME \
+    MESH_NODE_PROJECT=mesh-e2e-node-b \
     RECEPTOR_NODE_ID=exec-e2e-b \
     RECEPTOR_PEERS=mesh-e2e-receptor:27199,mesh-e2e-receptor-b:27199 \
     MESH_NODE_IMAGE=ansible-execution-node:e2e \
@@ -521,7 +522,7 @@ node_compose() {
     docker compose -f mesh/compose.node.yml -f mesh/tests/e2e.node-override.yml "$@"
 }
 node_up=$(node_compose up -d --wait --wait-timeout 90 2>&1) \
-  && pass "compose.node.yml started mesh-node-exec-e2e-b healthy (receptor answering on its control socket)" \
+  && pass "compose.node.yml started mesh-node-exec-e2e-b healthy (the image's HEALTHCHECK: receptorctl status on its control socket)" \
   || { docker logs mesh-node-exec-e2e-b 2>&1 | tail -20 || true; fail "packaged node did not come up healthy: $(tail -3 <<<"$node_up")"; }
 deadline=$((SECONDS + 60)); joined=0
 while [ $SECONDS -lt $deadline ]; do
