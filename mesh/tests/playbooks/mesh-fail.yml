@@ -1,0 +1,11 @@
+---
+# Deliberately failing playbook: proves the REAL ansible rc crosses the mesh
+# back to the dispatcher (mesh plan §9.2 item 4) instead of being flattened
+# to success by the transport.
+- name: Mesh rc-propagation proof (always fails)
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Fail on purpose
+      ansible.builtin.fail:
+        msg: "intentional failure for rc propagation"

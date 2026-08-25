@@ -166,13 +166,14 @@ FROM orchestrator AS execution-node
 COPY --from=receptor-build /receptor /usr/local/bin/receptor
 
 COPY docker/mesh/node-entrypoint.sh /usr/local/bin/node-entrypoint.sh
+COPY docker/mesh/mesh-worker.sh /usr/local/bin/mesh-worker
 
 # The node runs receptor, NOT sshd: nothing dials INTO an execution node — it
 # dials OUT to the controller's ingress (tcp-peer) and receives work over that
 # receptor connection. Everything below runs as the unprivileged ansible user
 # (uid 1000, created by the controller layer); receptor is PID 1 via exec, and
 # the inherited sshd entrypoint is simply never started.
-RUN chmod 755 /usr/local/bin/node-entrypoint.sh \
+RUN chmod 755 /usr/local/bin/node-entrypoint.sh /usr/local/bin/mesh-worker \
  && receptor --version \
  && mkdir -p /run/receptor /var/lib/receptor \
  && chown ansible:ansible /run/receptor /var/lib/receptor

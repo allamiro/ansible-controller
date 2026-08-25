@@ -1,0 +1,218 @@
+#!/bin/bash
+# mesh-run — minimal Phase 5 dispatcher: run a playbook on ONE execution node
+# via receptor, returning the playbook's real exit code and its artifacts.
+#
+#   mesh-run --node <node-id> --playbook <file.yml> --inventory <file> \
+#            [--ssh-key <file>] [--socket <receptor.sock>] [--jobs-dir <dir>]
+#
+# Runs INSIDE the orchestrator container (the e2e suite and, later, `make
+# mesh-run` invoke it there). Flow — mesh plan §2.4 steps 4-9, single node:
+#
+#   ansible-runner transmit  -> stream the private data dir over stdout
+#   receptorctl work submit  -> send it to the node's ansible-runner worktype
+#   receptorctl work results -> stream events back as the job runs
+#   ansible-runner process   -> reconstruct locally; artifacts + REAL ansible rc
+#
+# Failover does NOT belong here (plan §2.4): this submits to exactly one node
+# and never retries — a submission whose fate is unknown must never be re-sent
+# elsewhere. Pool selection and the dispatch-only failover boundary arrive with
+# Phase 8; work signing (--signwork) with Phase 9.
+set -euo pipefail
+
+die() { echo "mesh-run: ERROR: $*" >&2; exit 2; }
+
+NODE= PLAYBOOK= INVENTORY= SSH_KEY= ANSIBLE_CFG= GALAXY_DIR= SOCKET=/run/receptor/receptor.sock
+JOBS_DIR=/var/lib/mesh/jobs
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --node)        NODE="${2:?}"; shift 2;;
+    --playbook)    PLAYBOOK="${2:?}"; shift 2;;
+    --inventory)   INVENTORY="${2:?}"; shift 2;;
+    --ssh-key)     SSH_KEY="${2:?}"; shift 2;;
+    --ansible-cfg) ANSIBLE_CFG="${2:?}"; shift 2;;
+    --galaxy-dir)  GALAXY_DIR="${2:?}"; shift 2;;
+    --socket)      SOCKET="${2:?}"; shift 2;;
+    --jobs-dir)    JOBS_DIR="${2:?}"; shift 2;;
+    *) die "unknown argument: $1";;
+  esac
+done
+[ -n "$NODE" ]      || die "--node is required"
+[ -f "$PLAYBOOK" ]  || die "--playbook '$PLAYBOOK' not found"
+[ -e "$INVENTORY" ] || die "--inventory '$INVENTORY' not found (file or directory)"
+[ -S "$SOCKET" ]    || die "receptor control socket '$SOCKET' not found"
+case "$NODE" in *[!A-Za-z0-9._-]*) die "--node '$NODE' invalid";; esac
+
+# (4) unique private data dir per job — no shared state between concurrent runs
+JOB_ID=$(cat /proc/sys/kernel/random/uuid)
+PDD="$JOBS_DIR/$JOB_ID"
+mkdir -p "$PDD/project" "$PDD/inventory" "$PDD/env"
+# The playbook is resolved through symlinks ONCE, and that resolved name is
+# used for both staging and execution — staging the target directory while
+# telling the runner to execute the symlink's basename would fail when the
+# alias name does not exist inside the target directory.
+PLAYBOOK_REAL=$(readlink -f "$PLAYBOOK") || die "cannot resolve --playbook '$PLAYBOOK'"
+# The playbook's DIRECTORY is the project root: roles/, templates/, files/ and
+# task includes resolve relative to the playbook, so staging the lone YAML file
+# would strand those dependencies on the controller and fail on the node.
+cp -a "$(dirname "$PLAYBOOK_REAL")/." "$PDD/project/"
+# Keep the inventory's basename: YAML inventory plugins verify by filename
+# suffix (e.g. *.aws_ec2.yml), so renaming to "hosts" would reject valid
+# plugin inventories after staging. An inventory SOURCE that reads sibling
+# files (like configs/inventory/inventory.py loading its neighbours) must be
+# passed as its DIRECTORY, which is staged whole.
+if [ -d "$INVENTORY" ]; then
+  cp -a "$INVENTORY/." "$PDD/inventory/"
+else
+  cp "$INVENTORY" "$PDD/inventory/$(basename "$INVENTORY")"
+fi
+# The node has no /configs mount and never ran the controller entrypoint, so a
+# playbook relying on the repo's ansible.cfg must SHIP it: --ansible-cfg stages
+# it as the project-root ansible.cfg, which ansible loads from the runner's
+# cwd. A cfg already present in the playbook's own directory wins — refusing to
+# overwrite it beats silently changing a project's declared behaviour.
+#
+# Absolute paths INSIDE the cfg (a known_hosts under ssh_args, vault password
+# files, ...) are a contract with the NODE's environment, not stageable per
+# job: this dispatcher cannot know which referenced files are secrets, nor
+# rewrite the cfg's paths safely. Provision such files on the node (or its
+# site image) at the paths the cfg names — the same rule as runtime Python
+# deps. Phase 6/7 bring the mesh's own host-key and credential handling.
+# Galaxy content installed at runtime (configs/requirements.yml ->
+# /configs/.galaxy) lives only on the controller; the node cannot resolve it.
+# --galaxy-dir stages that directory's roles/ and collections/ into the project
+# root, where ansible's adjacent-to-playbook search paths find them without any
+# path configuration. Local and Galaxy content MERGE per entry — a project with
+# its own roles/ can still pull distinct Galaxy roles — and only a same-name
+# clash refuses, because silently shadowing either copy would change behaviour.
+#
+# Python packages a plugin/collection needs at RUNTIME (pip-requirements.txt,
+# e.g. boto3 for amazon.aws) are NOT a per-job concern and are not staged: they
+# belong in the node image — extend it site-locally the same way the controller
+# bakes its deps (FROM execution-node + pip install -r), tracked in the plan's
+# Phase 7 checklist.
+if [ -n "$GALAXY_DIR" ]; then
+  [ -d "$GALAXY_DIR" ] || die "--galaxy-dir '$GALAXY_DIR' is not a directory"
+  # merge_tree SRC DST DEPTH: copy per entry, descending DEPTH levels before
+  # collision-checking. Roles collide at roles/<name> (depth 1); collections
+  # nest as collections/ansible_collections/<namespace>/<name>, so the check
+  # must descend to the collection itself (depth 3) — a shared wrapper or
+  # namespace directory is expected, not a clash.
+  merge_tree() {
+    local src="$1" dst="$2" depth="$3" entry name
+    mkdir -p "$dst"
+    for entry in "$src"/* "$src"/.[!.]*; do
+      [ -e "$entry" ] || continue
+      name=$(basename "$entry")
+      if [ "$depth" -gt 1 ] && [ -d "$entry" ] && [ -d "$dst/$name" ]; then
+        merge_tree "$entry" "$dst/$name" $((depth - 1))
+      elif [ -e "$dst/$name" ]; then
+        die "'${dst#"$PDD/project/"}/$name' exists in both the playbook directory and --galaxy-dir; resolve the clash rather than letting one silently shadow the other"
+      else
+        cp -a "$entry" "$dst/$name"
+      fi
+    done
+  }
+  [ -d "$GALAXY_DIR/roles" ]       && merge_tree "$GALAXY_DIR/roles"       "$PDD/project/roles"       1
+  [ -d "$GALAXY_DIR/collections" ] && merge_tree "$GALAXY_DIR/collections" "$PDD/project/collections" 3
+fi
+if [ -n "$ANSIBLE_CFG" ]; then
+  [ -f "$ANSIBLE_CFG" ] || die "--ansible-cfg '$ANSIBLE_CFG' not found"
+  if [ -e "$PDD/project/ansible.cfg" ]; then
+    die "the playbook directory already ships its own ansible.cfg; refusing to overwrite it"
+  fi
+  cp "$ANSIBLE_CFG" "$PDD/project/ansible.cfg"
+fi
+if [ -n "$SSH_KEY" ]; then
+  [ -f "$SSH_KEY" ] || die "--ssh-key '$SSH_KEY' not found"
+  # env/ssh_key is loaded into a per-job ssh-agent by the runner ON THE NODE and
+  # travels only inside the receptor stream. Phase 7 hardens handling further
+  # (no-log guarantees, secure cleanup of transient copies).
+  install -m 600 "$SSH_KEY" "$PDD/env/ssh_key"
+fi
+
+# (5) one meta.json PER JOB — concurrency-safe by construction (plan §4), and
+# the hook Tier 2.5 recovery needs later. Status transitions are whole-file
+# rewrites of a private file, so there is no shared-file race. Values are
+# JSON-encoded properly (a playbook name carrying a quote or newline must not
+# yield an unparseable lifecycle record).
+# Written to a temp file and renamed, so a concurrent status reader (or an
+# interrupted dispatcher) never observes a truncated/partial record. The
+# optional second argument is a free-text note for states that need context —
+# notably the ambiguous-submit path, where the unit id is genuinely unknown.
+meta() {
+  M_JOB="$JOB_ID" M_NODE="$NODE" M_PB="$(basename "$PLAYBOOK")" \
+  M_UNIT="${UNIT_ID:-}" M_ST="$1" M_NOTE="${2:-}" python3 - > "$PDD/meta.json.tmp" <<'PYEOF'
+import json, os
+rec = {
+    "job_id": os.environ["M_JOB"],
+    "node": os.environ["M_NODE"],
+    "playbook": os.environ["M_PB"],
+    "unit_id": os.environ["M_UNIT"],
+    "status": os.environ["M_ST"],
+}
+if os.environ["M_NOTE"]:
+    rec["note"] = os.environ["M_NOTE"]
+print(json.dumps(rec))
+PYEOF
+  mv "$PDD/meta.json.tmp" "$PDD/meta.json"
+}
+meta created
+
+# DEFINITIVELY-pre-submit gate (plan §2.4): a node absent from receptorctl
+# status has provably received nothing, so failing here may honestly say
+# "nothing was executed" — this is the only place that claim is allowed.
+mesh_status=$(receptorctl --socket "$SOCKET" status 2>/dev/null) \
+  || { meta submit-failed-pre; die "cannot query receptor status (nothing was executed)"; }
+# Exact, fixed-string match on the first column: grep -w treats '-' as a word
+# boundary and '.' as a wildcard, so 'exec-net20' would "match" exec-net20-a.
+awk -v n="$NODE" '$1 == n { found = 1 } END { exit !found }' <<<"$mesh_status" \
+  || { meta submit-failed-pre; die "node '$NODE' is not in the mesh (nothing was executed)"; }
+
+# (6) transmit -> submit. receptorctl prints "Unit ID: <id>" on success. Past
+# this point failures are AMBIGUOUS: the request may have reached the node and
+# the unit may be running even though the response was lost. Per the failover
+# boundary (plan §2.4), an ambiguous failure is recorded as such and is NEVER
+# treated as "nothing ran" — and this dispatcher never resubmits anywhere.
+meta submitting
+submit_out=$(ansible-runner transmit "$PDD" -p "$(basename "$PLAYBOOK_REAL")" 2>/dev/null \
+  | receptorctl --socket "$SOCKET" work submit ansible-runner \
+      --node "$NODE" --payload -) \
+  || { meta submit-ambiguous "unit id unknown: the response was lost after the attempt left this host; inspect 'receptorctl work list' for an unmatched unit"; \
+       die "work submit to '$NODE' failed AFTER the attempt left this host — \
+the unit MAY BE RUNNING; check 'receptorctl work list' before re-running (job=$JOB_ID)"; }
+UNIT_ID=$(awk '/^Unit ID:/ {print $3}' <<<"$submit_out")
+[ -n "$UNIT_ID" ] || { meta submit-ambiguous "submit returned but no unit id was parseable; inspect 'receptorctl work list'"; \
+  die "no unit id in submit output — state unknown, \
+check 'receptorctl work list' before re-running: $submit_out"; }
+meta running
+
+# (7)(8) stream results -> process. ansible-runner process replays the play
+# output, materialises artifacts under $PDD/artifacts/ (stdout, rc,
+# job_events/), and exits with the PLAYBOOK's rc. The unit is released
+# explicitly only AFTER results were fully fetched — `submit --rm` could
+# release it before retrieval.
+rc=0
+receptorctl --socket "$SOCKET" work results "$UNIT_ID" 2>/dev/null \
+  | ansible-runner process "$PDD" || rc=$?
+
+# The Processor treats a poisoned/empty stream as status=error but still exits
+# 0, so "rc==0" alone cannot be trusted: require the artifacts' own rc file,
+# written only when the stream round-trip actually completed.
+art_rc_file=$(find "$PDD/artifacts" -maxdepth 2 -name rc -type f 2>/dev/null | head -1)
+if [ -z "$art_rc_file" ]; then
+  # NOT "failed": the unit was acknowledged and the stream broke — the job may
+  # well still be running to completion on the node. The status says exactly
+  # that, so a history reader does not mistake a dropped connection for a
+  # playbook failure (and nobody "retries" a possibly-succeeding job).
+  meta results-incomplete "no rc artifact returned; the unit was acknowledged and may still be running — check 'receptorctl work status $UNIT_ID'"
+  die "results stream did not complete — the job MAY STILL BE RUNNING on '$NODE' (unit=$UNIT_ID); check 'receptorctl work status $UNIT_ID'"
+fi
+rc=$(cat "$art_rc_file")
+
+receptorctl --socket "$SOCKET" work release "$UNIT_ID" >/dev/null 2>&1 || true
+
+if [ "$rc" -eq 0 ]; then meta succeeded; else meta "failed rc=$rc"; fi
+echo "mesh-run: job=$JOB_ID node=$NODE unit=$UNIT_ID rc=$rc artifacts=$PDD/artifacts" >&2
+
+# (9) the playbook's own exit code is the contract
+exit "$rc"

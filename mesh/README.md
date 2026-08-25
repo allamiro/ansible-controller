@@ -306,13 +306,21 @@ risk column; anything that touches it must pass [§9.1](#91-non-disruption-check
       stage when upstream ships one
 - [x] Override the inherited port-22 `HEALTHCHECK` with a Receptor-readiness check (node runs receptor, not sshd; runs as uid 1000)
 - [x] `docker/mesh/node-entrypoint.sh` (render node config from env; peers is a LIST — Tier 1 ready)
-- [x] `mesh/tests/` multi‑network **e2e integration environment** (controller cannot reach targets) — 8-property regression suite (`e2e-check.sh`), run by Mesh CI on every mesh change
+- [x] `mesh/tests/` multi‑network **e2e integration environment** (controller cannot reach targets) — regression suite (`e2e-check.sh`; 13 properties as of Phase 5), run by Mesh CI on every mesh change
 - [x] **No‑TLS** peering confined to the e2e environment (never in a production compose file)
 
 ### Phase 5 — prove distributed execution
-- [ ] `mesh/bin/mesh-run` (minimal: transmit → submit → worker → process)
-- [ ] Positive test: controller can’t SSH target directly; `mesh-run` succeeds
-- [ ] "Prove‑on‑node" playbook shows node id, not controller
+- [x] `mesh/bin/mesh-run` (minimal: transmit → submit → worker → process) —
+      per-job UUID + `jobs/<uuid>/meta.json` lifecycle from the first commit
+      (day-one invariants, §4); success requires the artifacts' own `rc` file,
+      because a broken results stream leaves `ansible-runner process` exiting 0
+- [x] Node-side `mesh-worker` wrapper keeps the results stream protocol-pure —
+      receptor merges the work command's stderr into the unit stdout, and one
+      non-JSON line (OpenSSL greets stderr at every python start) makes the
+      controller-side Processor abort at its first read
+- [x] Positive test: controller can’t SSH target directly; `mesh-run` succeeds (e2e check 9)
+- [x] "Prove‑on‑node" playbook shows node id, not controller (e2e check 10, both directions)
+- [x] Real ansible rc + artifacts (stdout, rc, job_events) return to the controller (checks 11–13, including nonzero rc propagation)
 
 ### Phase 6 — PKI + mandatory mTLS
 - [ ] `mesh/pki/`: `mesh-ca-init.sh`, `controller-cert.sh`, `node-csr.sh`, `node-sign.sh`
@@ -323,6 +331,10 @@ risk column; anything that touches it must pass [§9.1](#91-non-disruption-check
 
 ### Phase 7 — credentials, artifacts, job index
 - [ ] `env/ssh_key` in the transmit payload; never logged/echoed
+- [ ] Node runtime Python deps (pip-requirements.txt equivalents, e.g. boto3
+      for cloud inventory plugins): document the site-image extension pattern
+      (`FROM execution-node` + `pip install -r`) — per-job staging of compiled
+      packages is the wrong layer
 - [ ] Artifacts to `logs/runner/<job-id>/` (stdout, rc, job_events)
 - [ ] Write a per-job `jobs/<uuid>/meta.json` (one file per job — concurrency-safe)
 - [ ] Secure cleanup of transient key copies

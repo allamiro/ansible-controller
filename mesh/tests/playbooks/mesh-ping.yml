@@ -1,0 +1,15 @@
+---
+# Phase 5 proof playbook (mesh plan §9.2): reaches the target over SSH AND
+# proves the play was EXECUTED on the mesh node, not on the controller. The
+# runner-side hostname is captured with a local lookup — it runs where
+# ansible-playbook runs — while the task itself runs on the target.
+- name: Mesh distributed-execution proof
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Reach the target over SSH
+      ansible.builtin.ping:
+
+    - name: Record where this play actually executed
+      ansible.builtin.debug:
+        msg: "EXECUTED-ON={{ lookup('ansible.builtin.pipe', 'uname -n') }} TARGET={{ inventory_hostname }}"
