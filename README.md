@@ -120,6 +120,12 @@ cat > configs/inventory/hosts.ini << 'EOF'
 EOF
 ```
 
+Hosts that authenticate with a password instead of a key work too — `sshpass`
+is in the image, so `ansible_user=... ansible_password=...` on a host or group
+is all Ansible needs. Keep such an inventory out of git, or vault-encrypt the
+password ([Ansible Vault](#ansible-vault)); the mesh execution-node image
+inherits `sshpass`, so the same inventory works over the mesh.
+
 ### 3 — Generate an SSH key and copy it to your servers
 
 ```bash
