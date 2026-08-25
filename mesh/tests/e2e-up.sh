@@ -47,6 +47,12 @@ if ! { [ -f "$PKI_DIR/ca/ca.key" ] && [ -f "$PKI_DIR/ca/ca.crt" ] && cert_live "
   rm -rf "$PKI_DIR"
   mesh/pki/mesh-ca-init.sh "mesh-e2e throwaway CA"
 fi
+# Work-signing keypair (Phase 9): ingresses sign, the node verifies. A half
+# pair is useless — regenerate the pair whenever either half is missing.
+if ! { [ -f "$PKI_DIR/work-signing/work-private.pem" ] && [ -f "$PKI_DIR/work-signing/work-public.pem" ]; }; then
+  rm -rf "$PKI_DIR/work-signing"
+  mesh/pki/work-sign-init.sh
+fi
 bundle_ok "$PKI_DIR/issued/controller-a" || { rm -rf "$PKI_DIR/issued/controller-a"; mesh/pki/controller-cert.sh controller-a mesh-e2e-receptor; }
 bundle_ok "$PKI_DIR/issued/controller-b" || { rm -rf "$PKI_DIR/issued/controller-b"; mesh/pki/controller-cert.sh controller-b mesh-e2e-receptor-b; }
 if ! bundle_ok "$PKI_DIR/issued/exec-e2e-a"; then

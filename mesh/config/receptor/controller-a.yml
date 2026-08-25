@@ -40,3 +40,12 @@
 - tcp-listener:
     port: 27199
     tls: mesh-tls
+
+# Work signing (Phase 9): every submission leaving this ingress carries a
+# signature nodes verify before executing. The private key is issued OFFLINE
+# by mesh/pki/work-sign-init.sh and mounted only into the ingress sidecars —
+# mesh admission (a node cert) and submit authority (this key) stay separate,
+# so a compromised or third-party node can execute work but never inject it.
+- work-signing:
+    privatekey: /etc/receptor/signing/work-private.pem
+    tokenexpiration: 30m

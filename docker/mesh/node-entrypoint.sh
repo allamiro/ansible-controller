@@ -26,8 +26,8 @@
 # compose files additionally mount /run/receptor as tmpfs so the rendered
 # config and the control socket never touch the container's writable layer.
 #
-# SECURITY: mTLS is mandatory (Phase 6). The work-command still accepts
-# unsigned work until Phase 9 adds work signing.
+# SECURITY: mTLS is mandatory (Phase 6) and work-signature verification is
+# mandatory (Phase 9) — an unsigned submission is refused before execution.
 set -euo pipefail
 
 : "${RECEPTOR_NODE_ID:?RECEPTOR_NODE_ID is required (e.g. exec-net20-a)}"
@@ -50,11 +50,14 @@ esac
 TLS=1
 if [ "${RECEPTOR_INSECURE_DEV:-0}" = 1 ]; then
   TLS=0
-  echo "WARNING: RECEPTOR_INSECURE_DEV=1 — this node peers in PLAINTEXT with no authentication." >&2
-  echo "WARNING: acceptable only for throwaway wiring experiments; never in production." >&2
+  echo "WARNING: RECEPTOR_INSECURE_DEV=1 — this node peers in PLAINTEXT with no authentication" >&2
+  echo "WARNING: and accepts UNSIGNED work. Acceptable only for throwaway wiring experiments; never in production." >&2
 else
-  for v in RECEPTOR_TLS_CERT RECEPTOR_TLS_KEY RECEPTOR_TLS_CA; do
-    [ -n "${!v:-}" ] || { echo "ERROR: $v is required — the mesh is mTLS-only (set RECEPTOR_INSECURE_DEV=1 only for throwaway experiments)" >&2; exit 1; }
+  # Work-signature verification (Phase 9) is as mandatory as mTLS: the node
+  # cert admits a peer to the mesh, the signing key authorizes SUBMITTING
+  # work — verifying it here is what keeps those two authorities separate.
+  for v in RECEPTOR_TLS_CERT RECEPTOR_TLS_KEY RECEPTOR_TLS_CA RECEPTOR_WORK_PUBKEY; do
+    [ -n "${!v:-}" ] || { echo "ERROR: $v is required — the mesh is mTLS-only with signed work (set RECEPTOR_INSECURE_DEV=1 only for throwaway experiments)" >&2; exit 1; }
     # same injection rule as every other rendered value: these paths land in
     # YAML, so a newline or YAML syntax in one could add receptor actions
     case "${!v}" in
@@ -84,6 +87,9 @@ conf=/run/receptor/receptor.conf
   if [ "$TLS" = 1 ]; then
     printf -- '- tls-client:\n    name: mesh-tls\n    cert: %s\n    key: %s\n    rootcas: %s\n' \
       "$RECEPTOR_TLS_CERT" "$RECEPTOR_TLS_KEY" "$RECEPTOR_TLS_CA"
+    # Verifies the control plane's signature on every submission (Phase 9);
+    # pairs with verifysignature on the work-command below.
+    printf -- '- work-verification:\n    publickey: %s\n' "$RECEPTOR_WORK_PUBKEY"
   fi
 
   # Dial OUT to every ingress; redial forever. The node never listens for
@@ -125,8 +131,13 @@ conf=/run/receptor/receptor.conf
   # into the unit stdout, and a single non-JSON line (OpenSSL greets stderr on
   # every python start here) breaks the controller-side Processor at its first
   # read. allowruntimeparams lets the submitter pass runner args;
-  # verifysignature flips on in Phase 9.
-  printf -- '- work-command:\n    worktype: ansible-runner\n    command: /usr/local/bin/mesh-worker\n    allowruntimeparams: true\n'
+  # verifysignature (Phase 9) refuses any submission the control plane did
+  # not sign — off only under the loud RECEPTOR_INSECURE_DEV escape.
+  if [ "$TLS" = 1 ]; then
+    printf -- '- work-command:\n    worktype: ansible-runner\n    command: /usr/local/bin/mesh-worker\n    allowruntimeparams: true\n    verifysignature: true\n'
+  else
+    printf -- '- work-command:\n    worktype: ansible-runner\n    command: /usr/local/bin/mesh-worker\n    allowruntimeparams: true\n'
+  fi
 } > "$conf"
 
 exec receptor -c "$conf"

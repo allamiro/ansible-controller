@@ -71,6 +71,7 @@ services:
       # Staged read-only, then installed into place by the command below.
       - ./mesh/config/receptor/controller-a.yml:/mnt/receptor/receptor.conf:ro
       - ./mesh/secrets/receptor/issued/controller-a:/mnt/receptor/tls:ro
+      - ./mesh/secrets/receptor/work-signing/work-private.pem:/mnt/receptor/work-private.pem:ro
       - receptor-runtime:/run/receptor
     # Two startup problems are solved here, both as root, before the long-lived
     # process drops back to the image's unprivileged receptor user:
@@ -112,6 +113,8 @@ services:
         install -o receptor -g receptor -m 0400 /mnt/receptor/tls/tls.key /etc/receptor/tls/tls.key
         install -o receptor -g receptor -m 0444 /mnt/receptor/tls/tls.crt /etc/receptor/tls/tls.crt
         install -o receptor -g receptor -m 0444 /mnt/receptor/tls/ca.crt  /etc/receptor/tls/ca.crt
+        install -d -o receptor -g receptor -m 0750 /etc/receptor/signing
+        install -o receptor -g receptor -m 0400 /mnt/receptor/work-private.pem /etc/receptor/signing/work-private.pem
         exec setpriv --reuid=receptor --regid=receptor --clear-groups \
           receptor -c /etc/receptor/receptor.conf
     # Ready means "the control socket answers", which is exactly what the
@@ -137,6 +140,7 @@ services:
     volumes:
       - ./mesh/config/receptor/controller-b.yml:/mnt/receptor/receptor.conf:ro
       - ./mesh/secrets/receptor/issued/controller-b:/mnt/receptor/tls:ro
+      - ./mesh/secrets/receptor/work-signing/work-private.pem:/mnt/receptor/work-private.pem:ro
       - receptor-runtime:/run/receptor
     user: "0:0"
     entrypoint: ["/usr/local/bin/dumb-init", "--", "/bin/sh", "-euc"]
@@ -149,6 +153,8 @@ services:
         install -o receptor -g receptor -m 0400 /mnt/receptor/tls/tls.key /etc/receptor/tls/tls.key
         install -o receptor -g receptor -m 0444 /mnt/receptor/tls/tls.crt /etc/receptor/tls/tls.crt
         install -o receptor -g receptor -m 0444 /mnt/receptor/tls/ca.crt  /etc/receptor/tls/ca.crt
+        install -d -o receptor -g receptor -m 0750 /etc/receptor/signing
+        install -o receptor -g receptor -m 0400 /mnt/receptor/work-private.pem /etc/receptor/signing/work-private.pem
         exec setpriv --reuid=receptor --regid=receptor --clear-groups \
           receptor -c /etc/receptor/receptor.conf
     healthcheck:

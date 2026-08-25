@@ -65,6 +65,7 @@ services:
     volumes:
       - ../config/receptor/controller-a.yml:/mnt/receptor/receptor.conf:ro
       - ./.e2e-pki/issued/controller-a:/mnt/receptor/tls:ro
+      - ./.e2e-pki/work-signing/work-private.pem:/mnt/receptor/work-private.pem:ro
       - receptor-runtime:/run/receptor
     user: "0:0"
     entrypoint: ["/usr/local/bin/dumb-init", "--", "/bin/sh", "-euc"]
@@ -77,6 +78,8 @@ services:
         install -o receptor -g receptor -m 0400 /mnt/receptor/tls/tls.key /etc/receptor/tls/tls.key
         install -o receptor -g receptor -m 0444 /mnt/receptor/tls/tls.crt /etc/receptor/tls/tls.crt
         install -o receptor -g receptor -m 0444 /mnt/receptor/tls/ca.crt  /etc/receptor/tls/ca.crt
+        install -d -o receptor -g receptor -m 0750 /etc/receptor/signing
+        install -o receptor -g receptor -m 0400 /mnt/receptor/work-private.pem /etc/receptor/signing/work-private.pem
         exec setpriv --reuid=receptor --regid=receptor --clear-groups \
           receptor -c /etc/receptor/receptor.conf
 
@@ -87,6 +90,7 @@ services:
     volumes:
       - ../config/receptor/controller-b.yml:/mnt/receptor/receptor.conf:ro
       - ./.e2e-pki/issued/controller-b:/mnt/receptor/tls:ro
+      - ./.e2e-pki/work-signing/work-private.pem:/mnt/receptor/work-private.pem:ro
       - receptor-runtime:/run/receptor
     user: "0:0"
     entrypoint: ["/usr/local/bin/dumb-init", "--", "/bin/sh", "-euc"]
@@ -99,6 +103,8 @@ services:
         install -o receptor -g receptor -m 0400 /mnt/receptor/tls/tls.key /etc/receptor/tls/tls.key
         install -o receptor -g receptor -m 0444 /mnt/receptor/tls/tls.crt /etc/receptor/tls/tls.crt
         install -o receptor -g receptor -m 0444 /mnt/receptor/tls/ca.crt  /etc/receptor/tls/ca.crt
+        install -d -o receptor -g receptor -m 0750 /etc/receptor/signing
+        install -o receptor -g receptor -m 0400 /mnt/receptor/work-private.pem /etc/receptor/signing/work-private.pem
         exec setpriv --reuid=receptor --regid=receptor --clear-groups \
           receptor -c /etc/receptor/receptor.conf
 
@@ -112,6 +118,7 @@ services:
       RECEPTOR_TLS_CERT: /e2e-tls/tls.crt
       RECEPTOR_TLS_KEY: /e2e-tls/tls.key
       RECEPTOR_TLS_CA: /e2e-tls/ca.crt
+      RECEPTOR_WORK_PUBKEY: /e2e-signing/work-public.pem
     # Rendered config + control socket on tmpfs, never the writable layer
     # (uid/gid: the image pre-creates this dir for uid 1000, but a tmpfs mount
     # would shadow it root-owned without these options).
@@ -119,6 +126,8 @@ services:
       - /run/receptor:uid=1000,gid=1000,mode=0750
     volumes:
       - ./.e2e-pki/issued/exec-e2e-a:/e2e-tls:ro
+      # public HALF only — the signing private key never reaches a node
+      - ./.e2e-pki/work-signing/work-public.pem:/e2e-signing/work-public.pem:ro
       - e2e-ssh:/e2e-ssh:ro
 
   target:

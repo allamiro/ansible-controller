@@ -435,4 +435,40 @@ wait "$slow_pid" \
   || fail "the slot-holding job failed: $(tail -3 "$slow_log")"
 rm -f "$slow_log"
 
+echo "== 25. unsigned work is refused (Phase 9) =="
+# Every prior dispatch proved the SIGNED path (mesh-run submits --signwork).
+# Now submit a raw unit WITHOUT --signwork: wherever receptor draws the line
+# (refusal at submit, or the unit erroring on the node), the work must never
+# execute. Fail CLOSED: a pending verdict after the deadline is a failure,
+# and an executed unit is the vulnerability this check exists to block.
+unsigned_out=$(docker exec mesh-e2e-orchestrator bash -euc '
+  out=$(echo unsigned-probe | receptorctl --socket /run/receptor/receptor.sock \
+        work submit ansible-runner --node exec-e2e-a --payload - 2>&1) || {
+    echo "verdict=refused-at-submit detail=${out}"; exit 0; }
+  unit=$(awk "/^Unit ID:/ {print \$3}" <<<"$out")
+  [ -n "$unit" ] || { echo "verdict=no-unit detail=${out}"; exit 0; }
+  verdict=pending st=
+  deadline=$((SECONDS + 30))
+  while [ $SECONDS -lt $deadline ]; do
+    st=$(receptorctl --socket /run/receptor/receptor.sock work status "$unit" 2>&1 || true)
+    if grep -qiE "sign|verif" <<<"$st" && grep -qiE "fail|error" <<<"$st"; then
+      verdict=refused; break
+    fi
+    if grep -qiE "StateName.*Succeeded|state.*succeeded" <<<"$st"; then
+      verdict=executed; break
+    fi
+    sleep 2
+  done
+  receptorctl --socket /run/receptor/receptor.sock work release "$unit" >/dev/null 2>&1 || true
+  echo "verdict=$verdict detail=$(tr "\n" " " <<<"$st" | tail -c 200)"
+') || fail "unsigned-work probe could not run"
+case "$unsigned_out" in
+  verdict=refused*|verdict=refused-at-submit*)
+    pass "unsigned submission refused (${unsigned_out#verdict=})";;
+  verdict=executed*)
+    fail "UNSIGNED WORK EXECUTED — signature verification is not enforced";;
+  *)
+    fail "no refusal verdict for unsigned work: $unsigned_out";;
+esac
+
 echo "All mesh e2e regression checks passed."

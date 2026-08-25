@@ -76,6 +76,11 @@ project's test suite on every change):
    already streaming through A when it died follows the never-run-twice rule
    below: check its artifacts and re-run by hand if safe — it is reported
    incomplete rather than silently resubmitted.
+5. **Only your control plane can hand out work.** Every job carries a
+   signature from a signing key that lives only on the control host; nodes
+   refuse unsigned work before executing anything. Joining the mesh and
+   submitting work are separate authorities — even a compromised (or
+   partner-operated) node can *run* jobs, never *inject* them.
 
 Targets need nothing installed — the execution node reaches them over plain
 SSH, exactly the way the controller does on the direct path.
@@ -90,7 +95,7 @@ cross the wall:
 ```bash
 docker build -f docker/Dockerfile -t ansible-controller:dev .   # 1. the controller base
 mesh/tests/e2e-up.sh ansible-controller:dev                     # 2. build + start the lab (throwaway certificates issued for you)
-mesh/tests/e2e-check.sh                                         # 3. watch 24 checks prove every property above
+mesh/tests/e2e-check.sh                                         # 3. watch 25 checks prove every property above
 mesh/tests/e2e-down.sh                                          # tear it all down again
 ```
 
@@ -144,6 +149,12 @@ flowchart LR
 ```bash
 # ON THE OFFLINE MACHINE — once. Then keep ca.key there, and only there.
 mesh/pki/mesh-ca-init.sh "my mesh CA"
+
+# ON THE OFFLINE MACHINE — once: the work-signing keypair (needs openssl,
+# preinstalled on virtually every Linux/macOS). The PRIVATE half goes only to
+# the control host (the compose overlay mounts it into both ingresses); the
+# PUBLIC half goes to every node as RECEPTOR_WORK_PUBKEY.
+mesh/pki/work-sign-init.sh
 
 # ON THE OFFLINE MACHINE — one identity for each ingress endpoint (A and B):
 mesh/pki/controller-cert.sh controller-a receptor-controller
@@ -381,10 +392,11 @@ cosign verify \
 failover); the PKI toolchain for real identities; the control-plane overlay on
 your compose setup; published, signed images for all three roles; per-job
 credential hygiene and host-visible artifacts; pool/zone dispatch with
-per-node concurrency caps and dispatch-only failover.
+per-node concurrency caps and dispatch-only failover; mandatory work signing
+(nodes refuse unsigned submissions).
 
-**Landing next** — packaged node deployment, `make mesh-run` / `make
-mesh-status`, and work signing. The full plan and its progress live in the
+**Landing next** — packaged node deployment and the `make mesh-*` targets
+with the operator runbook. The full plan and its progress live in the
 [DESIGN.md checklist](DESIGN.md#7-to-do-checklist).
 
 ## Where things live
@@ -398,7 +410,7 @@ mesh/
 ├── config/receptor/   # ingress endpoint configs (A and B)
 ├── pki/               # certificate tooling: CA, node requests, signing
 ├── secrets/           # your issued bundles (gitignored; CA key stays offline)
-└── tests/             # the ten-minute lab + its 24-check verification suite
+└── tests/             # the ten-minute lab + its 25-check verification suite
 ```
 
 Want the reasoning behind the design — why the failover boundary sits where it
