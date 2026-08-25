@@ -280,15 +280,21 @@ acquire_slot() {
   return 1
 }
 
-# Called on the paths where the submission was (or may have been) accepted
-# but this dispatcher can no longer observe it. The flock dies with this
-# process; the marker keeps the slot reserved until a human confirms the
-# unit's fate — capacity guarantees must not evaporate with the dispatcher.
+# The durable half of the reservation. The flock covers only this process's
+# lifetime; the .hold marker covers the acknowledged unit's. It is written
+# PESSIMISTICALLY before the submit attempt — a SIGKILL/OOM after submission
+# leaves no chance to write anything, so the marker must already exist — and
+# removed only when the artifacts' rc proves the unit finished. Refreshed
+# once the unit id is known so the operator sees what to check.
 persist_slot_hold() {
   [ -n "$SLOT_FILE" ] || return 0
   printf 'job=%s unit=%s node=%s\nclear with: rm %s.hold  (after confirming the unit finished)\n' \
     "$JOB_ID" "${UNIT_ID:-unknown}" "$NODE" "$SLOT_FILE" > "$SLOT_FILE.hold" 2>/dev/null \
     || echo "mesh-run: warning: could not persist slot hold $SLOT_FILE.hold — the node's cap may be under-enforced until the unit is confirmed done" >&2
+}
+release_slot_hold() {
+  [ -n "$SLOT_FILE" ] || return 0
+  rm -f "$SLOT_FILE.hold" 2>/dev/null || true
 }
 
 # (2) healthy-node select. Skipping a candidate is allowed ONLY here, where
@@ -328,10 +334,10 @@ PDD="$JOBS_DIR/$JOB_ID"
 # never-corrupt-the-result rule the artifact export follows.
 finalize() {
   local st=$?
-  # A reserved slot whose job is in flight must survive ANY exit — die()
-  # paths, and catchable signals (TERM/INT are trapped to exit so this trap
-  # runs). DISPATCH_STATE is 'in-flight' from the moment a submit attempt
-  # starts until the artifacts' rc proves the unit finished.
+  # Belt over the pessimistic pre-submit hold: if that write failed and this
+  # process still exits while in flight, try once more here (TERM/INT are
+  # trapped to exit so this trap covers catchable signals; SIGKILL is covered
+  # by the marker having been written BEFORE submission).
   if [ "${DISPATCH_STATE:-}" = in-flight ]; then
     persist_slot_hold
   fi
@@ -499,6 +505,10 @@ fi
 # treated as "nothing ran" — and this dispatcher never resubmits anywhere.
 meta submitting
 DISPATCH_STATE=in-flight
+# Pessimistic durable hold BEFORE anything leaves this host: a SIGKILL/OOM
+# mid-submission gets no trap, so the marker must already be on disk. It is
+# removed only when the artifacts prove the unit finished.
+persist_slot_hold
 submit_out=$(ansible-runner transmit "$PDD" -p "$(basename "$PLAYBOOK_REAL")" 2>/dev/null \
   | receptorctl --socket "$SOCKET" work submit ansible-runner \
       --node "$NODE" --payload -) \
@@ -510,6 +520,7 @@ UNIT_ID=$(awk '/^Unit ID:/ {print $3}' <<<"$submit_out")
   die "no unit id in submit output — state unknown, \
 check 'receptorctl work list' before re-running: $submit_out"; }
 meta running
+persist_slot_hold   # refresh: the marker now names the actual unit id
 
 # (7)(8) stream results -> process. ansible-runner process replays the play
 # output, materialises artifacts under $PDD/artifacts/ (stdout, rc,
@@ -533,9 +544,10 @@ if [ -z "$art_rc_file" ]; then
   die "results stream did not complete — the job MAY STILL BE RUNNING on '$NODE' (unit=$UNIT_ID); check 'receptorctl work status $UNIT_ID'; its concurrency slot stays reserved via ${SLOT_FILE:+$SLOT_FILE.hold}${SLOT_FILE:- (node uncapped)}"
 fi
 rc=$(cat "$art_rc_file")
-# The artifacts' own rc proves the unit ran to completion: the slot may now
-# die with this process, and finalize must not persist a hold for it.
+# The artifacts' own rc proves the unit ran to completion: the durable hold
+# is released and the slot may now die with this process.
 DISPATCH_STATE=complete
+release_slot_hold
 
 receptorctl --socket "$SOCKET" work release "$UNIT_ID" >/dev/null 2>&1 || true
 
