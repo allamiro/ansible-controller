@@ -43,7 +43,15 @@ PUB="$SIGN_DIR/work-public.pem"
 LOCK_DIR="$SIGN_DIR/.rotation.lock"
 mkdir "$LOCK_DIR" 2>/dev/null \
   || die "another work-sign-init appears to be running (remove $LOCK_DIR if it is stale)"
-cleanup() { rm -rf "$LOCK_DIR"; [ -n "${TMP:-}" ] && rm -rf "$TMP"; }
+# Best-effort cleanup that PRESERVES the incoming exit status: a failed
+# rotation must never be reported as success because the trap's own last
+# command happened to change $?.
+cleanup() {
+  local st=$?
+  rm -rf "$LOCK_DIR" 2>/dev/null || true
+  [ -z "${TMP:-}" ] || rm -rf "$TMP" 2>/dev/null || true
+  return "$st"
+}
 trap cleanup EXIT
 
 # The guard is a VALIDITY check, not an existence check, and that is what
