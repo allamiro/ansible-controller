@@ -264,7 +264,7 @@ SLOT_FD= SLOT_FILE= DISPATCH_STATE=pre-submit
 # different cap snapshots (a config edit mid-flight) could interleave and
 # jointly overshoot the lower cap.
 slot_scan() {
-  local node="$1" cap="$2" i f g gi eff max_occ hc
+  local node="$1" cap="$2" record="${3:-$2}" i f g gi eff max_occ hc
   for ((i = 1; i <= cap; i++)); do
     f="$SLOTS_DIR/$node.slot.$i"
     # A .hold marker means a previous dispatch through this slot ended with
@@ -283,7 +283,8 @@ slot_scan() {
       SLOT_FILE="$f"
       # Record THIS holder's cap snapshot in its slot file (free slot files'
       # stale contents are never read — only occupied slots are consulted).
-      printf '%s\n' "$cap" > "$f" 2>/dev/null || true
+      # An uncapped holder records 0: "occupies, imposes no limit".
+      printf '%s\n' "$record" > "$f" 2>/dev/null || true
       # Cap-skew defense: the EFFECTIVE cap is the minimum of this
       # dispatcher's cap and every concurrent occupant's recorded cap. That
       # closes the stale-snapshot race (a cap-2 dispatcher admitted after a
@@ -322,48 +323,32 @@ slot_scan() {
   return 1
 }
 
-# Uncapped, but NOT untracked: an uncapped job still occupies a numbered slot
-# (recording cap 0 = "imposes no limit"), so an operator who later ENABLES a
-# cap has the running work visible to the occupancy scan — flipping 0 to 1
-# must not admit a second job beside a still-running uncapped one. Best
-# effort by design: uncapped dispatch never blocks on tracking problems.
-uncapped_track() {
-  local node="$1" i f
-  for ((i = 1; i <= 4096; i++)); do
-    f="$SLOTS_DIR/$node.slot.$i"
-    [ -e "$f.hold" ] && continue
-    if ! { exec {SLOT_FD}>>"$f"; } 2>/dev/null; then SLOT_FD=; return 0; fi
-    if flock -n "$SLOT_FD" 2>/dev/null; then
-      SLOT_FILE="$f"
-      printf '0\n' > "$f" 2>/dev/null || true
-      return 0
-    fi
-    { exec {SLOT_FD}>&-; } 2>/dev/null || true
-    SLOT_FD=
-  done
-  return 0
-}
-
 acquire_slot() {
-  local node="$1" cap="$2" ADM_FD out=1
+  local node="$1" cap="$2" ADM_FD out=1 scan_cap record
+  # "Uncapped" means no limit OF ITS OWN — it still occupies a numbered slot
+  # (recording 0, which never lowers anyone's effective cap) and still honors
+  # concurrent holders' recorded finite caps, exactly like the positive path:
+  # switching a node to 0 beside a still-running cap-1 job must not overshoot
+  # that job's cap any more than switching 2->1 may. UNCAP_SENTINEL merely
+  # bounds the scan; a node genuinely running 4096 concurrent jobs has bigger
+  # problems than slot numbering.
+  if [ "$cap" -gt 0 ]; then scan_cap="$cap" record="$cap"; else scan_cap=4096 record=0; fi
+  # A slots dir that cannot even be created holds no recorded caps to honor:
+  # capped dispatch refuses (its own cap would be unenforceable), uncapped
+  # proceeds untracked.
   (umask 077 && mkdir -p "$SLOTS_DIR") 2>/dev/null \
     || { [ "$cap" -gt 0 ] && return 1; return 0; }
   # Per-node admission lock: serializes the scan+probe so concurrent
   # dispatchers make their capacity decisions one at a time. Held only for
-  # the scan, never for the job; a stuck peer bounds the wait at 30s.
+  # the scan, never for the job; a stuck peer bounds the wait at 30s and
+  # refuses the candidate — a wedged admission lock is an anomaly no
+  # dispatch should reason past.
   if ! { exec {ADM_FD}>>"$SLOTS_DIR/$node.admission"; } 2>/dev/null; then
     [ "$cap" -gt 0 ] && return 1
     return 0
   fi
   if flock -w 30 "$ADM_FD" 2>/dev/null; then
-    if [ "$cap" -gt 0 ]; then
-      slot_scan "$node" "$cap" && out=0
-    else
-      uncapped_track "$node"
-      out=0
-    fi
-  else
-    [ "$cap" -gt 0 ] || out=0   # uncapped proceeds even without the lock
+    slot_scan "$node" "$scan_cap" "$record" && out=0
   fi
   { exec {ADM_FD}>&-; } 2>/dev/null || true
   return "$out"

@@ -279,9 +279,13 @@ What the dispatcher guarantees:
   bent for failover.
 - **Concurrency caps that can't race.** `max_concurrent` per node is enforced
   by an atomic lock reservation held for the job's lifetime — two dispatchers
-  can't both squeeze into the last slot, and a crashed dispatcher's slot
-  frees itself. When every candidate is saturated the dispatch is refused
-  with "nothing was executed" — re-run it when a slot frees.
+  can't both squeeze into the last slot. Before anything is submitted, a
+  refusal frees the slot instantly; once a job is in flight its slot is also
+  backed by a durable `.hold` marker, so a crashed or killed dispatcher keeps
+  the slot reserved until you confirm the unit's fate and clear the marker
+  (see [troubleshooting](#health-and-troubleshooting)) — capacity is never
+  silently double-booked. When every candidate is saturated the dispatch is
+  refused with "nothing was executed" — re-run it when a slot frees.
 - **The record shows the choice.** `meta.json` carries both the pool and the
   node that actually served the job.
 
