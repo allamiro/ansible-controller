@@ -95,7 +95,7 @@ cross the wall:
 ```bash
 docker build -f docker/Dockerfile -t ansible-controller:dev .   # 1. the controller base
 mesh/tests/e2e-up.sh ansible-controller:dev                     # 2. build + start the lab (throwaway certificates issued for you)
-mesh/tests/e2e-check.sh                                         # 3. watch 25 checks prove every property above
+mesh/tests/e2e-check.sh                                         # 3. watch 26 checks prove every property above
 mesh/tests/e2e-down.sh                                          # tear it all down again
 ```
 
@@ -214,13 +214,25 @@ services:
 
 ### Step 3 — connect your execution nodes
 
-Run the execution-node image on the host inside each closed network with its
-issued certificate bundle and the work-signing public key mounted; it dials
-out to your control host on ports 27199 (ingress A) and 27200 (ingress B) and
-appears in the mesh. The [RUNBOOK's enrollment section](RUNBOOK.md#2-enroll-an-execution-node)
-has the complete `docker run` invocation; a ready-made node compose file is
-the one remaining packaging item, and `mesh/tests/e2e.compose.yml` stays a
-faithful reference for the node side.
+On the host inside each closed network, start the execution-node image from
+the packaged node file, [`compose.node.yml`](compose.node.yml), with the
+node's issued certificate bundle and the work-signing public key beside it:
+
+```bash
+# on the node host, in a directory holding compose.node.yml + secrets/receptor/
+cp node.env.example .env          # RECEPTOR_NODE_ID and RECEPTOR_PEERS (ctrl:27199,ctrl:27200)
+docker compose -f compose.node.yml up -d --wait
+```
+
+The node dials out to your control host on ports 27199 (ingress A) and 27200
+(ingress B), appears in `make mesh-status` there, and restarts with its host.
+Every setting — image tag, bundle location, log level — is documented at the
+top of the file; the [RUNBOOK's enrollment section](RUNBOOK.md#2-enroll-an-execution-node)
+walks the full request → sign → install → start sequence. To put a node on an
+existing docker network (a macvlan into the segment, another stack's network),
+add an override file: [`tests/e2e.node-override.yml`](tests/e2e.node-override.yml)
+is the shape, and it is how the e2e suite starts a node from the packaged file
+on every mesh change (check 26).
 
 ## Running a job
 
@@ -385,13 +397,18 @@ cosign verify \
 **Working now** — the full distributed path in the [lab](#try-it-in-ten-minutes)
 (dispatch → mTLS mesh → execution node → artifacts back, with ingress
 failover); the PKI toolchain for real identities; the control-plane overlay on
-your compose setup; published, signed images for all three roles; per-job
-credential hygiene and host-visible artifacts; pool/zone dispatch with
-per-node concurrency caps and dispatch-only failover; mandatory work signing
-(nodes refuse unsigned submissions).
+your compose setup and the packaged node file for each closed network;
+published, signed images for all three roles; per-job credential hygiene and
+host-visible artifacts; pool/zone dispatch with per-node concurrency caps and
+dispatch-only failover; mandatory work signing (nodes refuse unsigned
+submissions).
 
-**Landing next** — a packaged node compose file. Everything else in the plan
-has shipped; details in the [DESIGN.md checklist](DESIGN.md#7-to-do-checklist).
+**What's next** — nothing in the plan is unshipped; the
+[DESIGN.md checklist](DESIGN.md#7-to-do-checklist) records each item and the
+check that proves it. The deliberately deferred work — active/active
+orchestrators (Tier 2), fan-out sharding, auto-routing — is listed in
+[DESIGN.md §11](DESIGN.md#11-explicitly-deferred--non-goals) and gets built
+when a real driver exists.
 
 ## Where things live
 
@@ -401,11 +418,13 @@ mesh/
 ├── RUNBOOK.md         # operator procedures: enroll, rotate, evict, troubleshoot
 ├── DESIGN.md          # the deep end: architecture decisions, HA tiers, test matrix
 ├── compose.mesh.yml   # control-plane overlay (opt-in via --profile mesh)
+├── compose.node.yml   # node-side deployment file (one node per closed network)
+├── node.env.example   # its settings: node id, ingress addresses, image
 ├── bin/mesh-run       # the job dispatcher
 ├── config/receptor/   # ingress endpoint configs (A and B)
 ├── pki/               # certificate tooling: CA, node requests, signing
 ├── secrets/           # your issued bundles (gitignored; CA key stays offline)
-└── tests/             # the ten-minute lab + its 25-check verification suite
+└── tests/             # the ten-minute lab + its 26-check verification suite
 ```
 
 Operating it day to day — enrolling nodes, rotating credentials, evicting a

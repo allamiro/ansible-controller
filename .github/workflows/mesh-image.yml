@@ -178,7 +178,7 @@ jobs:
         if: failure()
         run: |
           docker compose -f mesh/tests/e2e.compose.yml ps || true
-          for c in mesh-e2e-receptor mesh-e2e-node-a mesh-e2e-orchestrator mesh-e2e-target; do
+          for c in mesh-e2e-receptor mesh-e2e-node-a mesh-e2e-orchestrator mesh-e2e-target mesh-node-exec-e2e-b; do
             echo "===== $c ====="; docker logs "$c" 2>&1 | tail -40 || true
           done
       - name: Tear down

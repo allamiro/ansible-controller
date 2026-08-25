@@ -64,13 +64,20 @@ if ! signing_pair_ok; then
 fi
 bundle_ok "$PKI_DIR/issued/controller-a" || { rm -rf "$PKI_DIR/issued/controller-a"; mesh/pki/controller-cert.sh controller-a mesh-e2e-receptor; }
 bundle_ok "$PKI_DIR/issued/controller-b" || { rm -rf "$PKI_DIR/issued/controller-b"; mesh/pki/controller-cert.sh controller-b mesh-e2e-receptor-b; }
-if ! bundle_ok "$PKI_DIR/issued/exec-e2e-a"; then
-  rm -rf "$PKI_DIR/issued/exec-e2e-a"
-  { [ -f "$PKI_DIR/csr/exec-e2e-a.csr" ] && [ -f "$PKI_DIR/csr/exec-e2e-a.key" ]; } \
-    || { rm -f "$PKI_DIR/csr/exec-e2e-a.csr" "$PKI_DIR/csr/exec-e2e-a.key"; mesh/pki/node-csr.sh exec-e2e-a; }
-  mesh/pki/node-sign.sh csr/exec-e2e-a.csr exec-e2e-a
-  cp "$PKI_DIR/csr/exec-e2e-a.key" "$PKI_DIR/issued/exec-e2e-a/tls.key"
-fi
+# Node identities go through the real enrollment path (node-csr -> node-sign
+# -> assemble the bundle). exec-e2e-a is the suite's own node; exec-e2e-b is
+# started by check 26 from the packaged mesh/compose.node.yml.
+issue_node() { # <node id>
+  local n="$1"
+  bundle_ok "$PKI_DIR/issued/$n" && return 0
+  rm -rf "$PKI_DIR/issued/$n"
+  { [ -f "$PKI_DIR/csr/$n.csr" ] && [ -f "$PKI_DIR/csr/$n.key" ]; } \
+    || { rm -f "$PKI_DIR/csr/$n.csr" "$PKI_DIR/csr/$n.key"; mesh/pki/node-csr.sh "$n"; }
+  mesh/pki/node-sign.sh "csr/$n.csr" "$n"
+  cp "$PKI_DIR/csr/$n.key" "$PKI_DIR/issued/$n/tls.key"
+}
+issue_node exec-e2e-a
+issue_node exec-e2e-b
 # an EXPIRED-but-otherwise-valid identity (real CA, notAfter in the past) for
 # the §9.3 expired-cert rejection test. Its guard is the fixture's own, NOT
 # bundle_ok: bundle_ok now rejects expired certs, which would regenerate this
@@ -105,6 +112,10 @@ docker run --rm -u 0:0 -v "$PKI_DIR:/pki" --entrypoint sh ansible-execution-node
 '
 
 echo "==> starting the e2e environment"
+# A packaged-node container left behind by an interrupted check 26 belongs to
+# networks that `down -v` has since removed; it cannot start against the
+# recreated ones and would fail that check obscurely. Remove it first.
+docker rm -f mesh-node-exec-e2e-b >/dev/null 2>&1 || true
 docker compose -f mesh/tests/e2e.compose.yml up -d --wait --wait-timeout 90 \
   || { docker compose -f mesh/tests/e2e.compose.yml ps; exit 1; }
 
