@@ -37,7 +37,7 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$NODE" ]      || die "--node is required"
 [ -f "$PLAYBOOK" ]  || die "--playbook '$PLAYBOOK' not found"
-[ -f "$INVENTORY" ] || die "--inventory '$INVENTORY' not found"
+[ -e "$INVENTORY" ] || die "--inventory '$INVENTORY' not found (file or directory)"
 [ -S "$SOCKET" ]    || die "receptor control socket '$SOCKET' not found"
 case "$NODE" in *[!A-Za-z0-9._-]*) die "--node '$NODE' invalid";; esac
 
@@ -51,8 +51,14 @@ mkdir -p "$PDD/project" "$PDD/inventory" "$PDD/env"
 cp -a "$(dirname "$(readlink -f "$PLAYBOOK")")/." "$PDD/project/"
 # Keep the inventory's basename: YAML inventory plugins verify by filename
 # suffix (e.g. *.aws_ec2.yml), so renaming to "hosts" would reject valid
-# plugin inventories after staging.
-cp "$INVENTORY" "$PDD/inventory/$(basename "$INVENTORY")"
+# plugin inventories after staging. An inventory SOURCE that reads sibling
+# files (like configs/inventory/inventory.py loading its neighbours) must be
+# passed as its DIRECTORY, which is staged whole.
+if [ -d "$INVENTORY" ]; then
+  cp -a "$INVENTORY/." "$PDD/inventory/"
+else
+  cp "$INVENTORY" "$PDD/inventory/$(basename "$INVENTORY")"
+fi
 # The node has no /configs mount and never ran the controller entrypoint, so a
 # playbook relying on the repo's ansible.cfg must SHIP it: --ansible-cfg stages
 # it as the project-root ansible.cfg, which ansible loads from the runner's
@@ -78,18 +84,26 @@ fi
 # rewrites of a private file, so there is no shared-file race. Values are
 # JSON-encoded properly (a playbook name carrying a quote or newline must not
 # yield an unparseable lifecycle record).
+# Written to a temp file and renamed, so a concurrent status reader (or an
+# interrupted dispatcher) never observes a truncated/partial record. The
+# optional second argument is a free-text note for states that need context —
+# notably the ambiguous-submit path, where the unit id is genuinely unknown.
 meta() {
   M_JOB="$JOB_ID" M_NODE="$NODE" M_PB="$(basename "$PLAYBOOK")" \
-  M_UNIT="${UNIT_ID:-}" M_ST="$1" python3 - > "$PDD/meta.json" <<'PYEOF'
+  M_UNIT="${UNIT_ID:-}" M_ST="$1" M_NOTE="${2:-}" python3 - > "$PDD/meta.json.tmp" <<'PYEOF'
 import json, os
-print(json.dumps({
+rec = {
     "job_id": os.environ["M_JOB"],
     "node": os.environ["M_NODE"],
     "playbook": os.environ["M_PB"],
     "unit_id": os.environ["M_UNIT"],
     "status": os.environ["M_ST"],
-}))
+}
+if os.environ["M_NOTE"]:
+    rec["note"] = os.environ["M_NOTE"]
+print(json.dumps(rec))
 PYEOF
+  mv "$PDD/meta.json.tmp" "$PDD/meta.json"
 }
 meta created
 
@@ -112,10 +126,12 @@ meta submitting
 submit_out=$(ansible-runner transmit "$PDD" -p "$(basename "$PLAYBOOK")" 2>/dev/null \
   | receptorctl --socket "$SOCKET" work submit ansible-runner \
       --node "$NODE" --payload -) \
-  || { meta submit-ambiguous; die "work submit to '$NODE' failed AFTER the attempt left this host — \
+  || { meta submit-ambiguous "unit id unknown: the response was lost after the attempt left this host; inspect 'receptorctl work list' for an unmatched unit"; \
+       die "work submit to '$NODE' failed AFTER the attempt left this host — \
 the unit MAY BE RUNNING; check 'receptorctl work list' before re-running (job=$JOB_ID)"; }
 UNIT_ID=$(awk '/^Unit ID:/ {print $3}' <<<"$submit_out")
-[ -n "$UNIT_ID" ] || { meta submit-ambiguous; die "no unit id in submit output — state unknown, \
+[ -n "$UNIT_ID" ] || { meta submit-ambiguous "submit returned but no unit id was parseable; inspect 'receptorctl work list'"; \
+  die "no unit id in submit output — state unknown, \
 check 'receptorctl work list' before re-running: $submit_out"; }
 meta running
 

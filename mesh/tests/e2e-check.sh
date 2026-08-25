@@ -118,7 +118,7 @@ meta_verdict=$(docker exec mesh-e2e-orchestrator python3 -c "
 import json
 d = json.load(open('/var/lib/mesh/jobs/$job_id/meta.json'))
 print('ok' if d.get('status') == 'succeeded' and d.get('node') == 'exec-e2e-a' else 'bad: ' + json.dumps(d))
-" 2>/dev/null) || fail "meta.json missing or unparseable for job $job_id"
+" 2>&1) || fail "meta.json unreadable for job $job_id: $(tail -1 <<<"$meta_verdict")"
 [ "$meta_verdict" = ok ] \
   && pass "meta.json parses: succeeded on exec-e2e-a" \
   || fail "meta.json wrong — $meta_verdict"
