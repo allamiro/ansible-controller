@@ -3,7 +3,7 @@
 # Mesh images — built SEPARATELY from the controller and never by the default
 # pipeline. They start FROM the finished controller image, so they inherit its
 # exact runtime and CVE remediation (patch-pip-vendor.py, pebble removal) with
-# zero change to the controller build. See mesh/README.md for the full design.
+# zero change to the controller build. See mesh/DESIGN.md for the full design.
 #
 # Build the orchestrator (control-plane dispatcher) image:
 #   docker build -f docker/mesh/Dockerfile --target orchestrator \
@@ -153,7 +153,7 @@ RUN git clone --filter=blob:none https://github.com/ansible/receptor /src  && cd
 # = controller + ansible-runner (worker) + receptor (the mesh peer itself).
 #
 # Built FROM the orchestrator stage rather than ${BASE} (a deliberate deviation
-# from mesh/README.md §5): the orchestrator layer already carries the pinned
+# from mesh/DESIGN.md §5): the orchestrator layer already carries the pinned
 # ansible-runner/receptorctl closure AND the build-time assertions that prove the
 # controller's runtime survived intact. Repeating that machinery here would be a
 # second copy to drift; inheriting it keeps one source of truth. Contents are
