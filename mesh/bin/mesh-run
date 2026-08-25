@@ -129,6 +129,12 @@ def parse(pname, e):
     raw = None if isinstance(e, str) else (e or {}).get("max_concurrent")
     if not node:
         sys.exit(f"pool '{pname}' has an entry without a node id")
+    # Validated HERE, before serialization: a quoted id smuggling whitespace
+    # or newlines would otherwise split into phantom candidate records on
+    # the bash side.
+    import re
+    if not isinstance(node, str) or not re.fullmatch(r"[A-Za-z0-9._-]+", node):
+        sys.exit(f"pool '{pname}': node id {node!r} invalid ([A-Za-z0-9._-]+ only)")
     # int() would silently truncate floats ('-0.5' -> 0 -> uncapped) and
     # accept booleans; a malformed cap must fail closed instead.
     if raw is None:
@@ -253,7 +259,7 @@ SLOT_FD= SLOT_FILE= DISPATCH_STATE=pre-submit
 # different cap snapshots (a config edit mid-flight) could interleave and
 # jointly overshoot the lower cap.
 slot_scan() {
-  local node="$1" cap="$2" i f g gi
+  local node="$1" cap="$2" i f g gi eff max_occ hc
   for ((i = 1; i <= cap; i++)); do
     f="$SLOTS_DIR/$node.slot.$i"
     # A .hold marker means a previous dispatch through this slot ended with
@@ -270,22 +276,34 @@ slot_scan() {
     if ! { exec {SLOT_FD}>>"$f"; } 2>/dev/null; then SLOT_FD=; continue; fi
     if flock -n "$SLOT_FD" 2>/dev/null; then
       SLOT_FILE="$f"
-      # A cap REDUCTION can leave a live job (its flock) or an unresolved
-      # .hold on a slot numbered ABOVE the new cap. Those still occupy the
-      # node, so they count against it: if any is found, this reservation is
-      # surrendered and the node treated as full rather than overshooting.
+      # Record THIS holder's cap snapshot in its slot file (free slot files'
+      # stale contents are never read — only occupied slots are consulted).
+      printf '%s\n' "$cap" > "$f" 2>/dev/null || true
+      # Cap-skew defense: the EFFECTIVE cap is the minimum of this
+      # dispatcher's cap and every concurrent occupant's recorded cap. That
+      # closes the stale-snapshot race (a cap-2 dispatcher admitted after a
+      # cap-1 job cannot overshoot: it sees the recorded 1) and keeps the
+      # earlier rule that occupants above the effective cap mean "full".
+      # Consequence, by design: a cap RAISE takes effect as in-flight jobs
+      # started under the lower cap drain.
+      eff="$cap" max_occ=0
       for g in "$SLOTS_DIR/$node".slot.*; do
         [ -e "$g" ] || continue
         case "$g" in *.hold) continue;; esac
         gi="${g##*.slot.}"
         case "$gi" in *[!0-9]*|'') continue;; esac
-        [ "$gi" -gt "$cap" ] || continue
+        [ "$g" = "$f" ] && continue
         if [ -e "$g.hold" ] || ! flock -n "$g" true 2>/dev/null; then
-          { exec {SLOT_FD}>&-; } 2>/dev/null || true
-          SLOT_FD= SLOT_FILE=
-          return 1
+          [ "$gi" -gt "$max_occ" ] && max_occ="$gi"
+          hc=$(head -c 16 "$g" 2>/dev/null | head -1 | tr -d '[:space:]')
+          case "$hc" in *[!0-9]*|'') ;; *) [ "$hc" -lt "$eff" ] && eff="$hc";; esac
         fi
       done
+      if [ "$i" -gt "$eff" ] || [ "$max_occ" -gt "$eff" ]; then
+        { exec {SLOT_FD}>&-; } 2>/dev/null || true
+        SLOT_FD= SLOT_FILE=
+        return 1
+      fi
       return 0
     fi
     { exec {SLOT_FD}>&-; } 2>/dev/null || true
@@ -319,7 +337,7 @@ persist_slot_hold() {
   [ -n "$SLOT_FILE" ] || return 0
   printf 'job=%s unit=%s node=%s\nclear with: rm %s.hold  (after confirming the unit finished)\n' \
     "$JOB_ID" "${UNIT_ID:-unknown}" "$NODE" "$SLOT_FILE" > "$SLOT_FILE.hold" 2>/dev/null \
-    || echo "mesh-run: warning: could not persist slot hold $SLOT_FILE.hold — the node's cap may be under-enforced until the unit is confirmed done" >&2
+    || { echo "mesh-run: warning: could not persist slot hold $SLOT_FILE.hold" >&2; return 1; }
 }
 release_slot_hold() {
   [ -n "$SLOT_FILE" ] || return 0
@@ -368,7 +386,7 @@ finalize() {
   # trapped to exit so this trap covers catchable signals; SIGKILL is covered
   # by the marker having been written BEFORE submission).
   if [ "${DISPATCH_STATE:-}" = in-flight ]; then
-    persist_slot_hold
+    persist_slot_hold || true
   fi
   if [ -n "$SSH_KEY" ] && [ -f "$PDD/env/ssh_key" ]; then
     shred -u "$PDD/env/ssh_key" 2>/dev/null \
@@ -533,11 +551,15 @@ fi
 # boundary (plan §2.4), an ambiguous failure is recorded as such and is NEVER
 # treated as "nothing ran" — and this dispatcher never resubmits anywhere.
 meta submitting
-DISPATCH_STATE=in-flight
 # Pessimistic durable hold BEFORE anything leaves this host: a SIGKILL/OOM
 # mid-submission gets no trap, so the marker must already be on disk. It is
-# removed only when the artifacts prove the unit finished.
-persist_slot_hold
+# removed only when the artifacts prove the unit finished. STRICT here — and
+# only here — because nothing has been submitted yet: if the durable half of
+# the reservation cannot exist, refusing the dispatch is honest, whereas
+# submitting anyway would leave the cap unenforceable after a hard kill.
+persist_slot_hold || { meta submit-failed-pre "could not create the durable slot hold"; \
+  die "cannot create the durable slot hold ($SLOT_FILE.hold) — refusing to submit; nothing was executed"; }
+DISPATCH_STATE=in-flight
 submit_out=$(ansible-runner transmit "$PDD" -p "$(basename "$PLAYBOOK_REAL")" 2>/dev/null \
   | receptorctl --socket "$SOCKET" work submit ansible-runner \
       --node "$NODE" --payload -) \
@@ -549,7 +571,9 @@ UNIT_ID=$(awk '/^Unit ID:/ {print $3}' <<<"$submit_out")
   die "no unit id in submit output — state unknown, \
 check 'receptorctl work list' before re-running: $submit_out"; }
 meta running
-persist_slot_hold   # refresh: the marker now names the actual unit id
+# Refresh (tolerant: already submitted, a failed refresh only loses the unit
+# id in the marker, not the reservation itself — the pre-submit write stands)
+persist_slot_hold || true
 
 # (7)(8) stream results -> process. ansible-runner process replays the play
 # output, materialises artifacts under $PDD/artifacts/ (stdout, rc,
