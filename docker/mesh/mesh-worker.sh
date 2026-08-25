@@ -45,7 +45,11 @@ ls -t /var/lib/receptor/worker-*.log 2>/dev/null | grep -Fxv "$log" | tail -n +1
 # step is failure-proof: cleanup must never rewrite the runner's exit code.
 rc=0
 ansible-runner worker "$@" || rc=$?
-find . -type f -path '*/env/ssh_key' -exec shred -u -- {} \; 2>/dev/null \
-  || find . -type f -path '*/env/ssh_key' -exec rm -f -- {} \; 2>/dev/null \
-  || true
+# Fallback must be PER FILE, inside the -exec action: find exits 0 after an
+# error-free traversal even when the exec'd command failed, so chaining a
+# second find behind `||` would never run and a failed shred (ENOSPC on CoW,
+# missing shred) would strand the key.
+find . -type f -path '*/env/ssh_key' \
+  -exec sh -c 'shred -u -- "$1" 2>/dev/null || rm -f -- "$1"' _ {} \; \
+  2>/dev/null || true
 exit "$rc"
