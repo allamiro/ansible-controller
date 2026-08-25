@@ -1,0 +1,127 @@
+name: Mesh CI
+
+# Builds the mesh orchestrator image FROM the controller on BOTH architectures.
+# The controller is built and published for amd64 and arm64 (docker-image.yml /
+# docker-publish.yml matrices), and the mesh images must hold the same property:
+# an orchestrator that only ever builds on amd64 would silently exclude arm64
+# control hosts, and pure-Python pip installs are not automatically arch-clean —
+# a dependency may ship only an sdist or an amd64 wheel for some version.
+#
+# Unlike docker-image.yml this workflow IS path-filtered: the mesh Dockerfile
+# builds FROM the controller image produced in the same job, so its inputs are
+# fully determined by files in this repository — the drift concern that forces
+# docker-image.yml to run on every PR does not apply here. The filter covers ALL
+# of docker/ (not just docker/mesh/): a change to the controller Dockerfile,
+# entrypoint, or pip-vendor patch changes the orchestrator base, and could break
+# its install or dependency assertions without any mesh file moving — skipped
+# here, that breakage would land on main undetected until the next mesh-only PR.
+# Publishing mesh images is deliberately out of scope (mesh plan Phase 11);
+# docker-publish.yml is untouched.
+on:
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "docker/**"
+      - ".dockerignore"
+      - ".trivyignore"
+      - ".github/workflows/mesh-image.yml"
+  push:
+    branches: ["main"]
+    paths:
+      - "docker/**"
+      - ".dockerignore"
+      - ".trivyignore"
+      - ".github/workflows/mesh-image.yml"
+
+jobs:
+  lint:
+    name: Lint mesh Dockerfile
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: hadolint/hadolint-action@v3.4.0
+        with:
+          dockerfile: docker/mesh/Dockerfile
+          failure-threshold: error
+
+  # Same native-runner matrix as docker-image.yml, for the same reasons: each
+  # arch gated on its own, and arm64 under QEMU was ~5x slower.
+  build-orchestrator:
+    name: Build orchestrator (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    needs: lint
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+
+      # The controller this orchestrator inherits from — built here, natively,
+      # from the same commit. Shares the cache scope with docker-image.yml, so on
+      # a PR that does not touch the controller this resolves from cache.
+      - name: Build controller (base)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./docker/Dockerfile
+          platforms: ${{ matrix.platform }}
+          push: false
+          load: true
+          tags: ansible-controller:ci
+          cache-from: type=gha,scope=ci-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=ci-${{ matrix.arch }}
+
+      # A just-built local image has no registry digest, so this is the exact
+      # case ALLOW_MUTABLE_BASE exists for. The base is not actually mutable
+      # here — it was built from this commit seconds ago.
+      #
+      # Plain `docker build`, NOT build-push-action: that action runs in the
+      # docker-container buildx builder, which resolves FROM against registries
+      # only — it cannot see the ansible-controller:ci image just loaded into the
+      # runner's daemon, so the build fails with "pull access denied". The
+      # daemon's default BuildKit builder does see local images. The layer this
+      # forgoes gha-caching for is a single pip install (~20s).
+      - name: Build orchestrator FROM the controller
+        run: |
+          docker build -f docker/mesh/Dockerfile --target orchestrator \
+            --build-arg BASE=ansible-controller:ci \
+            --build-arg ALLOW_MUTABLE_BASE=1 \
+            -t ansible-orchestrator:ci .
+
+      # The Dockerfile's own layer already enforces the no-drift and exact-added-set
+      # assertions at build time; this proves the tools run on THIS architecture.
+      - name: Smoke test
+        run: |
+          docker run --rm --entrypoint ansible-runner ansible-orchestrator:ci --version
+          docker run --rm --entrypoint receptorctl ansible-orchestrator:ci --help >/dev/null
+          docker run --rm --entrypoint ansible ansible-orchestrator:ci --version
+
+      # Same gate as the controller CI. The orchestrator inherits the controller's
+      # CVE posture; this catches anything the added packages introduce, per arch.
+      # Installer fetched from the pinned release tag and told to install that
+      # same version — not from `main`, whose script contents can change (or be
+      # compromised) between runs. Bump the two pins together.
+      - name: Fail on CRITICAL/HIGH CVEs (Trivy)
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/v0.74.0/contrib/install.sh \
+            | sh -s -- -b /usr/local/bin v0.74.0
+          trivy image \
+            --severity CRITICAL,HIGH \
+            --ignore-unfixed \
+            --exit-code 1 \
+            --timeout 10m \
+            ansible-orchestrator:ci
