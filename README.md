@@ -656,6 +656,154 @@ The private key is available inside the container at `/home/ansible/.ssh/id_ed25
 
 ---
 
+## SSH host-key checking
+
+By default the shipped `configs/ansible.cfg` **disables** SSH host-key checking:
+
+```ini
+[defaults]
+host_key_checking = False
+
+[ssh_connection]
+ssh_args = -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no
+```
+
+This is a **development convenience** — it avoids host-key prompts against lab
+hosts whose keys change often — but it is **not production-safe**: it disables
+SSH man-in-the-middle protection, so a spoofed or hijacked host is trusted
+silently. The insecure default is kept for backward compatibility and is slated
+to flip to strict in a future major release.
+
+**For production, enable strict checking with a managed `known_hosts`:**
+
+```ini
+[defaults]
+host_key_checking = True
+
+[ssh_connection]
+ssh_args = -o UserKnownHostsFile=/configs/known_hosts -o StrictHostKeyChecking=yes
+```
+
+Pre-populate the `known_hosts` file on the host (it persists via the `./configs`
+mount). **Verify the keys out-of-band before trusting them.** `ssh-keyscan`
+records whatever key answers on the network, so over an untrusted or compromised
+path it will happily capture an attacker's key — its manual explicitly warns
+against building `known_hosts` "without verifying the keys":
+
+```bash
+# 1. Fetch candidate keys — WITHOUT -H, so each fingerprint stays attributable to
+#    its plaintext host in the next step (-H hashes the hostnames):
+#    The candidate file gets a private random name. A fixed path like
+#    /tmp/known_hosts.new on a multi-user host is a classic spoof target: another
+#    user can pre-create or symlink it, seeding the file you later trust:
+kh_new=$(mktemp)
+ssh-keyscan server1 server2 > "$kh_new"
+
+#    A host reached on a non-default port (ansible_port) must be scanned WITH -p.
+#    OpenSSH looks such a host up as [host]:port, and ssh-keyscan only writes that
+#    bracketed form when -p is given — scan it without and you store a plain
+#    `server3` entry that never matches, so StrictHostKeyChecking=yes rejects the
+#    host even though its key was verified:
+ssh-keyscan -p 2222 server3 >> "$kh_new"
+
+#    Scan the address Ansible actually CONNECTS to, which is `ansible_host` when
+#    the inventory sets one and the inventory name otherwise. OpenSSH looks the
+#    key up under the address it dials, so a key pinned under an inventory alias
+#    is never found and strict checking rejects the host:
+#      web01 ansible_host=10.0.0.5   ->   ssh-keyscan 10.0.0.5   (not web01)
+
+# 2. Compare each fingerprint against a TRUSTED source before pinning — the host
+#    console, the cloud provider's API, a config-management fact, or the host's
+#    own /etc/ssh/ssh_host_*_key.pub obtained over a channel you already trust:
+ssh-keygen -lf "$kh_new"
+
+# 3. Install — but only if every host actually made it into the candidate file.
+#    ssh-keyscan skips hosts it cannot reach and still exits 0 when only some of
+#    them failed, so an unguarded run would delete a briefly-down or mistyped
+#    host's good key below and have nothing to put back, turning a transient
+#    outage into a host strict checking then refuses to connect to. The check
+#    therefore GATES the removal rather than just warning about it.
+#
+#    Removing each superseded entry first is what stops a rekeyed host from
+#    staying trusted on its OLD key (a match on ANY entry passes). `-R` takes a
+#    single host, so keep the loop — a second `-R` overrides the first instead of
+#    removing both — and name non-default-port hosts in the bracketed form they
+#    were stored under.
+#
+#    Every mutation happens on TEMP FILES; the live file changes only via one
+#    atomic rename at the end. Any earlier failure — an unreadable existing file,
+#    a failed removal, a full disk while writing the replacement — aborts with
+#    the live file byte-identical. A plain `>` redirect could not promise that:
+#    it truncates the live file BEFORE writing, so an interruption mid-write
+#    strands it empty or partial. The subshell + set -e keeps the block safe to
+#    paste (a failure exits the subshell, not your shell), and the explicit
+#    chmod means a first-ever pin is readable by the container's uid 1000 even
+#    under a restrictive host umask like 077 (known_hosts holds public keys;
+#    0644 is what OpenSSH itself creates).
+ok=1   # reset up front: a stale ok=0 from an earlier paste in the same shell
+       # would otherwise let the hashing step below run after a failed re-run
+missing=
+for h in server1 server2 '[server3]:2222'; do
+  ssh-keygen -F "$h" -f "$kh_new" >/dev/null || missing="$missing $h"
+done
+
+if [ -n "$missing" ]; then
+  echo "NOT scanned:$missing — fix and re-scan; known_hosts left unchanged"
+else
+  # The subshell must stand ALONE, with its status tested on the next line.
+  # Chaining it into `( ... ) && echo ... || echo ...` would quietly disable the
+  # `set -e` inside: the shell ignores errexit in every non-final command of an
+  # AND-OR list, so failures would stop aborting the update.
+  (
+    set -e
+    work=$(mktemp); new=
+    trap 'rm -f "$work" "$work.old" "$new"' EXIT
+    [ ! -e configs/known_hosts ] || cp configs/known_hosts "$work"
+    for h in server1 server2 '[server3]:2222'; do
+      ssh-keygen -R "$h" -f "$work" >/dev/null 2>&1
+    done
+    new=$(mktemp configs/known_hosts.XXXXXX)
+    cat "$work" "$kh_new" > "$new"
+    chmod 644 "$new"
+    mv "$new" configs/known_hosts && new=
+  )
+  ok=$?
+  if [ "$ok" -eq 0 ]; then echo "known_hosts updated"; else echo "FAILED — known_hosts left unchanged"; fi
+fi
+
+# 4. (optional) hash the hostnames at rest once pinned:
+#    Gated on the update above having succeeded — pasted verbatim after a failed
+#    or skipped update, an unguarded hash would still rewrite the live file:
+[ "${ok:-1}" -eq 0 ] && ssh-keygen -Hf configs/known_hosts && rm -f configs/known_hosts.old
+```
+
+Better still, provision authoritative host keys directly from your
+config-management system or golden image instead of scanning at all.
+
+If you prefer trust-on-first-use over pre-pinning every host, use
+`StrictHostKeyChecking=accept-new`: Ansible records each host key the first time
+it connects and then fails if a key later changes. That still catches
+key-substitution attacks after the first contact, unlike the `=no` default.
+
+`accept-new` has to **write** the first key, so `configs/known_hosts` must be
+writable by the container user (uid 1000) — otherwise the write silently fails and
+every session keeps treating keys as new. Prepare it on the host:
+
+```bash
+touch configs/known_hosts
+sudo chown 1000:1000 configs/known_hosts   # the container's ansible user is uid 1000
+chmod 600 configs/known_hosts
+```
+
+The pre-pinned `StrictHostKeyChecking=yes` recipe above needs the file only
+*readable*, so it sidesteps this ownership requirement entirely.
+
+> The distributed execution mesh (see [`mesh/`](mesh/README.md)) will use strict,
+> managed host-key checking as its default from the start — this relaxed setting
+> is scoped to the existing direct controller only.
+
+---
+
 ## SSH agent forwarding (optional)
 
 To use your host SSH keys inside the container without copying them to disk, uncomment the volume and environment entries in `docker-compose.yml`:
