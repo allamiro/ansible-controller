@@ -269,7 +269,7 @@ controller bakes its own dependencies:
 
 ```dockerfile
 # Dockerfile.site-node
-FROM ansible-execution-node:latest
+FROM ghcr.io/allamiro/ansible-execution-node:latest
 USER root
 COPY node-requirements.txt /tmp/node-requirements.txt
 RUN pip3 install --no-cache-dir --break-system-packages -r /tmp/node-requirements.txt \
