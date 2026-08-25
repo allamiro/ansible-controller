@@ -189,5 +189,5 @@ The places to look:
 | `receptorctl work list` (either socket) | units the mesh still tracks — the first stop after an ambiguous submit |
 
 The e2e suite doubles as a diagnostic vocabulary: every failure mode it
-proves (26 checks) is one the mesh is supposed to refuse — if production
+proves (27 checks) is one the mesh is supposed to refuse — if production
 shows different behavior than the lab, compare configurations first.

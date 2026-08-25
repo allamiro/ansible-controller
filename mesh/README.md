@@ -95,7 +95,7 @@ cross the wall:
 ```bash
 docker build -f docker/Dockerfile -t ansible-controller:dev .   # 1. the controller base
 mesh/tests/e2e-up.sh ansible-controller:dev                     # 2. build + start the lab (throwaway certificates issued for you)
-mesh/tests/e2e-check.sh                                         # 3. watch 26 checks prove every property above
+mesh/tests/e2e-check.sh                                         # 3. watch 27 checks prove every property above
 mesh/tests/e2e-down.sh                                          # tear it all down again
 ```
 
@@ -357,7 +357,7 @@ each node advertises the work type that runs playbooks.
 | Ingress A is down | One door failed; the other is up | New dispatches flow through B automatically. A job that was mid-stream on A is reported incomplete — check its artifacts, re-run if safe. Restart A when convenient; nodes re-attach automatically |
 | Playbook failed on the node | The playbook itself failed — the mesh reports honestly | Read the `/var/lib/mesh/jobs/<uuid>/` artifacts: full stdout and per-task events are there, same as a local run |
 | `mesh-run` refuses to retry a job whose outcome is unknown | The never-run-twice rule (above) | Check the job's artifacts / the target's state, then re-run by hand if it's safe |
-| Dispatches report a node at capacity but nothing seems to run there | A job with an unknown outcome left a `.hold` marker keeping its slot reserved (capacity must not evaporate just because the dispatcher lost sight of an acknowledged job) | Read `/var/lib/mesh/slots/<node>/slot.<n>.hold` in the orchestrator — it names the job and unit; confirm the unit finished (`receptorctl work status <unit>`), then delete the marker |
+| Dispatches report a node at capacity but nothing seems to run there | A job with an unknown outcome left a `.hold` marker keeping its slot reserved (capacity must not evaporate just because the dispatcher lost sight of an acknowledged job) | Read `/var/lib/mesh/slots/<node>/slot.<n>.hold` in the orchestrator — it names the job and unit; confirm the unit finished (`receptorctl work list --unit_id <unit>`), then delete the marker |
 | You raised `max_concurrent` but the old lower cap still applies | Raises are deliberately not automatic — a dispatcher can't tell a deliberate raise from a stale config snapshot, so the lowest accepted cap persists | After editing the config upward, delete the persisted record: `rm /var/lib/mesh/slots/<node>/cap` in the orchestrator; the next dispatch records the new value |
 
 ## Getting the images
@@ -424,7 +424,7 @@ mesh/
 ├── config/receptor/   # ingress endpoint configs (A and B)
 ├── pki/               # certificate tooling: CA, node requests, signing
 ├── secrets/           # your issued bundles (gitignored; CA key stays offline)
-└── tests/             # the ten-minute lab + its 26-check verification suite
+└── tests/             # the ten-minute lab + its 27-check verification suite
 ```
 
 Operating it day to day — enrolling nodes, rotating credentials, evicting a
