@@ -124,15 +124,12 @@ jobs:
           docker run --rm --entrypoint receptor ansible-execution-node:ci --version
           docker run --rm --entrypoint ansible-runner ansible-execution-node:ci --version
 
+      - uses: ./.github/actions/install-trivy
+
       # Same gate as the controller CI. The orchestrator inherits the controller's
       # CVE posture; this catches anything the added packages introduce, per arch.
-      # Installer fetched from the pinned release tag and told to install that
-      # same version — not from `main`, whose script contents can change (or be
-      # compromised) between runs. Bump the two pins together.
       - name: Fail on CRITICAL/HIGH CVEs (Trivy)
         run: |
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/v0.74.0/contrib/install.sh \
-            | sh -s -- -b /usr/local/bin v0.74.0
           trivy image \
             --severity CRITICAL,HIGH \
             --ignore-unfixed \

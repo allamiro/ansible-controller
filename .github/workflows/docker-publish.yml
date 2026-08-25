@@ -284,7 +284,7 @@ jobs:
             "controller ansible-controller" \
             "orchestrator ansible-orchestrator" \
             "execution-node ansible-execution-node"; do
-            set -- $pair; dir="$1"; name="$2"
+            read -r dir name <<<"$pair"
             for image in \
               "docker.io/${DOCKERHUB_USERNAME}/${name}" \
               "ghcr.io/${{ github.repository_owner }}/${name}"; do
@@ -304,10 +304,42 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
 
-      - name: Sign published manifests (keyless OIDC)
+      # Keyless signing is three network round-trips per image — GitHub's OIDC
+      # token endpoint, Fulcio, Rekor — and each can fail transiently. Run #249
+      # (2026-08-25) died on the FIRST of the six manifests with the token
+      # endpoint returning a non-JSON body ("fetching ambient OIDC credentials:
+      # invalid character 'u' looking for beginning of value"); the same job,
+      # re-run unchanged an hour later, signed all six. By this step the
+      # manifests are already pushed and tagged, so a one-shot failure leaves a
+      # release public but unsigned — and the Trivy backstop below never runs.
+      # Retry with backoff instead; a run that still cannot sign after ~100s of
+      # retries is a real outage and fails.
+      #
+      # Each signature is then VERIFIED against the exact identity the README
+      # tells users to check — this workflow file at this ref, issued by
+      # GitHub's OIDC issuer — so "signed" here means "verifiable by the
+      # documented command", not merely "cosign exited 0".
+      - name: Sign and verify published manifests (keyless OIDC)
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          CERT_IDENTITY: https://github.com/${{ github.repository }}/.github/workflows/docker-publish.yml@${{ github.ref }}
+          OIDC_ISSUER: https://token.actions.githubusercontent.com
         run: |
+          retry() { # <label> <command...> — 5 attempts, 10/20/30/40s between them
+            local label="$1" attempt; shift
+            for attempt in 1 2 3 4 5; do
+              "$@" && return 0
+              [ "$attempt" -lt 5 ] || break
+              echo "::warning::${label} failed (attempt ${attempt}/5); retrying in $((attempt * 10))s"
+              sleep $((attempt * 10))
+            done
+            echo "::error::${label} failed after 5 attempts"
+            return 1
+          }
+          verify() { # the per-signature JSON on stdout is noise; cosign's own summary is on stderr
+            cosign verify --certificate-identity "$CERT_IDENTITY" \
+              --certificate-oidc-issuer "$OIDC_ISSUER" "$1" >/dev/null
+          }
           tag="sha-$(echo "$GITHUB_SHA" | cut -c1-7)"
           for name in ansible-controller ansible-orchestrator ansible-execution-node; do
             for image in \
@@ -315,9 +347,12 @@ jobs:
               "ghcr.io/${{ github.repository_owner }}/${name}"; do
               digest=$(docker buildx imagetools inspect "${image}:${tag}" \
                 --format '{{.Manifest.Digest}}')
-              cosign sign --yes "${image}@${digest}"
+              retry "cosign sign ${image}@${digest}"   cosign sign --yes "${image}@${digest}"
+              retry "cosign verify ${image}@${digest}" verify "${image}@${digest}"
             done
           done
+
+      - uses: ./.github/actions/install-trivy
 
       # Backstop, not the primary gate: by the time this runs the manifest is already
       # pushed and tagged, so a failure here means "a published image regressed, go pull
@@ -328,8 +363,6 @@ jobs:
       # being a signal. See docker-image.yml for why --ignore-unfixed.
       - name: Fail on CRITICAL/HIGH CVEs in the published images (Trivy)
         run: |
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
-            | sh -s -- -b /usr/local/bin
           tag="sha-$(echo '${{ github.sha }}' | cut -c1-7)"
           for name in ansible-controller ansible-orchestrator ansible-execution-node; do
             trivy image \

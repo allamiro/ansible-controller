@@ -16,10 +16,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7   # .trivyignore must be on disk for the scan below
 
-      - name: Install Trivy
-        run: |
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
-            | sh -s -- -b /usr/local/bin
+      - uses: ./.github/actions/install-trivy
 
       - name: Scan image and write SARIF
         env:
