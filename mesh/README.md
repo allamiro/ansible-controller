@@ -49,7 +49,7 @@ flowchart LR
         N2["execution node"] -- "SSH" --> T2["targets"]
     end
 
-    N1 == "node dials OUT<br/>TCP 27199, mTLS" ==> RA
+    N1 == "node dials OUT<br/>TCP 27199 / 27200, mTLS" ==> RA
     N1 -.-> RB
     N2 == "mTLS" ==> RA
     N2 -.-> RB
@@ -63,16 +63,19 @@ project's test suite on every change):
    certificate, an expired one, one from a different authority, or a valid
    certificate for the wrong identity is refused at the door.
 2. **Nodes dial out.** Nothing ever connects *into* your protected network.
-   The execution node opens one outbound TCP connection (port 27199) to your
-   control host and receives all its work over that connection. Your inbound
-   firewall rules stay exactly as they are.
+   The execution node opens outbound TCP connections to your control host
+   (ports 27199 and 27200, one per ingress) and receives all its work over
+   them. Your inbound firewall rules stay exactly as they are.
 3. **The master key stays offline.** The Certificate Authority key that mints
    identities lives on a machine that never joins the mesh — stealing any
    running container gets an attacker one identity, never the ability to
    create identities.
 4. **One door can fail.** The control host runs two ingress endpoints (A and
-   B). Nodes stay connected to both; if A goes down, dispatching continues
-   through B, and A re-joins automatically when it returns.
+   B). Nodes stay connected to both; if A goes down, **new** jobs dispatch
+   through B, and A re-joins automatically when it returns. A job that was
+   already streaming through A when it died follows the never-run-twice rule
+   below: check its artifacts and re-run by hand if safe — it is reported
+   incomplete rather than silently resubmitted.
 
 Targets need nothing installed — the execution node reaches them over plain
 SSH, exactly the way the controller does on the direct path.
@@ -93,8 +96,9 @@ mesh/tests/e2e-down.sh                                          # tear it all do
 
 Step 3 dispatches real playbooks through the mesh and also proves the
 *negative* space: it tries to join with missing, expired, wrong-identity, and
-wrong-authority certificates and confirms each one is refused, then kills
-ingress A mid-flight and confirms dispatch survives via B.
+wrong-authority certificates and confirms each one is refused, then stops
+ingress A and confirms a fresh dispatch still succeeds through B — and that A
+re-joins when restarted.
 
 This lab is the complete distributed path end to end, and it is the supported
 way to run the full path today (see [What ships today](#what-ships-today-and-whats-next)).
@@ -106,8 +110,9 @@ way to run the full path today (see [What ships today](#what-ships-today-and-wha
 - **Control host** — the machine already running your controller via
   `docker compose`.
 - **One Linux + Docker host per closed network** — it must be able to reach
-  your targets over SSH *inside* the network, and to open one outbound TCP
-  connection to your control host on port 27199. That's its only requirement.
+  your targets over SSH *inside* the network, and to open outbound TCP
+  connections to your control host on ports 27199 and 27200. That's its only
+  requirement.
 - **An offline machine for the CA** — anything that stays off the network
   (a laptop, a VM you keep powered off). It holds the one key that can issue
   mesh identities.
@@ -141,11 +146,20 @@ mesh/pki/node-csr.sh exec-dmz-a
 # ON THE OFFLINE MACHINE — sign the request (refuses a request whose name
 # doesn't exactly match the node you're authorising):
 mesh/pki/node-sign.sh csr/exec-dmz-a.csr exec-dmz-a
+
+# BACK ON THE NODE — assemble the bundle the node will mount: copy the
+# returned issued/exec-dmz-a/ (tls.crt + ca.crt) into the node's secrets
+# store, then add the private key that never left this machine:
+cp csr/exec-dmz-a.key issued/exec-dmz-a/tls.key
+chmod 600 issued/exec-dmz-a/tls.key
 ```
 
-Copy each issued `crt + key + ca` bundle to the machine it belongs to. Bundles
-live under `mesh/secrets/` (gitignored — never committed); running containers
-only ever see `issued/<name>/` directories, never the CA key.
+A complete bundle is `issued/<name>/` holding `tls.crt`, `tls.key`, and
+`ca.crt`. The two controller identities are born complete on the offline
+machine — copy those `issued/controller-*/` directories to the control host.
+Everything lives under `mesh/secrets/` (gitignored — never committed);
+running containers only ever see `issued/<name>/` directories, never the CA
+key.
 
 **Naming tip:** node names become the addresses you dispatch to
 (`mesh-run --node exec-dmz-a ...`), so name nodes after their network:
@@ -160,14 +174,34 @@ docker compose -f docker-compose.yml -f mesh/compose.mesh.yml --profile mesh up 
 ```
 
 This starts both ingress endpoints beside your controller and connects the
-control socket. Your existing controller, its mounts, and the direct execution
-path are untouched — omit `--profile mesh` and none of this exists.
+control socket. Ingress A listens on host port **27199** and ingress B on
+**27200** — the two ports your nodes dial. Your existing controller, its
+mounts, and the direct execution path are untouched — omit `--profile mesh`
+and none of this exists.
+
+**To dispatch from this host you also need the orchestrator image** — the
+stock controller deliberately carries no `receptorctl`/`mesh-run`. Until
+[#67](https://github.com/allamiro/ansible-controller/pull/67) publishes it,
+build it from your checkout and point the `ansible` service at it:
+
+```bash
+docker build -f docker/mesh/Dockerfile --target orchestrator \
+  --build-arg BASE=ansible-controller:dev --build-arg ALLOW_MUTABLE_BASE=1 \
+  -t ansible-orchestrator:local .
+```
+
+```yaml
+# orchestrator.override.yml — add as one more -f file on the compose command
+services:
+  ansible:
+    image: ansible-orchestrator:local
+```
 
 ### Step 3 — connect your execution nodes
 
 Run the execution-node image on the host inside each closed network with its
-issued certificate bundle mounted; it dials out to your control host on port
-27199 and appears in the mesh. The packaged wiring for this step — published
+issued certificate bundle mounted; it dials out to your control host on ports
+27199 (ingress A) and 27200 (ingress B) and appears in the mesh. The packaged wiring for this step — published
 images, ready-made node compose file, and `make mesh-run` / `make mesh-status`
 targets — is the part still landing (see
 [What ships today](#what-ships-today-and-whats-next)); until it does, the
@@ -217,9 +251,9 @@ each node advertises the work type that runs playbooks.
 
 | Symptom | Likely cause | What to do |
 |---|---|---|
-| Node missing from `status` | It can't reach port 27199 on the control host, or its TLS bundle is wrong | From the node's host: test outbound reachability to the control host; check the node's logs — a refused TLS handshake means a certificate problem (next row) |
+| Node missing from `status` | It can't reach ports 27199/27200 on the control host, or its TLS bundle is wrong | From the node's host: test outbound reachability to the control host; check the node's logs — a refused TLS handshake means a certificate problem (next row) |
 | Node's connection is refused | Expired certificate, wrong identity in the certificate, or a bundle issued by a different CA | Re-issue: new request on the node (`node-csr.sh`), sign offline (`node-sign.sh`), install the new bundle, restart the node. This is deliberate — an unauthenticated node must never join |
-| Dispatch fails and ingress A is down | That's the failover working | Nothing urgent: jobs flow through B. Restart A when convenient; nodes re-attach to it automatically |
+| Ingress A is down | One door failed; the other is up | New dispatches flow through B automatically. A job that was mid-stream on A is reported incomplete — check its artifacts, re-run if safe. Restart A when convenient; nodes re-attach automatically |
 | Playbook failed on the node | The playbook itself failed — the mesh reports honestly | Read the `/var/lib/mesh/jobs/<uuid>/` artifacts: full stdout and per-task events are there, same as a local run |
 | `mesh-run` refuses to retry a job whose outcome is unknown | The never-run-twice rule (above) | Check the job's artifacts / the target's state, then re-run by hand if it's safe |
 
