@@ -115,7 +115,17 @@ way to run the full path today (see [What ships today](#what-ships-today-and-wha
   requirement.
 - **An offline machine for the CA** — anything that stays off the network
   (a laptop, a VM you keep powered off). It holds the one key that can issue
-  mesh identities.
+  mesh identities. It needs Docker: the PKI scripts run receptor's own
+  certificate tooling inside the pinned receptor image, so preload that image
+  before disconnecting the machine:
+
+  ```bash
+  # on a connected machine (image ref pinned in mesh/pki/common.sh):
+  docker pull quay.io/ansible/receptor:v1.6.7@sha256:6296f6cd3b0301cc7c9376e48ae15a42fc7b606235d08e94543fe77661cea4d2
+  docker save quay.io/ansible/receptor:v1.6.7@sha256:6296f6cd3b0301cc7c9376e48ae15a42fc7b606235d08e94543fe77661cea4d2 -o receptor.tar
+  # transfer receptor.tar to the CA machine, then there:
+  docker load -i receptor.tar
+  ```
 
 ### Step 1 — issue identities
 
@@ -201,8 +211,9 @@ services:
 
 Run the execution-node image on the host inside each closed network with its
 issued certificate bundle mounted; it dials out to your control host on ports
-27199 (ingress A) and 27200 (ingress B) and appears in the mesh. The packaged wiring for this step — published
-images, ready-made node compose file, and `make mesh-run` / `make mesh-status`
+27199 (ingress A) and 27200 (ingress B) and appears in the mesh. The packaged
+wiring for this step — published images, a ready-made node compose file, and
+`make mesh-run` / `make mesh-status`
 targets — is the part still landing (see
 [What ships today](#what-ships-today-and-whats-next)); until it does, the
 [lab](#try-it-in-ten-minutes) shows the complete working wiring you can adapt,
@@ -277,7 +288,7 @@ published, verify a pull the same way as the controller:
 
 ```bash
 cosign verify \
-  --certificate-identity-regexp 'https://github.com/allamiro/ansible-controller' \
+  --certificate-identity-regexp 'https://github\.com/allamiro/ansible-controller/\.github/workflows/docker-publish\.yml@.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   ghcr.io/allamiro/ansible-orchestrator:latest
 ```
