@@ -28,11 +28,38 @@ rimg() {
     "chown -R $(id -u):$(id -g) /pki"
 }
 
-# Assert a PEM (cert or CSR) carries EXACTLY the given receptor node id in its
-# SAN — the identity receptor enforces at connect time. Signing is gated on
-# this so a CSR cannot smuggle a different identity past the CA.
-assert_receptor_id() { # file-in-/pki  kind(x509|req)  expected-id
-  rimg "openssl $2 -in /pki/$1 -text -noout \
-        | grep -F 'othername: 1.3.6.1.4.1.2312.19.1:$3' >/dev/null \
-        || { echo 'identity check failed: $1 does not carry receptor node id $3' >&2; exit 1; }"
+# Assert a PEM (cert or CSR) carries EXACTLY ONE receptor node id — the given
+# one — and no DNS name outside the allowlist. Presence alone is not enough:
+# a CSR listing the authorised id PLUS a second identity would be signed with
+# both, and a smuggled DNS name could let a node cert impersonate an ingress
+# to its peers. Signing is gated on this.
+#
+# Values travel as environment variables into a single-quoted script — nothing
+# from the arguments is interpolated into shell text on either side.
+assert_receptor_id() { # file-in-/pki  kind(x509|req)  expected-id  [allowed-dns...]
+  local f="$1" kind="$2" want="$3"; shift 3
+  local allow="$want $*"
+  docker run --rm -u 0:0 -v "$MESH_SECRETS:/pki" \
+    -e F="$f" -e KIND="$kind" -e WANT="$want" -e ALLOW="$allow" \
+    --entrypoint sh "$RECEPTOR_IMAGE" -eu -c '
+      san=$(openssl "$KIND" -in "/pki/$F" -text -noout \
+            | grep -A1 "Subject Alternative Name" | tail -1)
+      ids=$(printf "%s\n" "$san" \
+            | grep -o "othername: 1.3.6.1.4.1.2312.19.1:[^, ]*" \
+            | sed "s/.*19\.1://")
+      if [ "$ids" != "$WANT" ]; then
+        echo "identity check failed: $F must carry exactly receptor node id \"$WANT\"; found: $(printf "%s" "$ids" | tr "\n" " ")" >&2
+        exit 1
+      fi
+      dns=$(printf "%s\n" "$san" | grep -o "DNS:[^, ]*" | sed "s/^DNS://")
+      for n in $dns; do
+        ok=0
+        for a in $ALLOW; do
+          if [ "$n" = "$a" ]; then ok=1; fi
+        done
+        if [ "$ok" != 1 ]; then
+          echo "identity check failed: $F carries unexpected DNS name \"$n\" (allowed: $ALLOW)" >&2
+          exit 1
+        fi
+      done'
 }

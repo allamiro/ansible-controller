@@ -19,5 +19,5 @@ rimg "mkdir -p /pki/issued/$ID && cd /pki/issued/$ID \
        outcert=tls.crt verify=yes notafter=$CERT_NOT_AFTER \
   && cp /pki/ca/ca.crt ca.crt && rm -f tls.csr \
   && chmod 600 tls.key && chmod 644 tls.crt ca.crt"
-assert_receptor_id "issued/$ID/tls.crt" x509 "$ID"
+assert_receptor_id "issued/$ID/tls.crt" x509 "$ID" "$@"
 echo "issued: $MESH_SECRETS/issued/$ID/{tls.crt,tls.key,ca.crt}"
