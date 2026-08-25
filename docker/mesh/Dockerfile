@@ -133,3 +133,54 @@ RUN set -eux; \
 # traced back to its controller even when BASE was a mutable reference.
 LABEL org.opencontainers.image.base.name="${BASE}"
 LABEL org.opencontainers.image.title="Ansible Mesh Orchestrator"
+
+# ---- receptor, built from source with patched Go module deps ----
+# Upstream's receptor v1.6.7 binary (quay.io/ansible/receptor) carries 11
+# fixable HIGH CVEs from stale golang.org/x/crypto v0.51.0, x/net v0.55.0 and
+# x/text v0.37.0, and no upstream release has shipped the fixes yet. The repo's
+# CVE gate (0 fixable CRITICAL/HIGH) applies to every mesh image, so — same
+# precedent as the controller's pip-vendor patch — the binary is rebuilt from
+# the EXACT v1.6.7 tag commit with only those three modules bumped to their
+# fixed releases. Drop this stage and return to COPYing upstream's binary once
+# a receptor release ships with patched deps. (The Phase 3 sidecar still runs
+# upstream's image; switching it to this build is a follow-up once this image
+# is published, mesh plan Phase 11.)
+FROM golang:1.25-trixie@sha256:2c4c60ef415fbfa5e90300722293bef36c5e63fae17570ce18f580af933dbd73 AS receptor-build
+# Tag commit pinned, not the tag name — tags can be moved, commits cannot.
+RUN git clone --filter=blob:none https://github.com/ansible/receptor /src  && cd /src  && git checkout -q d0798033b600f6f6ad0709e99dc7d58379a22bc6  && go get golang.org/x/crypto@v0.53.0 golang.org/x/net@v0.56.0 golang.org/x/text@v0.39.0  && go mod tidy  && CGO_ENABLED=0 go build -trimpath       -ldflags "-s -w -X github.com/ansible/receptor/internal/version.Version=1.6.7"       -o /receptor ./cmd/receptor-cl  && test "$(/receptor --version)" = "1.6.7"
+
+# ---- execution-node: the image that RUNS work on a zone's network ----
+# = controller + ansible-runner (worker) + receptor (the mesh peer itself).
+#
+# Built FROM the orchestrator stage rather than ${BASE} (a deliberate deviation
+# from mesh/README.md §5): the orchestrator layer already carries the pinned
+# ansible-runner/receptorctl closure AND the build-time assertions that prove the
+# controller's runtime survived intact. Repeating that machinery here would be a
+# second copy to drift; inheriting it keeps one source of truth. Contents are
+# exactly the plan's "controller + receptor + ansible-runner" — plus receptorctl,
+# which the HEALTHCHECK needs anyway.
+FROM orchestrator AS execution-node
+
+# Static CGO_ENABLED=0 binary from the patched source build above — same 1.6.7
+# code, CVE-clean module set, no libc coupling to the Ubuntu base.
+COPY --from=receptor-build /receptor /usr/local/bin/receptor
+
+COPY docker/mesh/node-entrypoint.sh /usr/local/bin/node-entrypoint.sh
+
+# The node runs receptor, NOT sshd: nothing dials INTO an execution node — it
+# dials OUT to the controller's ingress (tcp-peer) and receives work over that
+# receptor connection. Everything below runs as the unprivileged ansible user
+# (uid 1000, created by the controller layer); receptor is PID 1 via exec, and
+# the inherited sshd entrypoint is simply never started.
+RUN chmod 755 /usr/local/bin/node-entrypoint.sh \
+ && receptor --version \
+ && mkdir -p /run/receptor /var/lib/receptor \
+ && chown ansible:ansible /run/receptor /var/lib/receptor
+USER ansible
+
+# Override the controller's port-22 HEALTHCHECK: there is no sshd here. Healthy
+# means receptor is up AND answering on its local control socket.
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=10s \
+  CMD ["receptorctl", "--socket", "/run/receptor/receptor.sock", "status"]
+
+ENTRYPOINT ["/usr/local/bin/node-entrypoint.sh"]

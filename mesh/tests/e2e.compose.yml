@@ -1,0 +1,90 @@
+# Mesh end-to-end integration environment (mesh plan Phase 4).
+#
+# This is the REGRESSION SUITE for the distributed-execution mesh — run by CI on
+# every mesh change and runnable locally with mesh/tests/e2e-up.sh. It stands up
+# the production topology in miniature to prove the properties production
+# depends on:
+#
+#   ctlnet    : orchestrator + receptor-controller + execution node
+#   targetnet : execution node + managed target      (orchestrator NOT attached)
+#
+# The load-bearing assertion (e2e-check.sh) is that the control plane has NO
+# network route to the target — only the execution node straddles both networks,
+# so any work reaching the target MUST traverse receptor -> node -> SSH, exactly
+# as in a segmented production network.
+#
+# TLS note: transport security lands in Phase 6 (mandatory mTLS). Until then the
+# receptor peering here is plaintext, which is acceptable only inside this
+# throwaway test environment — production deployment files live in
+# mesh/compose.mesh.yml and mesh/deploy/, never here.
+#
+# Images are built by e2e-up.sh from the current checkout; the only credential
+# is a disposable SSH keypair that lives in these compose volumes and is
+# destroyed by e2e-down.sh.
+
+name: mesh-e2e
+
+services:
+  orchestrator:
+    image: ansible-orchestrator:e2e
+    container_name: mesh-e2e-orchestrator
+    networks: [ctlnet]
+    volumes:
+      - receptor-runtime:/run/receptor
+      - e2e-ssh:/e2e-ssh:ro            # disposable key, seeded by e2e-up.sh
+    # The suite drives the orchestrator via docker exec (as production drives it
+    # via make mesh-run); no sshd runs here, so the inherited port-22
+    # healthcheck is disabled rather than left to report a false unhealthy.
+    entrypoint: ["sleep", "infinity"]
+    healthcheck:
+      disable: true
+
+  receptor-controller:
+    # Same digest-pinned sidecar and same bootstrap as the production overlay
+    # (mesh/compose.mesh.yml) — the suite must exercise what production runs.
+    image: quay.io/ansible/receptor:v1.6.7@sha256:6296f6cd3b0301cc7c9376e48ae15a42fc7b606235d08e94543fe77661cea4d2
+    container_name: mesh-e2e-receptor
+    networks: [ctlnet]
+    volumes:
+      - ../config/receptor/controller.yml:/mnt/receptor/controller.yml:ro
+      - receptor-runtime:/run/receptor
+    user: "0:0"
+    entrypoint: ["/usr/local/bin/dumb-init", "--", "/bin/sh", "-euc"]
+    command:
+      - |
+        install -d -o receptor -g receptor -m 0750 /run/receptor
+        install -o receptor -g receptor -m 0400 \
+          /mnt/receptor/controller.yml /etc/receptor/receptor.conf
+        exec setpriv --reuid=receptor --regid=receptor --clear-groups \
+          receptor -c /etc/receptor/receptor.conf
+
+  exec-node:
+    image: ansible-execution-node:e2e
+    container_name: mesh-e2e-node-a
+    networks: [ctlnet, targetnet]      # the ONLY service on both networks
+    environment:
+      RECEPTOR_NODE_ID: exec-e2e-a
+      RECEPTOR_PEERS: mesh-e2e-receptor:27199
+    volumes:
+      - e2e-ssh:/e2e-ssh:ro
+
+  target:
+    # The controller image doubles as the managed host: it runs sshd, honours an
+    # authorized_keys mount, and is always present locally.
+    image: ansible-controller:e2e
+    container_name: mesh-e2e-target
+    networks: [targetnet]              # unreachable from the orchestrator
+    volumes:
+      - e2e-ssh-authorized:/home/ansible/.ssh:ro
+      - e2e-host-keys:/etc/ssh/host_keys
+
+networks:
+  ctlnet: {}
+  targetnet:
+    internal: true                     # no egress — node-only access
+
+volumes:
+  receptor-runtime:
+  e2e-ssh:
+  e2e-ssh-authorized:
+  e2e-host-keys:

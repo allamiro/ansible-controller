@@ -102,13 +102,23 @@ jobs:
             --build-arg ALLOW_MUTABLE_BASE=1 \
             -t ansible-orchestrator:ci .
 
-      # The Dockerfile's own layer already enforces the no-drift and exact-added-set
-      # assertions at build time; this proves the tools run on THIS architecture.
+      - name: Build execution-node FROM the controller
+        run: |
+          docker build -f docker/mesh/Dockerfile --target execution-node \
+            --build-arg BASE=ansible-controller:ci \
+            --build-arg ALLOW_MUTABLE_BASE=1 \
+            -t ansible-execution-node:ci .
+
+      # The Dockerfile's own layers already enforce the no-drift and
+      # exact-added-set assertions at build time, and the receptor stage asserts
+      # its version; this proves the tools run on THIS architecture.
       - name: Smoke test
         run: |
           docker run --rm --entrypoint ansible-runner ansible-orchestrator:ci --version
           docker run --rm --entrypoint receptorctl ansible-orchestrator:ci --help >/dev/null
           docker run --rm --entrypoint ansible ansible-orchestrator:ci --version
+          docker run --rm --entrypoint receptor ansible-execution-node:ci --version
+          docker run --rm --entrypoint ansible-runner ansible-execution-node:ci --version
 
       # Same gate as the controller CI. The orchestrator inherits the controller's
       # CVE posture; this catches anything the added packages introduce, per arch.
@@ -125,3 +135,51 @@ jobs:
             --exit-code 1 \
             --timeout 10m \
             ansible-orchestrator:ci
+          trivy image \
+            --severity CRITICAL,HIGH \
+            --ignore-unfixed \
+            --exit-code 1 \
+            --timeout 10m \
+            ansible-execution-node:ci
+
+  # The regression suite: stands up the mesh topology in miniature (control
+  # plane, receptor sidecar, execution node, and a target the control plane has
+  # no route to) and asserts the properties production depends on — see
+  # mesh/tests/e2e-check.sh for the list. amd64 runner only: the per-arch build
+  # matrix above already proves both architectures build and scan clean, and the
+  # properties checked here are topology, not architecture.
+  e2e:
+    name: Mesh e2e regression suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: lint
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - name: Build controller (base)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./docker/Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: ansible-controller:ci
+          cache-from: type=gha,scope=ci-amd64
+          cache-to: type=gha,mode=max,scope=ci-amd64
+      - name: Stand up the mesh e2e environment
+        run: mesh/tests/e2e-up.sh ansible-controller:ci
+      - name: Run the regression checks
+        run: mesh/tests/e2e-check.sh
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          docker compose -f mesh/tests/e2e.compose.yml ps || true
+          for c in mesh-e2e-receptor mesh-e2e-node-a mesh-e2e-orchestrator mesh-e2e-target; do
+            echo "===== $c ====="; docker logs "$c" 2>&1 | tail -40 || true
+          done
+      - name: Tear down
+        if: always()
+        run: mesh/tests/e2e-down.sh || true
