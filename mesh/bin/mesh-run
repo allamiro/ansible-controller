@@ -475,6 +475,20 @@ PDD="$JOBS_DIR/$JOB_ID"
 # never-corrupt-the-result rule the artifact export follows.
 finalize() {
   local st=$?
+  # If the dispatcher is exiting (a trapped TERM/INT, or any error) while the
+  # result stream is still running, terminate its WHOLE process group. setsid
+  # detached that pipeline into its own group precisely so the watchdog could
+  # kill it — but that also means the parent's signal traps do NOT reach it, so
+  # an operator Ctrl-C would otherwise leave receptorctl/ansible-runner
+  # streaming as orphans that keep the inherited slot-lock fd open, holding a
+  # capped node at capacity even after the .hold marker is cleared. TERM then
+  # KILL the group (results_target is the negative pgid under setsid, or the
+  # subshell pid in the fallback); on a normal exit the pipeline was already
+  # reaped, so kill -0 is false and this is a no-op.
+  if [ -n "${results_pid:-}" ] && kill -0 "$results_pid" 2>/dev/null; then
+    kill -TERM "${results_target:-$results_pid}" 2>/dev/null || true
+    kill -KILL "${results_target:-$results_pid}" 2>/dev/null || true
+  fi
   # Belt over the pessimistic pre-submit hold: if that write failed and this
   # process still exits while in flight, try once more here (TERM/INT are
   # trapped to exit so this trap covers catchable signals; SIGKILL is covered
