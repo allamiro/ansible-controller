@@ -1,0 +1,28 @@
+---
+# Execution-node pools — the dispatch targets for `mesh-run --pool <name>`
+# (or `--zone <name>`, which maps to a pool via zones.yml).
+#
+# A pool is an ORDERED candidate list: mesh-run walks it top to bottom and
+# picks the first node that is (a) routable via a live ingress and (b) has a
+# free concurrency slot. Skipping happens only before anything is submitted —
+# the dispatch-only failover boundary; an in-flight job is never re-sent.
+#
+# max_concurrent caps how many mesh-run dispatches may target the node at
+# once, enforced by an atomic flock reservation held for each job's lifetime.
+# 0 (or a bare string entry) means uncapped.
+#
+# The orchestrator reads /etc/mesh/pools.yml by default — mount this file
+# there (or pass --pools-file). To declare pools, REPLACE the empty map at
+# the bottom with a block like:
+#
+# pools:
+#   net20:
+#     - node: exec-net20-a
+#       max_concurrent: 2
+#     - node: exec-net20-b
+#       max_concurrent: 2
+#   local:
+#     - node: exec-local-a
+#       max_concurrent: 4
+
+pools: {}

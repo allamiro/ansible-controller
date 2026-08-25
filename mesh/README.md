@@ -90,7 +90,7 @@ cross the wall:
 ```bash
 docker build -f docker/Dockerfile -t ansible-controller:dev .   # 1. the controller base
 mesh/tests/e2e-up.sh ansible-controller:dev                     # 2. build + start the lab (throwaway certificates issued for you)
-mesh/tests/e2e-check.sh                                         # 3. watch 22 checks prove every property above
+mesh/tests/e2e-check.sh                                         # 3. watch 24 checks prove every property above
 mesh/tests/e2e-down.sh                                          # tear it all down again
 ```
 
@@ -257,6 +257,34 @@ control host, it can be retried elsewhere — but once a node has (or even *may*
 have) accepted it, it is never re-sent. A network blip mid-job can cost you a
 retry you do by hand; it can never silently run your playbook twice.
 
+### Pools and zones
+
+Instead of naming a node, let the dispatcher pick a healthy one. Declare
+pools (ordered candidate nodes with per-node concurrency caps) and zones
+(friendly names mapping to pools) in [`mesh/config/pools.yml`](config/pools.yml)
+and [`zones.yml`](config/zones.yml), mount them at `/etc/mesh/` in the
+orchestrator, and dispatch by zone or pool:
+
+```bash
+/usr/local/mesh/bin/mesh-run --zone dmz --playbook ... --inventory ...
+/usr/local/mesh/bin/mesh-run --pool net20 --playbook ... --inventory ...
+```
+
+What the dispatcher guarantees:
+
+- **Failover only before submission.** A candidate is skipped for the next
+  one only while nothing has left the control host — it isn't routable via
+  any live ingress, or all its slots are taken. Once a submit is attempted
+  there is exactly one submission; the never-runs-twice rule above is never
+  bent for failover.
+- **Concurrency caps that can't race.** `max_concurrent` per node is enforced
+  by an atomic lock reservation held for the job's lifetime — two dispatchers
+  can't both squeeze into the last slot, and a crashed dispatcher's slot
+  frees itself. When every candidate is saturated the dispatch is refused
+  with "nothing was executed" — re-run it when a slot frees.
+- **The record shows the choice.** `meta.json` carries both the pool and the
+  node that actually served the job.
+
 ## Node runtime Python dependencies
 
 If your playbooks use plugins that need Python packages on the machine running
@@ -364,7 +392,7 @@ mesh/
 ├── config/receptor/   # ingress endpoint configs (A and B)
 ├── pki/               # certificate tooling: CA, node requests, signing
 ├── secrets/           # your issued bundles (gitignored; CA key stays offline)
-└── tests/             # the ten-minute lab + its 22-check verification suite
+└── tests/             # the ten-minute lab + its 24-check verification suite
 ```
 
 Want the reasoning behind the design — why the failover boundary sits where it

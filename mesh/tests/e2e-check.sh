@@ -345,4 +345,74 @@ case "$log_state" in
   *)            fail "unexpected log-tree state: $log_state";;
 esac
 
+echo "== 23. pool dispatch: classify -> healthy-node select -> dispatch-only failover (Phase 8) =="
+# The pool lists a phantom first candidate that no ingress routes to; the
+# dispatcher must skip it PRE-SUBMIT (nothing left the host) and run the job
+# on the healthy second candidate. --zone exercises the classification hop
+# too. Real two-node failover (UC3) differs only in the phantom being a dead
+# real node — the skip logic is identical and is what Phase 8 adds.
+docker exec mesh-e2e-orchestrator bash -euc '
+  cat > /tmp/e2e-pools.yml <<EOF
+pools:
+  e2e:
+    - node: exec-e2e-ghost
+      max_concurrent: 2
+    - node: exec-e2e-a
+      max_concurrent: 2
+EOF
+  cat > /tmp/e2e-zones.yml <<EOF
+zones:
+  lab: { pool: e2e }
+EOF
+' || fail "could not stage pool/zone config on the orchestrator"
+pool_out=$(docker exec mesh-e2e-orchestrator /usr/local/mesh/bin/mesh-run \
+    --zone lab --pools-file /tmp/e2e-pools.yml --zones-file /tmp/e2e-zones.yml \
+    --playbook /mesh-playbooks/mesh-ping.yml \
+    --inventory /tmp/e2e-inv --ssh-key /e2e-ssh/id_ed25519 2>&1) \
+  || fail "pool dispatch failed: $(tail -3 <<<"$pool_out")"
+grep -q "node=exec-e2e-a " <<<"$pool_out" \
+  && pass "zone 'lab' classified to pool 'e2e'; ghost skipped pre-submit; ran on exec-e2e-a" \
+  || fail "pool dispatch did not select exec-e2e-a: $(grep -o 'node=[^ ]*' <<<"$pool_out" | head -1)"
+pool_job=$(grep -o "job=[0-9a-f-]*" <<<"$pool_out" | cut -d= -f2)
+pool_meta=$(docker exec mesh-e2e-orchestrator python3 -c "
+import json
+d = json.load(open('/var/lib/mesh/jobs/$pool_job/meta.json'))
+print('ok' if d.get('pool') == 'e2e' and d.get('node') == 'exec-e2e-a' else 'bad: ' + json.dumps(d))
+" 2>&1) || fail "pool job meta unreadable: $(tail -1 <<<"$pool_meta")"
+[ "$pool_meta" = ok ] && pass "meta.json records pool=e2e node=exec-e2e-a" \
+  || fail "pool meta wrong — $pool_meta"
+
+echo "== 24. per-node concurrency cap: atomic slot reservation, not a work-list check (Phase 8) =="
+# Cap the node at ONE slot, hold it with a slow job, and prove a second
+# dispatch is refused PRE-SUBMIT while the first still completes cleanly.
+# Fail CLOSED on both sides: the refusal must carry the nothing-was-executed
+# claim, and the slow job must still exit 0 afterwards.
+docker exec mesh-e2e-orchestrator bash -euc '
+  cat > /tmp/e2e-pools-cap1.yml <<EOF
+pools:
+  e2e:
+    - node: exec-e2e-a
+      max_concurrent: 1
+EOF
+' || fail "could not stage the cap-1 pool config"
+slow_log=/tmp/e2e-slow.$$.log
+docker exec mesh-e2e-orchestrator /usr/local/mesh/bin/mesh-run \
+    --pool e2e --pools-file /tmp/e2e-pools-cap1.yml \
+    --playbook /mesh-playbooks/mesh-slow.yml \
+    --inventory /tmp/e2e-inv --ssh-key /e2e-ssh/id_ed25519 >"$slow_log" 2>&1 &
+slow_pid=$!
+sleep 4   # let job 1 reserve the slot and submit
+cap_out=$(docker exec mesh-e2e-orchestrator /usr/local/mesh/bin/mesh-run \
+    --pool e2e --pools-file /tmp/e2e-pools-cap1.yml \
+    --playbook /mesh-playbooks/mesh-ping.yml \
+    --inventory /tmp/e2e-inv --ssh-key /e2e-ssh/id_ed25519 2>&1) \
+  && { kill "$slow_pid" 2>/dev/null || true; fail "second dispatch was ACCEPTED despite a full slot"; }
+grep -q "nothing was executed" <<<"$cap_out" \
+  && pass "second dispatch refused pre-submit while the slot was held" \
+  || { kill "$slow_pid" 2>/dev/null || true; fail "refusal lacks the nothing-was-executed claim: $(tail -2 <<<"$cap_out")"; }
+wait "$slow_pid" \
+  && pass "slot-holding job still completed rc=0" \
+  || fail "the slot-holding job failed: $(tail -3 "$slow_log")"
+rm -f "$slow_log"
+
 echo "All mesh e2e regression checks passed."

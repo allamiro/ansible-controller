@@ -1,0 +1,11 @@
+---
+# Phase 8 concurrency probe: holds its execution slot long enough for the e2e
+# suite to prove that a second dispatch to a capacity-1 node is refused while
+# this one runs. Sleeps on the TARGET so the play is a real round-trip.
+- name: Mesh slow job (slot-holding probe)
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Hold the slot
+      ansible.builtin.command: sleep 10
+      changed_when: false
