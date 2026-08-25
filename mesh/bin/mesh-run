@@ -21,7 +21,7 @@ set -euo pipefail
 
 die() { echo "mesh-run: ERROR: $*" >&2; exit 2; }
 
-NODE= PLAYBOOK= INVENTORY= SSH_KEY= ANSIBLE_CFG= SOCKET=/run/receptor/receptor.sock
+NODE= PLAYBOOK= INVENTORY= SSH_KEY= ANSIBLE_CFG= GALAXY_DIR= SOCKET=/run/receptor/receptor.sock
 JOBS_DIR=/var/lib/mesh/jobs
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -30,6 +30,7 @@ while [ $# -gt 0 ]; do
     --inventory)   INVENTORY="${2:?}"; shift 2;;
     --ssh-key)     SSH_KEY="${2:?}"; shift 2;;
     --ansible-cfg) ANSIBLE_CFG="${2:?}"; shift 2;;
+    --galaxy-dir)  GALAXY_DIR="${2:?}"; shift 2;;
     --socket)      SOCKET="${2:?}"; shift 2;;
     --jobs-dir)    JOBS_DIR="${2:?}"; shift 2;;
     *) die "unknown argument: $1";;
@@ -45,10 +46,15 @@ case "$NODE" in *[!A-Za-z0-9._-]*) die "--node '$NODE' invalid";; esac
 JOB_ID=$(cat /proc/sys/kernel/random/uuid)
 PDD="$JOBS_DIR/$JOB_ID"
 mkdir -p "$PDD/project" "$PDD/inventory" "$PDD/env"
+# The playbook is resolved through symlinks ONCE, and that resolved name is
+# used for both staging and execution — staging the target directory while
+# telling the runner to execute the symlink's basename would fail when the
+# alias name does not exist inside the target directory.
+PLAYBOOK_REAL=$(readlink -f "$PLAYBOOK") || die "cannot resolve --playbook '$PLAYBOOK'"
 # The playbook's DIRECTORY is the project root: roles/, templates/, files/ and
 # task includes resolve relative to the playbook, so staging the lone YAML file
 # would strand those dependencies on the controller and fail on the node.
-cp -a "$(dirname "$(readlink -f "$PLAYBOOK")")/." "$PDD/project/"
+cp -a "$(dirname "$PLAYBOOK_REAL")/." "$PDD/project/"
 # Keep the inventory's basename: YAML inventory plugins verify by filename
 # suffix (e.g. *.aws_ec2.yml), so renaming to "hosts" would reject valid
 # plugin inventories after staging. An inventory SOURCE that reads sibling
@@ -64,6 +70,23 @@ fi
 # it as the project-root ansible.cfg, which ansible loads from the runner's
 # cwd. A cfg already present in the playbook's own directory wins — refusing to
 # overwrite it beats silently changing a project's declared behaviour.
+# Galaxy content installed at runtime (configs/requirements.yml ->
+# /configs/.galaxy) lives only on the controller; the node cannot resolve it.
+# --galaxy-dir stages that directory's roles/ and collections/ into the project
+# root, where ansible's adjacent-to-playbook search paths find them without any
+# path configuration. Collisions with content the playbook directory already
+# ships are refused rather than merged.
+if [ -n "$GALAXY_DIR" ]; then
+  [ -d "$GALAXY_DIR" ] || die "--galaxy-dir '$GALAXY_DIR' is not a directory"
+  for sub in roles collections; do
+    if [ -d "$GALAXY_DIR/$sub" ]; then
+      if [ -e "$PDD/project/$sub" ]; then
+        die "the playbook directory already ships '$sub/'; refusing to overlay --galaxy-dir on top"
+      fi
+      cp -a "$GALAXY_DIR/$sub" "$PDD/project/$sub"
+    fi
+  done
+fi
 if [ -n "$ANSIBLE_CFG" ]; then
   [ -f "$ANSIBLE_CFG" ] || die "--ansible-cfg '$ANSIBLE_CFG' not found"
   if [ -e "$PDD/project/ansible.cfg" ]; then
@@ -123,7 +146,7 @@ awk -v n="$NODE" '$1 == n { found = 1 } END { exit !found }' <<<"$mesh_status" \
 # boundary (plan §2.4), an ambiguous failure is recorded as such and is NEVER
 # treated as "nothing ran" — and this dispatcher never resubmits anywhere.
 meta submitting
-submit_out=$(ansible-runner transmit "$PDD" -p "$(basename "$PLAYBOOK")" 2>/dev/null \
+submit_out=$(ansible-runner transmit "$PDD" -p "$(basename "$PLAYBOOK_REAL")" 2>/dev/null \
   | receptorctl --socket "$SOCKET" work submit ansible-runner \
       --node "$NODE" --payload -) \
   || { meta submit-ambiguous "unit id unknown: the response was lost after the attempt left this host; inspect 'receptorctl work list' for an unmatched unit"; \
@@ -149,8 +172,12 @@ receptorctl --socket "$SOCKET" work results "$UNIT_ID" 2>/dev/null \
 # written only when the stream round-trip actually completed.
 art_rc_file=$(find "$PDD/artifacts" -maxdepth 2 -name rc -type f 2>/dev/null | head -1)
 if [ -z "$art_rc_file" ]; then
-  meta "failed no-artifacts"
-  die "no rc artifact came back — the results stream did not complete (job may still be running on '$NODE', unit=$UNIT_ID)"
+  # NOT "failed": the unit was acknowledged and the stream broke — the job may
+  # well still be running to completion on the node. The status says exactly
+  # that, so a history reader does not mistake a dropped connection for a
+  # playbook failure (and nobody "retries" a possibly-succeeding job).
+  meta results-incomplete "no rc artifact returned; the unit was acknowledged and may still be running — check 'receptorctl work status $UNIT_ID'"
+  die "results stream did not complete — the job MAY STILL BE RUNNING on '$NODE' (unit=$UNIT_ID); check 'receptorctl work status $UNIT_ID'"
 fi
 rc=$(cat "$art_rc_file")
 
