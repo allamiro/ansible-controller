@@ -306,7 +306,7 @@ risk column; anything that touches it must pass [§9.1](#91-non-disruption-check
       stage when upstream ships one
 - [x] Override the inherited port-22 `HEALTHCHECK` with a Receptor-readiness check (node runs receptor, not sshd; runs as uid 1000)
 - [x] `docker/mesh/node-entrypoint.sh` (render node config from env; peers is a LIST — Tier 1 ready)
-- [x] `mesh/tests/` multi‑network **e2e integration environment** (controller cannot reach targets) — regression suite (`e2e-check.sh`; 13 properties as of Phase 5), run by Mesh CI on every mesh change
+- [x] `mesh/tests/` multi‑network **e2e integration environment** (controller cannot reach targets) — regression suite (`e2e-check.sh`; 20 properties as of Phase 6), run by Mesh CI on every mesh change
 - [x] **No‑TLS** peering confined to the e2e environment (never in a production compose file)
 
 ### Phase 5 — prove distributed execution
@@ -332,9 +332,11 @@ risk column; anything that touches it must pass [§9.1](#91-non-disruption-check
       `skipreceptornamescheck` never set (e2e asserts their absence as active keys)
 - [x] Multi‑ingress peer list (Tier 1): nodes peer to A **and** B; the
       dispatcher fails its control socket over between the two sidecars
-- [x] All negative mTLS tests pass (e2e 15–17: certless, unknown-CA, and
-      valid-cert-wrong-identity nodes all refused) + Tier-1 failover proven
-      (e2e 18: sidecar A stopped, dispatch through B succeeds)
+- [x] All negative mTLS tests pass — the full §9.3 matrix (e2e 15–19):
+      certless node, unknown client CA, valid-cert-wrong-identity, EXPIRED
+      cert, and (reversed) a node refusing a controller whose cert comes from
+      an unknown CA + Tier-1 failover proven (e2e 20: sidecar A stopped,
+      dispatch through B succeeds, A re-peers)
 - [x] mTLS is MANDATORY: the node entrypoint refuses to start without cert,
       key, and CA. `RECEPTOR_INSECURE_DEV=1` is a loud, dev-only escape: no
       production file sets it, and the e2e suite uses it in exactly one place —

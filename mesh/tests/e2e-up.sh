@@ -48,6 +48,16 @@ if ! bundle_ok "$PKI_DIR/issued/exec-e2e-a"; then
   mesh/pki/node-sign.sh csr/exec-e2e-a.csr exec-e2e-a
   cp "$PKI_DIR/csr/exec-e2e-a.key" "$PKI_DIR/issued/exec-e2e-a/tls.key"
 fi
+# an EXPIRED-but-otherwise-valid identity (real CA, notAfter in the past) for
+# the §9.3 expired-cert rejection test
+if ! bundle_ok "$PKI_DIR/issued/exec-expired"; then
+  rm -rf "$PKI_DIR/issued/exec-expired"
+  CERT_NOT_AFTER="$(date -u -d "-1 day" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v -1d +%Y-%m-%dT%H:%M:%SZ)" \
+    mesh/pki/controller-cert.sh exec-expired
+fi
+# a valid probe identity for the reversed §9.3 test (node must reject a
+# CONTROLLER whose cert comes from an unknown CA)
+bundle_ok "$PKI_DIR/issued/exec-probe" || { rm -rf "$PKI_DIR/issued/exec-probe"; mesh/pki/controller-cert.sh exec-probe; }
 # a SECOND, unrelated CA — the §9.3 unknown-CA negative test needs a cert
 # that is cryptographically valid but signed by a stranger
 if ! { [ -f "$PKI_DIR/rogue/ca/ca.key" ] && [ -f "$PKI_DIR/rogue/ca/ca.crt" ]; }; then

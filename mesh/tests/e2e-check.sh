@@ -180,7 +180,7 @@ docker run -d --rm --name mesh-e2e-rogue-plain --network "$E2E_NET" \
   -e RECEPTOR_NODE_ID=exec-rogue-plain -e RECEPTOR_PEERS=mesh-e2e-receptor:27199 \
   -e RECEPTOR_INSECURE_DEV=1 ansible-execution-node:e2e >/dev/null \
   || fail "could not start the plaintext rogue"
-rogue_absent mesh-e2e-rogue-plain exec-rogue-plain; ra=$?
+ra=0; rogue_absent mesh-e2e-rogue-plain exec-rogue-plain || ra=$?
 docker rm -f mesh-e2e-rogue-plain >/dev/null 2>&1 || true
 case $ra in
   0) pass "plaintext (certless) node never joined the mesh";;
@@ -201,7 +201,7 @@ docker run -d --rm --name mesh-e2e-rogue-ca --network "$E2E_NET" \
   -e RECEPTOR_TLS_CERT=/e2e-tls/tls.crt -e RECEPTOR_TLS_KEY=/e2e-tls/tls.key \
   -e RECEPTOR_TLS_CA=/e2e-real-ca.crt ansible-execution-node:e2e >/dev/null \
   || fail "could not start the unknown-CA rogue"
-rogue_absent mesh-e2e-rogue-ca "^exec-rogue "; ra=$?
+ra=0; rogue_absent mesh-e2e-rogue-ca "^exec-rogue " || ra=$?
 docker rm -f mesh-e2e-rogue-ca >/dev/null 2>&1 || true
 case $ra in
   0) pass "unknown client-CA cert rejected by the ingress";;
@@ -226,7 +226,53 @@ grep -qi "exec-imposter not found in certificate" <<<"$idlog" \
   && pass "valid cert with the WRONG node id refused at startup (identity binding enforced)" \
   || fail "identity-mismatch rejection not by identity binding; got: $(tail -1 <<<"$idlog")"
 
-echo "== 18. Tier-1 ingress failover (§9.7): stop sidecar A, dispatch through B =="
+echo "== 18. an EXPIRED node certificate is rejected (§9.3) =="
+docker run -d --rm --name mesh-e2e-rogue-exp --network "$E2E_NET" \
+  -v "$PWD/mesh/tests/.e2e-pki/issued/exec-expired:/e2e-tls:ro" \
+  -e RECEPTOR_NODE_ID=exec-expired -e RECEPTOR_PEERS=mesh-e2e-receptor:27199 \
+  -e RECEPTOR_TLS_CERT=/e2e-tls/tls.crt -e RECEPTOR_TLS_KEY=/e2e-tls/tls.key \
+  -e RECEPTOR_TLS_CA=/e2e-tls/ca.crt ansible-execution-node:e2e >/dev/null \
+  || fail "could not start the expired-cert rogue"
+ra=0; rogue_absent mesh-e2e-rogue-exp exec-expired || ra=$?
+docker rm -f mesh-e2e-rogue-exp >/dev/null 2>&1 || true
+case $ra in
+  0) pass "expired certificate rejected by the ingress";;
+  1) fail "EXPIRED-cert node JOINED the mesh";;
+  *) fail "expired-cert test setup broken (rogue not running)";;
+esac
+
+echo "== 19. a CONTROLLER cert from an unknown CA is rejected by the node (§9.3, reversed) =="
+# a rogue INGRESS presenting rogue-CA server certs; a legitimately certified
+# probe node dials it and must refuse the server. Proof is the probe's own TLS
+# verification error — the reverse direction of check 16.
+docker run -d --rm --name mesh-e2e-rogue-ingress --network "$E2E_NET" \
+  -v "$PWD/mesh/tests/.e2e-pki/rogue/issued/exec-rogue:/tls:ro" \
+  -u 0:0 --entrypoint sh \
+  quay.io/ansible/receptor:v1.6.7@sha256:6296f6cd3b0301cc7c9376e48ae15a42fc7b606235d08e94543fe77661cea4d2 \
+  -euc 'mkdir -p /tmp/rc && printf -- "---\n- node:\n    id: exec-rogue\n- tls-server:\n    name: t\n    cert: /tls/tls.crt\n    key: /tls/tls.key\n- tcp-listener:\n    port: 27199\n    tls: t\n" > /tmp/rc/r.yml && exec receptor -c /tmp/rc/r.yml' >/dev/null \
+  || fail "could not start the rogue ingress"
+docker run -d --rm --name mesh-e2e-probe --network "$E2E_NET" \
+  -v "$PWD/mesh/tests/.e2e-pki/issued/exec-probe:/e2e-tls:ro" \
+  -e RECEPTOR_NODE_ID=exec-probe -e RECEPTOR_PEERS=mesh-e2e-rogue-ingress:27199 \
+  -e RECEPTOR_TLS_CERT=/e2e-tls/tls.crt -e RECEPTOR_TLS_KEY=/e2e-tls/tls.key \
+  -e RECEPTOR_TLS_CA=/e2e-tls/ca.crt ansible-execution-node:e2e >/dev/null \
+  || { docker rm -f mesh-e2e-rogue-ingress >/dev/null 2>&1; fail "could not start the probe node"; }
+verdict=
+deadline=$((SECONDS + 30))
+while [ $SECONDS -lt $deadline ]; do
+  plog=$(docker logs mesh-e2e-probe 2>&1 || true)
+  if grep -qiE "certificate signed by unknown authority|failed to verify certificate" <<<"$plog"; then verdict=refused; break; fi
+  if grep -qi "Connection established" <<<"$plog"; then verdict=connected; break; fi
+  sleep 2
+done
+docker rm -f mesh-e2e-probe mesh-e2e-rogue-ingress >/dev/null 2>&1 || true
+case "$verdict" in
+  refused)   pass "node refused the unknown-CA controller (TLS verification error logged)";;
+  connected) fail "node CONNECTED to an unknown-CA controller";;
+  *)         fail "probe produced neither a refusal nor a connection within 30s";;
+esac
+
+echo "== 20. Tier-1 ingress failover (§9.7): stop sidecar A, dispatch through B =="
 docker stop mesh-e2e-receptor >/dev/null || fail "could not stop sidecar A"
 t1_out=$(docker exec mesh-e2e-orchestrator /usr/local/mesh/bin/mesh-run \
     --node exec-e2e-a --playbook /mesh-playbooks/mesh-ping.yml \
