@@ -35,21 +35,44 @@ SIGN_DIR="$MESH_SECRETS/work-signing"
 PRIV="$SIGN_DIR/work-private.pem"
 PUB="$SIGN_DIR/work-public.pem"
 
-if [ -e "$PRIV" ] || [ -e "$PUB" ]; then
-  if [ "$FORCE" != 1 ]; then
-    die "work-signing keypair already exists under $SIGN_DIR — re-keying orphans \
-every node's verification copy; pass --force only if you will roll the new \
-public key to every node"
-  fi
-  echo "WARNING: --force re-keys the work-signing pair. Every node keeps the OLD" >&2
-  echo "WARNING: public key and will refuse ALL work until you roll the new one out." >&2
-fi
-
-# Both halves are generated into a private staging dir and published together
-# only after both commands succeeded: a failure mid-rotation must never leave
-# a new private key beside the old public key — a mismatched pair passes the
-# existence guard and then every signed submission fails obscurely.
 (umask 077 && mkdir -p "$SIGN_DIR")
+# One rotation at a time: the recovery logic below reasons about the pair's
+# on-disk state, which a concurrent run would invalidate.
+exec 9>>"$SIGN_DIR/.lock"
+flock 9 || die "another work-sign-init is running"
+
+# The guard is a VALIDITY check, not an existence check, and that is what
+# makes rotation recoverable: two files cannot be replaced atomically as a
+# unit, so a crash between the renames can strand a mixed pair — which the
+# next run detects (derived public != stored public) and simply regenerates,
+# because a mismatched pair is already broken for every consumer. Only a
+# CONSISTENT pair is protected behind --force.
+pair_state() {
+  { [ -e "$PRIV" ] || [ -e "$PUB" ]; } || { echo absent; return; }
+  { [ -f "$PRIV" ] && [ -f "$PUB" ]; } || { echo broken; return; }
+  local derived
+  derived=$(openssl pkey -in "$PRIV" -pubout 2>/dev/null) || { echo broken; return; }
+  [ "$derived" = "$(cat "$PUB")" ] && echo ok || echo broken
+}
+case "$(pair_state)" in
+  ok)
+    if [ "$FORCE" != 1 ]; then
+      die "a consistent work-signing keypair already exists under $SIGN_DIR — \
+re-keying orphans every node's verification copy; pass --force only if you \
+will roll the new public key to every node"
+    fi
+    echo "WARNING: --force re-keys the work-signing pair. Every node keeps the OLD" >&2
+    echo "WARNING: public key and will refuse ALL work until you roll the new one out." >&2
+    ;;
+  broken)
+    echo "WARNING: found an inconsistent/partial keypair (interrupted rotation?) — regenerating." >&2
+    ;;
+esac
+
+# Both halves are generated into a private staging dir and published only
+# after both commands succeeded; the private key is published FIRST so an
+# interruption between the renames leaves priv-new/pub-old — a mismatch the
+# validity guard above recovers on the next run.
 TMP=$(umask 077 && mktemp -d "$SIGN_DIR/.new.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
 openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out "$TMP/work-private.pem" 2>/dev/null \

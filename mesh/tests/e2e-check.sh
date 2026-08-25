@@ -473,7 +473,7 @@ unsigned_out=$(docker exec mesh-e2e-orchestrator bash -euc '
   deadline=$((SECONDS + 30))
   while [ $SECONDS -lt $deadline ]; do
     st=$(receptorctl --socket /run/receptor/receptor.sock work status "$unit" 2>&1 || true)
-    if grep -qiE "Failed|Succeeded" <<<"$st"; then
+    if grep -qiE "Failed|Succeeded|Rejected|Error" <<<"$st"; then
       if grep -qiE "sign|verif" <<<"$st"; then verdict=refused; else verdict=terminal-unsigned-gap; fi
       break
     fi
