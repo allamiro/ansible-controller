@@ -251,7 +251,11 @@ step is checking out the release itself.
 git fetch --tags
 git stash push --include-untracked -m "site files before vX.Y.Z"
 git checkout vX.Y.Z
-git stash pop
+# Pop ONLY the entry created above: a clean worktree creates no stash
+# ("No local changes to save" still exits 0), and an unqualified pop would
+# then apply whatever unrelated stash happened to be on top.
+ref=$(git stash list | grep -F "site files before vX.Y.Z" | head -1 | cut -d: -f1)
+[ -n "$ref" ] && git stash pop "$ref"
 for img in ansible-orchestrator ansible-execution-node; do
   cosign verify \
     --certificate-identity-regexp 'https://github\.com/allamiro/ansible-controller/\.github/workflows/docker-publish\.yml@.*' \
