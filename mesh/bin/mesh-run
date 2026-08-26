@@ -504,7 +504,7 @@ done
 # release the late reservation (only the flock is held here; no unit submitted,
 # no .hold written yet) and give up, rather than dispatch past the promised
 # window. WAIT=0 never enters this branch (deadline == start).
-if [ -n "$SOCKET" ] && [ "$WAIT" -gt 0 ] && [ "$SECONDS" -gt "$wait_deadline" ]; then
+if [ -n "$SOCKET" ] && [ "$WAIT" -gt 0 ] && [ "$SECONDS" -ge "$wait_deadline" ]; then
   { [ -n "${SLOT_FD:-}" ] && exec {SLOT_FD}>&-; } 2>/dev/null || true
   SLOT_FD= SLOT_FILE= SOCKET=
   SELECT_NOTE="${SELECT_NOTE:-}exceeded the --wait ${WAIT}s deadline while acquiring a slot; "
