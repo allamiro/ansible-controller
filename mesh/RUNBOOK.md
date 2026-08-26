@@ -232,15 +232,27 @@ on both sides of the mesh by those images; there is no separately tested
 cross-release compatibility matrix, so don't run mixed releases longer than
 a rolling upgrade requires.
 
+A release is more than the two application images: `compose.mesh.yml` (which
+pins the ingress image by digest), `compose.node.yml`, and the receptor
+configs are **release-owned repo files**. Upgrading the images while leaving
+those files at an old version runs an untested combination — so the first
+step is checking out the release itself.
+
 ```bash
-# CONTROL HOST — pick the release, verify its signatures first:
-cosign verify \
-  --certificate-identity-regexp 'https://github\.com/allamiro/ansible-controller/\.github/workflows/docker-publish\.yml@.*' \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/allamiro/ansible-orchestrator:vX.Y.Z
+# CONTROL HOST — check out the release's repo files, then verify EVERY image
+# you are about to run (each is signed independently — an orchestrator
+# signature says nothing about the execution-node image):
+git fetch --tags && git checkout vX.Y.Z
+for img in ansible-orchestrator ansible-execution-node; do
+  cosign verify \
+    --certificate-identity-regexp 'https://github\.com/allamiro/ansible-controller/\.github/workflows/docker-publish\.yml@.*' \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+    "ghcr.io/allamiro/$img:vX.Y.Z"
+done
 
 # EACH NODE HOST — one node at a time; a quiet node (no .hold markers,
-# nothing mid-run) upgrades invisibly:
+# nothing mid-run) upgrades invisibly. Refresh compose.node.yml from the
+# checked-out release if it changed, then:
 #   edit .env → MESH_NODE_IMAGE=ghcr.io/allamiro/ansible-execution-node:vX.Y.Z
 docker compose -f compose.node.yml pull
 docker compose -f compose.node.yml up -d --wait
