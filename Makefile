@@ -87,3 +87,11 @@ mesh-run:
 		--playbook /configs/playbooks/$(PLAYBOOK) \
 		--inventory /configs/$(or $(INVENTORY),$(MESH_INVENTORY)) \
 		$(if $(SSH_KEY),--ssh-key $(SSH_KEY),) $(if $(WAIT),--wait $(WAIT),)
+
+# Recover a job whose results stream broke after submit (status
+# results-incomplete): re-attach to its still-tracked unit, record the real rc,
+# export artifacts, release the unit, and free its slot. Safe to re-run; never
+# re-executes.  make mesh-collect JOB=<job-id>
+mesh-collect:
+	@test -n "$(JOB)" || { echo "usage: make mesh-collect JOB=<job-id>"; exit 2; }
+	docker exec -i ansible-controller /usr/local/mesh/bin/mesh-run --collect $(JOB)

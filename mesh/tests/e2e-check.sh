@@ -654,5 +654,95 @@ wait "$wslow_pid" \
   && pass "the slot-holding slow job completed rc=0 (cap of 1 never overshot)" \
   || fail "the slot-holding job failed: $(tail -3 "$wslow_log")"
 rm -f "$wslow_log"
+echo "== 29. --collect recovers a results-incomplete job after the stream's ingress drops (issue #79) =="
+# The real failure: a job whose results stream breaks AFTER submit (its ingress
+# drops) is recorded results-incomplete with the unit NOT released and the slot
+# .hold KEPT — it may still be running. The node keeps going and finishes the
+# unit; once the ingress is back, --collect re-attaches through whichever live
+# ingress still tracks the unit, records the real rc, clears the .hold, releases
+# the unit, and exports the artifacts. It never re-runs anything.
+docker exec mesh-e2e-orchestrator sh -c 'rm -f /var/lib/mesh/slots/*/slot.*.hold 2>/dev/null; true'
+# Dispatch a slow job in the background; it streams over receptor.sock (ingress A).
+docker exec mesh-e2e-orchestrator /usr/local/mesh/bin/mesh-run \
+    --node exec-e2e-a --playbook /mesh-playbooks/mesh-slow.yml \
+    --inventory /tmp/e2e-inv --ssh-key /e2e-ssh/id_ed25519 >/tmp/e2e-collect-slow.log 2>&1 &
+csd_pid=$!
+# Find THIS dispatch's job deterministically — the one currently IN-FLIGHT
+# (status running WITH a unit). `ls -t | head -1` is a trap here: before the new
+# job dir exists it returns a PRIOR check's completed job, whose meta already
+# carries a unit_id, so the probe would lock onto an old succeeded job and never
+# see results-incomplete. Every earlier job is terminal by now (the suite reaps
+# them), so the sole running job is ours.
+cjob= cunit=; deadline=$((SECONDS + 40))
+while [ $SECONDS -lt $deadline ]; do
+  read -r cjob cunit < <(docker exec -i mesh-e2e-orchestrator python3 - <<'PYEOF'
+import json, os, glob
+for d in sorted(glob.glob('/var/lib/mesh/jobs/*/meta.json'), key=os.path.getmtime, reverse=True):
+    try:
+        m = json.load(open(d))
+    except Exception:
+        continue
+    if m.get('status') == 'running' and m.get('unit_id'):
+        print(os.path.basename(os.path.dirname(d)), m['unit_id']); break
+PYEOF
+) || true
+  [ -n "${cunit:-}" ] && break
+  sleep 1
+done
+[ -n "${cunit:-}" ] || { kill "$csd_pid" 2>/dev/null || true; fail "collect setup: no in-flight job with a unit within 40s"; }
+# Drop ingress A mid-stream (the node stays up and keeps running the unit).
+# `docker kill` (SIGKILL), not `docker stop`: stop is graceful and can take its
+# full 10s timeout, long enough for a short job to finish and stream back before
+# the ingress goes — the break must beat the job. A killed container's on-disk
+# work state survives the later `docker start`, so the unit is still re-trackable.
+docker kill mesh-e2e-receptor >/dev/null || { kill "$csd_pid" 2>/dev/null || true; fail "could not kill ingress A"; }
+ci_ok=0 cst=; deadline=$((SECONDS + 40))
+while [ $SECONDS -lt $deadline ]; do
+  cst=$(docker exec mesh-e2e-orchestrator sh -c \
+    "python3 -c \"import json;print(json.load(open('/var/lib/mesh/jobs/$cjob/meta.json'))['status'])\"" 2>/dev/null || true)
+  [ "$cst" = results-incomplete ] && { ci_ok=1; break; }
+  sleep 2
+done
+wait "$csd_pid" 2>/dev/null || true
+[ "$ci_ok" = 1 ] || { docker start mesh-e2e-receptor >/dev/null 2>&1 || true; fail "job never reached results-incomplete after the ingress dropped (status=$cst)"; }
+docker exec mesh-e2e-orchestrator sh -c 'ls /var/lib/mesh/slots/exec-e2e-a/slot.*.hold >/dev/null 2>&1' \
+  && pass "stream break recorded results-incomplete; slot .hold kept" \
+  || { docker start mesh-e2e-receptor >/dev/null 2>&1 || true; fail "results-incomplete but no .hold marker was kept"; }
+# Bring the ingress back; the unit finishes and A re-tracks it (docker start
+# keeps the container's work state, unlike a recreate).
+docker start mesh-e2e-receptor >/dev/null || fail "could not restart ingress A"
+fin=0 us=; deadline=$((SECONDS + 60))
+while [ $SECONDS -lt $deadline ]; do
+  us=$(docker exec mesh-e2e-orchestrator sh -c \
+    "receptorctl --socket /run/receptor/receptor.sock work list --unit_id $cunit 2>/dev/null | python3 -c \"import sys,json
+try: d=json.load(sys.stdin)
+except Exception: d={}
+v=list(d.values())[0] if d else {}
+print(v.get('StateName','?'))\"" 2>/dev/null || true)
+  case "$us" in Succeeded|Failed) fin=1; break;; esac
+  sleep 3
+done
+[ "$fin" = 1 ] || fail "unit $cunit never reached a terminal state on the node within 60s (state=$us)"
+# Recover it.
+col_out=$(timeout 90 docker exec mesh-e2e-orchestrator /usr/local/mesh/bin/mesh-run --collect "$cjob" 2>&1) && col_rc=0 || col_rc=$?
+case "$col_rc" in 124|142) fail "--collect hung";; esac
+[ "$col_rc" = 0 ] || fail "--collect did not recover the job (rc=$col_rc): $(tail -2 <<<"$col_out")"
+grep -q "collected job=$cjob" <<<"$col_out" \
+  && pass "--collect re-attached and recovered job=$cjob (rc=0)" \
+  || fail "--collect produced no 'collected' line: $(tail -2 <<<"$col_out")"
+col_status=$(docker exec mesh-e2e-orchestrator sh -c \
+  "python3 -c \"import json;print(json.load(open('/var/lib/mesh/jobs/$cjob/meta.json'))['status'])\"" 2>&1)
+[ "$col_status" = succeeded ] \
+  && pass "meta.json is now 'succeeded' (recovered, not re-run)" \
+  || fail "meta.json not terminal after collect: $col_status"
+docker exec mesh-e2e-orchestrator sh -c 'ls /var/lib/mesh/slots/exec-e2e-a/slot.*.hold >/dev/null 2>&1' \
+  && fail "the slot .hold was not cleared by collect (capacity would stay wedged)" \
+  || pass "slot .hold cleared; the reserved slot is free again"
+# Re-collecting a now-terminal job must be a no-op.
+recol=$(docker exec mesh-e2e-orchestrator /usr/local/mesh/bin/mesh-run --collect "$cjob" 2>&1) && recol_rc=0 || recol_rc=$?
+{ [ "$recol_rc" = 0 ] && grep -q "already terminal" <<<"$recol"; } \
+  && pass "re-collecting the recovered job is a no-op (already terminal)" \
+  || fail "re-collect not a clean no-op (rc=$recol_rc): $(tail -1 <<<"$recol")"
+rm -f /tmp/e2e-collect-slow.log 2>/dev/null || true
 
 echo "All mesh e2e regression checks passed."
