@@ -95,7 +95,7 @@ cross the wall:
 ```bash
 docker build -f docker/Dockerfile -t ansible-controller:dev .   # 1. the controller base
 mesh/tests/e2e-up.sh ansible-controller:dev                     # 2. build + start the lab (throwaway certificates issued for you)
-mesh/tests/e2e-check.sh                                         # 3. watch 27 checks prove every property above
+mesh/tests/e2e-check.sh                                         # 3. watch 28 checks prove every property above
 mesh/tests/e2e-down.sh                                          # tear it all down again
 ```
 
@@ -242,6 +242,19 @@ Dispatch with `make mesh-run` — `PLAYBOOK` is relative to `playbooks/` and
 ```bash
 make mesh-run NODE=exec-dmz-a PLAYBOOK=site.yml INVENTORY=inventory/dmz.ini
 ```
+
+When every node in the pool is at its concurrency cap, the dispatch is refused
+pre-submit by default (nothing is queued server-side). Add `WAIT=<seconds>` to
+block until a slot frees instead:
+
+```bash
+make mesh-run ZONE=dmz PLAYBOOK=site.yml INVENTORY=inventory/dmz.ini WAIT=120
+```
+
+`mesh-run` re-checks routability and slots every few seconds for up to `WAIT`
+seconds; selection stays strictly pre-submit, so a queued dispatch is still a
+single submission and the never-run-twice rule holds. `WAIT=0` (the default)
+keeps the historical fail-fast behaviour.
 
 (Under the hood this execs the baked dispatcher,
 `/usr/local/mesh/bin/mesh-run`, inside the orchestrator; call it directly for
@@ -424,7 +437,7 @@ mesh/
 ├── config/receptor/   # ingress endpoint configs (A and B)
 ├── pki/               # certificate tooling: CA, node requests, signing
 ├── secrets/           # your issued bundles (gitignored; CA key stays offline)
-└── tests/             # the ten-minute lab + its 27-check verification suite
+└── tests/             # the ten-minute lab + its 28-check verification suite
 ```
 
 Operating it day to day — enrolling nodes, rotating credentials, evicting a

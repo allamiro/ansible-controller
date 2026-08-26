@@ -86,4 +86,4 @@ mesh-run:
 		$(if $(NODE),--node $(NODE),) $(if $(POOL),--pool $(POOL),) $(if $(ZONE),--zone $(ZONE),) \
 		--playbook /configs/playbooks/$(PLAYBOOK) \
 		--inventory /configs/$(or $(INVENTORY),$(MESH_INVENTORY)) \
-		$(if $(SSH_KEY),--ssh-key $(SSH_KEY),)
+		$(if $(SSH_KEY),--ssh-key $(SSH_KEY),) $(if $(WAIT),--wait $(WAIT),)
