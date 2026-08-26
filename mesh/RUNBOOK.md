@@ -239,15 +239,19 @@ those files at an old version runs an untested combination — so the first
 step is checking out the release itself.
 
 ```bash
-# CONTROL HOST — save your site edits to the tracked config files first
-# (pools.yml/zones.yml are yours; the checkout would refuse or replace them),
-# then check out the release and restore them. Verify EVERY image you are
-# about to run (each is signed independently — an orchestrator signature says
-# nothing about the execution-node image):
-mkdir -p /tmp/mesh-site-config
-cp mesh/config/pools.yml mesh/config/zones.yml /tmp/mesh-site-config/
-git fetch --tags && git checkout vX.Y.Z
-cp /tmp/mesh-site-config/*.yml mesh/config/
+# CONTROL HOST — several tracked files are operator-owned (pools.yml,
+# zones.yml, configs/inventory/, playbooks/, ansible.cfg edits); a bare
+# checkout would refuse or replace them. Stash carries ALL of them across
+# the release switch; a pop conflict means the release changed a file you
+# also edited — resolve it deliberately rather than losing either side.
+# (Site edits kept as local COMMITS instead? Rebase your branch onto the
+# tag: git rebase vX.Y.Z.) Then verify EVERY image you are about to run —
+# each is signed independently; an orchestrator signature says nothing
+# about the execution-node image:
+git fetch --tags
+git stash push --include-untracked -m "site files before vX.Y.Z"
+git checkout vX.Y.Z
+git stash pop
 for img in ansible-orchestrator ansible-execution-node; do
   cosign verify \
     --certificate-identity-regexp 'https://github\.com/allamiro/ansible-controller/\.github/workflows/docker-publish\.yml@.*' \

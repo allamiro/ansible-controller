@@ -16,8 +16,9 @@ logs/*
 !logs/.gitkeep
 
 # SSH keys — never commit private keys
-ssh/id_*
-ssh/authorized_keys
+# The whole directory: keys of ANY filename (prod.pem, deploy_key, ...) must
+# be uncommittable, not just the id_* defaults.
+ssh/
 
 # Python
 __pycache__/
