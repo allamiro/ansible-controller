@@ -187,7 +187,8 @@ The places to look:
 | `/var/lib/mesh/jobs/<job-id>/` in the orchestrator | the authoritative job record |
 | `/var/lib/mesh/slots/<node>/` in the orchestrator | concurrency state: `slot.N`, `.hold` markers (unknown-outcome jobs), the persisted `cap` |
 | `receptorctl work list` (either socket) | units the mesh still tracks — the first stop after an ambiguous submit |
+| `make mesh-collect JOB=<id>` | recover a `results-incomplete` job: re-attach to its still-tracked unit, record the real rc, export artifacts, release the unit, and clear its `.hold` — safe to re-run, never re-executes |
 
 The e2e suite doubles as a diagnostic vocabulary: every failure mode it
-proves (28 checks) is one the mesh is supposed to refuse — if production
+proves (29 checks) is one the mesh is supposed to refuse — if production
 shows different behavior than the lab, compare configurations first.

@@ -10,6 +10,8 @@
 #            [--log-dir <dir>] [--pools-file <yml>] [--zones-file <yml>] \
 #            [--wait <seconds>]
 #
+#   mesh-run  --collect <job-id>        # recover a results-incomplete job
+#
 # Runs INSIDE the orchestrator container. Flow — mesh plan §2.4:
 #
 #   classify (zone -> pool)  -> healthy-node select (routable + free slot)
@@ -57,6 +59,9 @@ SIGNWORK=1
 # the default and preserves the historical one-shot behaviour. Selection stays
 # strictly pre-submit, so waiting never weakens the never-run-twice guarantee.
 WAIT=0
+# --collect <job-id> is a standalone RECOVERY mode (not a dispatch): re-attach
+# to a job whose results stream broke after submit and finish its lifecycle.
+COLLECT=
 while [ $# -gt 0 ]; do
   case "$1" in
     --node)        NODE="${2:?}"; shift 2;;
@@ -73,6 +78,7 @@ while [ $# -gt 0 ]; do
     --pools-file)  POOLS_FILE="${2:?}"; POOLS_FILE_SET=1; shift 2;;
     --zones-file)  ZONES_FILE="${2:?}"; shift 2;;
     --wait)        WAIT="${2:?}"; shift 2;;
+    --collect)     COLLECT="${2:?}"; shift 2;;
     # Work signing (Phase 9) is on by default: the ingress signs every
     # submission and nodes refuse unsigned work. The escape exists only for
     # RECEPTOR_INSECURE_DEV wiring experiments, matching the node's escape.
@@ -80,6 +86,216 @@ while [ $# -gt 0 ]; do
     *) die "unknown argument: $1";;
   esac
 done
+# ---- --collect: re-attach to a results-incomplete job and finish it ----
+# A job whose results stream broke mid-flight (the stream's ingress or the
+# node↔controller path dropped after submit) is recorded results-incomplete
+# with its slot .hold KEPT and the unit NOT released — it may still be running.
+# Once the node is reachable again and the unit has finished, --collect
+# re-attaches through any live ingress that still tracks the unit, streams its
+# results into the job's own private data dir, records the real rc, exports the
+# artifacts, releases the unit, and clears the .hold. It NEVER re-runs anything:
+# if no live ingress tracks the unit, or the unit has not finished, it changes
+# nothing and says so. Self-contained (its own sockets, streaming, and cleanup
+# trap) so the dispatch path below is untouched.
+if [ -n "$COLLECT" ]; then
+  case "$NODE$POOL$ZONE$PLAYBOOK$INVENTORY$SSH_KEY$ANSIBLE_CFG$GALAXY_DIR" in
+    ?*) die "--collect takes only a job id — it is a recovery mode, not a dispatch (drop --node/--pool/--zone/--playbook/--inventory/...)";;
+  esac
+  cjob="$COLLECT"
+  case "$cjob" in *[!0-9A-Za-z._-]*|'') die "--collect job id '$cjob' invalid ([0-9A-Za-z._-]+ only)";; esac
+  cpdd="$JOBS_DIR/$cjob"
+  [ -f "$cpdd/meta.json" ] || die "collect: no job record at $cpdd/meta.json — wrong job id or --jobs-dir?"
+
+  # --- helpers (defined before the recovery uses them) ---
+  clive=()
+  crefresh_sockets() {  # populate clive with the currently-answering ingress sockets
+    local _cs; local -a _l
+    clive=()
+    IFS=',' read -ra _l <<<"$SOCKETS"
+    for _cs in "${_l[@]}"; do
+      _cs="${_cs//[[:space:]]/}"; [ -S "$_cs" ] || continue
+      receptorctl --socket "$_cs" status >/dev/null 2>&1 && clive+=("$_cs")
+    done
+    [ ${#clive[@]} -gt 0 ]
+  }
+  csock_for_unit() {  # <unit> -> print the first live ingress that still tracks it (else nonzero)
+    local _cs
+    for _cs in "${clive[@]}"; do
+      if U="$1" python3 -c 'import sys, json, os
+try: d = json.load(sys.stdin)
+except Exception: sys.exit(1)
+sys.exit(0 if os.environ["U"] in (d or {}) else 1)' \
+           < <(receptorctl --socket "$_cs" work list --unit_id "$1" 2>/dev/null); then
+        printf '%s\n' "$_cs"; return 0
+      fi
+    done
+    return 1
+  }
+  cclear_hold() {  # <node> -> remove the slot .hold marker naming this job (idempotent)
+    local _hf
+    [ -n "$1" ] || return 0
+    for _hf in "$SLOTS_DIR/$1"/slot.*.hold; do
+      [ -e "$_hf" ] || continue
+      if grep -q "job=$cjob" "$_hf" 2>/dev/null; then rm -f "$_hf" 2>/dev/null || true; fi
+    done
+  }
+  crelease() {  # <node> <unit> -> release the unit if a live ingress still tracks it, then clear its .hold
+    local _s
+    if [ -n "$2" ]; then
+      crefresh_sockets 2>/dev/null || true
+      _s=$(csock_for_unit "$2" 2>/dev/null || true)
+      [ -n "$_s" ] && receptorctl --socket "$_s" work release "$2" >/dev/null 2>&1 || true
+    fi
+    cclear_hold "$1"
+    return 0
+  }
+
+  # Serialize collection PER JOB: two --collect invocations (or an automated
+  # retry) must never both stream into the same private data dir at once. The
+  # lock is held for the whole recovery; a stale lock from a crashed collector
+  # frees itself when the kernel closes the fd. -w 5: if a peer is actively
+  # recovering, refuse rather than pile on.
+  # Braces are load-bearing (see slot_scan): a bare `exec {fd}>>f 2>/dev/null`
+  # makes the stderr redirect PERMANENT, silencing every later message. The
+  # group scopes the 2>/dev/null to the open attempt; the opened fd persists.
+  { exec {CLK_FD}>>"$cpdd/.collect.lock"; } 2>/dev/null \
+    || die "collect: cannot open the per-job lock $cpdd/.collect.lock"
+  flock -w 5 "$CLK_FD" 2>/dev/null \
+    || die "collect: another --collect is already recovering job=$cjob"
+
+  # Read the record UNDER the lock: a peer that just finished may have made it
+  # terminal, and a still-running dispatcher must be seen as in-progress.
+  cinfo=$(J="$cpdd/meta.json" python3 - <<'PYEOF'
+import json, os, sys
+try:
+    d = json.load(open(os.environ["J"]))
+except Exception as e:
+    sys.exit(f"unreadable meta.json: {e}")
+for k in ("node", "unit_id", "status"):
+    print(d.get(k, "") or "")
+PYEOF
+) || die "collect: cannot parse $cpdd/meta.json"
+  { read -r cnode; read -r cunit; read -r cstatus; } <<<"$cinfo"
+
+  # Already terminal? Finish any cleanup a prior interrupted collect may have
+  # skipped — releasing the unit and clearing the .hold are both idempotent —
+  # so an interrupt between the terminal write and the cleanup can never strand
+  # a retained unit or a permanently reserved slot. Exit with the JOB'S rc, so a
+  # repeated collect of a FAILED job still surfaces the failure instead of 0.
+  case "$cstatus" in
+    succeeded|failed*)
+      crelease "$cnode" "$cunit"
+      ctrc=0
+      case "$cstatus" in
+        failed*) ctrc="${cstatus##*rc=}"; case "$ctrc" in *[!0-9]*|'') ctrc=1;; esac;;
+      esac
+      echo "mesh-run: collect: job=$cjob already terminal (status=$cstatus); cleanup ensured, nothing to re-run" >&2
+      exit "$ctrc";;
+  esac
+
+  # A dispatcher is STILL actively working this job — collecting now would race
+  # its live results stream into the same PDD. Refuse; results-incomplete (the
+  # dispatcher gave up) or submit-ambiguous are the only recoverable states.
+  case "$cstatus" in
+    created|submitting|running)
+      die "collect: job=$cjob is still in progress (status=$cstatus) — a dispatcher is streaming it. Wait for it to finish, fail, or drop to results-incomplete.";;
+  esac
+
+  [ -n "$cunit" ] || die "collect: job=$cjob has no unit id (status=$cstatus) — its submit never returned a unit, so there is nothing to re-attach to; inspect 'receptorctl work list' by hand"
+
+  crefresh_sockets || die "collect: no live receptor control socket among: $SOCKETS"
+  csock=$(csock_for_unit "$cunit") \
+    || die "collect: no live ingress still tracks unit '$cunit' for job=$cjob — it may already be released, or every ingress lost it. Nothing changed; any .hold marker is left in place."
+
+  # A node is live only while it is a destination in some live ingress's Route
+  # table (mirrors node_routable_live in the dispatch path).
+  c_node_live() {
+    local s st
+    for s in "${clive[@]}"; do
+      st=$(receptorctl --socket "$s" status 2>/dev/null) || continue
+      awk -v n="$cnode" '/^Route[[:space:]]+Via[[:space:]]*$/{r=1;next} r&&NF==0{r=0} r&&$1==n{f=1} END{exit !f}' <<<"$st" && return 0
+    done
+    return 1
+  }
+
+  # Stream results -> process into the EXISTING pdd, interruptibly, under the
+  # same node-liveness watchdog and process-group discipline as dispatch, with
+  # a minimal EXIT trap so an operator Ctrl-C leaves no orphaned pipeline.
+  cresults_pid= cresults_target=
+  c_cleanup() {
+    if [ -n "$cresults_pid" ] && kill -0 "$cresults_pid" 2>/dev/null; then
+      kill -TERM "${cresults_target:-$cresults_pid}" 2>/dev/null || true
+      kill -KILL "${cresults_target:-$cresults_pid}" 2>/dev/null || true
+    fi
+  }
+  trap c_cleanup EXIT; trap 'exit 143' TERM; trap 'exit 130' INT
+  echo "mesh-run: collect: re-attaching to job=$cjob unit=$cunit node=$cnode via $csock" >&2
+  if command -v setsid >/dev/null 2>&1; then
+    setsid sh -c 'receptorctl --socket "$1" work results "$2" 2>/dev/null | ansible-runner process "$3"' \
+      _ "$csock" "$cunit" "$cpdd" & cresults_pid=$!; cresults_target="-$cresults_pid"
+  else
+    ( receptorctl --socket "$csock" work results "$cunit" 2>/dev/null \
+        | ansible-runner process "$cpdd" ) & cresults_pid=$!; cresults_target="$cresults_pid"
+  fi
+  cgrace="${MESH_RESULTS_GRACE:-30}" cgone=
+  while kill -0 "$cresults_pid" 2>/dev/null; do
+    sleep "${MESH_RESULTS_POLL:-5}"
+    kill -0 "$cresults_pid" 2>/dev/null || break
+    if c_node_live; then cgone=; continue; fi
+    cgone="${cgone:-$SECONDS}"
+    if [ $((SECONDS - cgone)) -ge "$cgrace" ]; then
+      echo "mesh-run: collect: node '$cnode' unroutable for >${cgrace}s; stopping (unit=$cunit still unfinished)" >&2
+      kill -TERM "$cresults_target" 2>/dev/null || true; sleep 2
+      kill -KILL "$cresults_target" 2>/dev/null || true; break
+    fi
+  done
+  crc=0; wait "$cresults_pid" 2>/dev/null || crc=$?
+  cresults_pid= cresults_target=
+
+  cart_rc=$(find "$cpdd/artifacts" -maxdepth 2 -name rc -type f 2>/dev/null | head -1)
+  if [ -z "$cart_rc" ]; then
+    echo "mesh-run: collect: results still incomplete for job=$cjob unit=$cunit — the unit has not finished yet (or its output was already consumed). Nothing changed; re-run --collect once it completes." >&2
+    exit 2
+  fi
+  crc=$(cat "$cart_rc")
+
+  # Update meta.json in place, preserving every other field. Written BEFORE the
+  # release/clear below; if this collect is interrupted between the two, the
+  # already-terminal branch above finishes the cleanup on the next --collect.
+  CST=$([ "$crc" -eq 0 ] && echo "succeeded" || echo "failed rc=$crc") \
+  J="$cpdd/meta.json" python3 - <<'PYEOF'
+import json, os, datetime
+p = os.environ["J"]; d = json.load(open(p))
+d["status"] = os.environ["CST"]
+d["updated"] = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+d["note"] = "recovered by --collect"
+tmp = p + ".tmp"
+with open(tmp, "w") as fh:
+    json.dump(d, fh)
+os.replace(tmp, p)
+PYEOF
+
+  # Release the unit (via the socket that tracked it) and clear the slot .hold —
+  # the original flock is long gone; the marker is the surviving reservation.
+  receptorctl --socket "$csock" work release "$cunit" >/dev/null 2>&1 || true
+  cclear_hold "$cnode"
+
+  # Export the operator-facing artifact set (best effort, like dispatch).
+  if [ -n "$LOG_DIR" ]; then
+    cadir=$(dirname "$cart_rc")
+    if mkdir -p "$LOG_DIR/$cjob" 2>/dev/null; then
+      for f in stdout rc status; do
+        [ -f "$cadir/$f" ] && { cp "$cadir/$f" "$LOG_DIR/$cjob/$f" 2>/dev/null || true; }
+      done
+      [ -d "$cadir/job_events" ] && { cp -a "$cadir/job_events" "$LOG_DIR/$cjob/" 2>/dev/null || true; }
+      cp "$cpdd/meta.json" "$LOG_DIR/$cjob/meta.json" 2>/dev/null || true
+    fi
+  fi
+
+  echo "mesh-run: collected job=$cjob node=$cnode unit=$cunit rc=$crc artifacts=$cpdd/artifacts" >&2
+  exit "$crc"
+fi
+
 [ -f "$PLAYBOOK" ]  || die "--playbook '$PLAYBOOK' not found"
 [ -e "$INVENTORY" ] || die "--inventory '$INVENTORY' not found (file or directory)"
 case "$NODE$POOL$ZONE" in '') die "one of --node, --pool, or --zone is required";; esac
