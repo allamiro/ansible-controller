@@ -239,10 +239,15 @@ those files at an old version runs an untested combination — so the first
 step is checking out the release itself.
 
 ```bash
-# CONTROL HOST — check out the release's repo files, then verify EVERY image
-# you are about to run (each is signed independently — an orchestrator
-# signature says nothing about the execution-node image):
+# CONTROL HOST — save your site edits to the tracked config files first
+# (pools.yml/zones.yml are yours; the checkout would refuse or replace them),
+# then check out the release and restore them. Verify EVERY image you are
+# about to run (each is signed independently — an orchestrator signature says
+# nothing about the execution-node image):
+mkdir -p /tmp/mesh-site-config
+cp mesh/config/pools.yml mesh/config/zones.yml /tmp/mesh-site-config/
 git fetch --tags && git checkout vX.Y.Z
+cp /tmp/mesh-site-config/*.yml mesh/config/
 for img in ansible-orchestrator ansible-execution-node; do
   cosign verify \
     --certificate-identity-regexp 'https://github\.com/allamiro/ansible-controller/\.github/workflows/docker-publish\.yml@.*' \
@@ -251,8 +256,10 @@ for img in ansible-orchestrator ansible-execution-node; do
 done
 
 # EACH NODE HOST — one node at a time; a quiet node (no .hold markers,
-# nothing mid-run) upgrades invisibly. Refresh compose.node.yml from the
-# checked-out release if it changed, then:
+# nothing mid-run) upgrades invisibly. Node hosts have no checkout, so copy
+# the release's node file over from the control host when it changed:
+#   scp mesh/compose.node.yml <node-host>:/path/to/mesh-node/   (from the control host)
+# then on the node host:
 #   edit .env → MESH_NODE_IMAGE=ghcr.io/allamiro/ansible-execution-node:vX.Y.Z
 docker compose -f compose.node.yml pull
 docker compose -f compose.node.yml up -d --wait
@@ -267,7 +274,18 @@ make mesh-up            # recreates changed services in place
 make mesh-status && make mesh-run ...   # final acceptance
 ```
 
-Rolling back is the same procedure with the previous tag. Upgrade during a
-quiet period: recreating the orchestrator mid-job triggers the
-`results-incomplete` path for in-flight streams (recoverable with
+Rolling back is the same procedure with the previous tag — with one caveat:
+a checked-out older release also restores that release's `Makefile`, and
+Makefiles predating the `orchestrator.override.yml` auto-include ignore the
+file. After rolling back to such a release, start the control plane with the
+explicit compose command instead of `make mesh-up`:
+
+```bash
+# CONTROL HOST — rollback to a release whose Makefile lacks the auto-include:
+docker compose -f docker-compose.yml -f mesh/compose.mesh.yml \
+  -f orchestrator.override.yml --profile mesh up -d
+```
+
+Upgrade during a quiet period: recreating the orchestrator mid-job triggers
+the `results-incomplete` path for in-flight streams (recoverable with
 `make mesh-collect`, but avoidable).
