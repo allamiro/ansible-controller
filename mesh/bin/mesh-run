@@ -87,6 +87,10 @@ case "$NODE$POOL$ZONE" in '') die "one of --node, --pool, or --zone is required"
   && die "--node is mutually exclusive with --pool/--zone"
 { [ -n "$POOL" ] && [ -n "$ZONE" ]; } && die "--pool and --zone are mutually exclusive"
 case "$WAIT" in *[!0-9]*|'') die "--wait must be a non-negative integer number of seconds";; esac
+# Force base 10: a digit string like 08 or 09 is not valid octal, and the bare
+# $((SECONDS + WAIT)) below would abort with "value too great for base" instead
+# of waiting. 10#0 is 0, 10#08 is 8.
+WAIT=$((10#$WAIT))
 
 # (1) classify: a zone names a pool (mesh/config/zones.yml); a pool names an
 # ordered candidate list with per-node concurrency caps (pools.yml). Parsed by
@@ -481,17 +485,18 @@ select_pass() {
 # on a failed pass is released inside acquire_slot, so retries never leak a
 # reservation; the acquired flock is only kept once a pass RETURNS it.
 wait_deadline=$((SECONDS + WAIT))
-while :; do
-  select_pass && break
+# Always one attempt now; then retry only while the deadline is still ahead, and
+# re-check it AFTER sleeping so a slot that frees during the final sleep is not
+# accepted past --wait N. The sleep is capped to the remaining budget, so a
+# short --wait never overshoots by a full MESH_WAIT_POLL.
+select_pass || true
+while [ -z "$SOCKET" ] && [ "$SECONDS" -lt "$wait_deadline" ]; do
   remaining=$((wait_deadline - SECONDS))
-  [ "$remaining" -gt 0 ] || break
-  # Sleep only what is left of the budget, never a full poll past the deadline —
-  # a --wait 1 must not effectively wait a whole MESH_WAIT_POLL and then reserve
-  # a slot that freed after the requested second.
   sleep_for="${MESH_WAIT_POLL:-3}"
   [ "$sleep_for" -gt "$remaining" ] && sleep_for="$remaining"
   sleep "$sleep_for"
   refresh_live_sockets || true   # keep waiting through a transiently-absent ingress
+  [ "$SECONDS" -lt "$wait_deadline" ] && select_pass || true
 done
 
 # (4) unique private data dir per job — no shared state between concurrent
