@@ -498,6 +498,17 @@ while [ -z "$SOCKET" ] && [ "$SECONDS" -lt "$wait_deadline" ]; do
   refresh_live_sockets || true   # keep waiting through a transiently-absent ingress
   [ "$SECONDS" -lt "$wait_deadline" ] && select_pass || true
 done
+# A pass may START before the deadline yet FINISH after it: acquire_slot waits
+# up to `flock -w 30` for the per-node admission lock under contention, so a
+# reservation can land seconds past --wait N. Enforce the deadline strictly —
+# release the late reservation (only the flock is held here; no unit submitted,
+# no .hold written yet) and give up, rather than dispatch past the promised
+# window. WAIT=0 never enters this branch (deadline == start).
+if [ -n "$SOCKET" ] && [ "$WAIT" -gt 0 ] && [ "$SECONDS" -ge "$wait_deadline" ]; then
+  { [ -n "${SLOT_FD:-}" ] && exec {SLOT_FD}>&-; } 2>/dev/null || true
+  SLOT_FD= SLOT_FILE= SOCKET=
+  SELECT_NOTE="${SELECT_NOTE:-}exceeded the --wait ${WAIT}s deadline while acquiring a slot; "
+fi
 
 # (4) unique private data dir per job — no shared state between concurrent
 # runs. Owner-only from birth (umask, not chmod-after): the staged tree holds
