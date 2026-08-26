@@ -267,7 +267,10 @@ refresh_live_sockets() {
   done
   [ ${#LIVE_SOCKETS[@]} -gt 0 ]
 }
-refresh_live_sockets || die "no live receptor control socket among: $SOCKETS"
+# With --wait, an ingress outage already in progress at invocation is retryable
+# too — only fail immediately when not waiting. When WAIT>0 and nothing answers
+# yet, the loop below re-snapshots each round and the final failure reports it.
+refresh_live_sockets || { [ "$WAIT" -gt 0 ] || die "no live receptor control socket among: $SOCKETS"; }
 
 # True iff node $1 is a DESTINATION in the Route table of receptor `status`
 # text $2. Reachability must be read from the Route table, not by matching the
@@ -480,8 +483,14 @@ select_pass() {
 wait_deadline=$((SECONDS + WAIT))
 while :; do
   select_pass && break
-  [ "$SECONDS" -lt "$wait_deadline" ] || break
-  sleep "${MESH_WAIT_POLL:-3}"
+  remaining=$((wait_deadline - SECONDS))
+  [ "$remaining" -gt 0 ] || break
+  # Sleep only what is left of the budget, never a full poll past the deadline —
+  # a --wait 1 must not effectively wait a whole MESH_WAIT_POLL and then reserve
+  # a slot that freed after the requested second.
+  sleep_for="${MESH_WAIT_POLL:-3}"
+  [ "$sleep_for" -gt "$remaining" ] && sleep_for="$remaining"
+  sleep "$sleep_for"
   refresh_live_sockets || true   # keep waiting through a transiently-absent ingress
 done
 
