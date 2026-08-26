@@ -7,7 +7,8 @@
 #   mesh-run  --node <node-id> | --pool <name> | --zone <name>
 #             --playbook <file.yml> --inventory <file> \
 #            [--ssh-key <file>] [--socket <receptor.sock>] [--jobs-dir <dir>] \
-#            [--log-dir <dir>] [--pools-file <yml>] [--zones-file <yml>]
+#            [--log-dir <dir>] [--pools-file <yml>] [--zones-file <yml>] \
+#            [--wait <seconds>]
 #
 # Runs INSIDE the orchestrator container. Flow — mesh plan §2.4:
 #
@@ -51,6 +52,11 @@ ZONES_FILE="${MESH_ZONES_FILE:-/etc/mesh/zones.yml}"
 # (plan Phase 7). --log-dir "" disables the export.
 LOG_DIR=/var/log/ansible/runner
 SIGNWORK=1
+# --wait N: if no candidate is selectable (a full slot, or a briefly-absent
+# ingress), keep retrying selection for up to N seconds before giving up. 0 is
+# the default and preserves the historical one-shot behaviour. Selection stays
+# strictly pre-submit, so waiting never weakens the never-run-twice guarantee.
+WAIT=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --node)        NODE="${2:?}"; shift 2;;
@@ -66,6 +72,7 @@ while [ $# -gt 0 ]; do
     --log-dir)     LOG_DIR="${2-}"; shift 2;;
     --pools-file)  POOLS_FILE="${2:?}"; POOLS_FILE_SET=1; shift 2;;
     --zones-file)  ZONES_FILE="${2:?}"; shift 2;;
+    --wait)        WAIT="${2:?}"; shift 2;;
     # Work signing (Phase 9) is on by default: the ingress signs every
     # submission and nodes refuse unsigned work. The escape exists only for
     # RECEPTOR_INSECURE_DEV wiring experiments, matching the node's escape.
@@ -79,6 +86,7 @@ case "$NODE$POOL$ZONE" in '') die "one of --node, --pool, or --zone is required"
 { [ -n "$NODE" ] && { [ -n "$POOL" ] || [ -n "$ZONE" ]; }; } \
   && die "--node is mutually exclusive with --pool/--zone"
 { [ -n "$POOL" ] && [ -n "$ZONE" ]; } && die "--pool and --zone are mutually exclusive"
+case "$WAIT" in *[!0-9]*|'') die "--wait must be a non-negative integer number of seconds";; esac
 
 # (1) classify: a zone names a pool (mesh/config/zones.yml); a pool names an
 # ordered candidate list with per-node concurrency caps (pools.yml). Parsed by
@@ -239,19 +247,27 @@ PYEOF
   CANDIDATES=("$NODE $cap")
 fi
 
-# Live-ingress inventory, once: an ingress can answer `status` while it has
-# lost (or is still reconverging) its route to a node the OTHER ingress still
-# sees, so routability is judged per candidate against every live socket.
+# Live-ingress inventory: an ingress can answer `status` while it has lost (or
+# is still reconverging) its route to a node the OTHER ingress still sees, so
+# routability is judged per candidate against every live socket. A function so
+# --wait can re-snapshot between retries (a briefly-absent ingress may recover
+# while we wait). LIVE_SOCKETS is rebuilt each call; stale SOCK_ST entries for a
+# socket no longer live are simply never read (routable_via walks LIVE_SOCKETS).
 declare -A SOCK_ST
 LIVE_SOCKETS=()
-IFS=',' read -ra socket_list <<<"$SOCKETS"
-for cand in "${socket_list[@]}"; do
-  cand="${cand//[[:space:]]/}"
-  [ -S "$cand" ] || continue
-  st=$(receptorctl --socket "$cand" status 2>/dev/null) || continue
-  LIVE_SOCKETS+=("$cand"); SOCK_ST["$cand"]="$st"
-done
-[ ${#LIVE_SOCKETS[@]} -gt 0 ] || die "no live receptor control socket among: $SOCKETS"
+refresh_live_sockets() {
+  local cand st; local -a socket_list
+  LIVE_SOCKETS=()
+  IFS=',' read -ra socket_list <<<"$SOCKETS"
+  for cand in "${socket_list[@]}"; do
+    cand="${cand//[[:space:]]/}"
+    [ -S "$cand" ] || continue
+    st=$(receptorctl --socket "$cand" status 2>/dev/null) || continue
+    LIVE_SOCKETS+=("$cand"); SOCK_ST["$cand"]="$st"
+  done
+  [ ${#LIVE_SOCKETS[@]} -gt 0 ]
+}
+refresh_live_sockets || die "no live receptor control socket among: $SOCKETS"
 
 # True iff node $1 is a DESTINATION in the Route table of receptor `status`
 # text $2. Reachability must be read from the Route table, not by matching the
@@ -441,14 +457,32 @@ release_slot_hold() {
 # (2) healthy-node select. Skipping a candidate is allowed ONLY here, where
 # nothing has left this host — that is the entire dispatch-only failover
 # boundary. The trace of skipped candidates is kept for the failure record.
-SOCKET= SELECT_NOTE=
-for entry in "${CANDIDATES[@]}"; do
-  n="${entry% *}" c="${entry##* }"
-  case "$n" in *[!A-Za-z0-9._-]*|'') die "node id '$n' invalid";; esac
-  s=$(routable_via "$n") || { SELECT_NOTE+="$n: not routable via any live ingress; "; continue; }
-  acquire_slot "$n" "$c" || { SELECT_NOTE+="$n: all $c slots reserved; "; continue; }
-  NODE="$n" SOCKET="$s"
-  break
+# One pass over the candidates; sets NODE/SOCKET (and reserves the slot) on the
+# first selectable one, or leaves SOCKET empty with SELECT_NOTE explaining why.
+select_pass() {
+  local entry n c s
+  SOCKET= SELECT_NOTE=
+  for entry in "${CANDIDATES[@]}"; do
+    n="${entry% *}" c="${entry##* }"
+    case "$n" in *[!A-Za-z0-9._-]*|'') die "node id '$n' invalid";; esac
+    s=$(routable_via "$n") || { SELECT_NOTE+="$n: not routable via any live ingress; "; continue; }
+    acquire_slot "$n" "$c" || { SELECT_NOTE+="$n: all $c slots reserved; "; continue; }
+    NODE="$n" SOCKET="$s"
+    return 0
+  done
+  return 1
+}
+# --wait N retries the whole pass — re-querying live ingresses and slots — for
+# up to N seconds, so a full node or a briefly-absent ingress can recover while
+# we wait. WAIT=0 runs exactly one pass (historical behaviour). A slot acquired
+# on a failed pass is released inside acquire_slot, so retries never leak a
+# reservation; the acquired flock is only kept once a pass RETURNS it.
+wait_deadline=$((SECONDS + WAIT))
+while :; do
+  select_pass && break
+  [ "$SECONDS" -lt "$wait_deadline" ] || break
+  sleep "${MESH_WAIT_POLL:-3}"
+  refresh_live_sockets || true   # keep waiting through a transiently-absent ingress
 done
 
 # (4) unique private data dir per job — no shared state between concurrent
@@ -647,13 +681,14 @@ meta created
 # say "nothing was executed" — the only place that claim is allowed.
 if [ -z "$SOCKET" ]; then
   meta submit-failed-pre "${SELECT_NOTE:-no candidate was selectable}"
+  waited=""; [ "$WAIT" -gt 0 ] && waited=" after waiting ${WAIT}s"
   if [ -n "$POOL" ]; then
-    die "no healthy node with a free slot in pool '$POOL' (${SELECT_NOTE% }) — nothing was executed"
+    die "no healthy node with a free slot in pool '$POOL'${waited} (${SELECT_NOTE% }) — nothing was executed"
   fi
   # The recorded selection reason distinguishes "unroutable" from "at
   # capacity" — sending an operator to debug routing for a full node
   # would waste exactly the time the record exists to save.
-  die "node '$NODE' not selectable: ${SELECT_NOTE:-not reachable via any live ingress ($SOCKETS)} — nothing was executed"
+  die "node '$NODE' not selectable${waited}: ${SELECT_NOTE:-not reachable via any live ingress ($SOCKETS)} — nothing was executed"
 fi
 
 # (6) transmit -> submit. receptorctl prints "Unit ID: <id>" on success. Past

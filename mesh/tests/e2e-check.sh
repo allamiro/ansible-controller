@@ -601,4 +601,58 @@ docker exec mesh-e2e-orchestrator sh -c '
   rm -f /var/lib/mesh/slots/*/slot.*.hold 2>/dev/null || true
 ' || true
 
+echo "== 28. --wait queues a dispatch until a capped slot frees, instead of refusing (issue #80) =="
+# Same cap-1 fixture as check 24: hold the one slot with a slow job. A second
+# dispatch WITHOUT --wait is refused (check 24 proved that). WITH --wait it must
+# BLOCK while the slot is full and then SUCCEED once the slow job frees it —
+# proving the wait is a real queue, not a busy-fail. Bounded by a hard timeout
+# so a regression (immediate refusal, or a hang) is caught either way.
+docker exec mesh-e2e-orchestrator bash -euc '
+  cat > /tmp/e2e-pools-cap1.yml <<EOF
+pools:
+  e2e:
+    - node: exec-e2e-a
+      max_concurrent: 1
+EOF
+' || fail "could not stage the cap-1 pool config"
+wslow_log=/tmp/e2e-wait-slow.$$.log
+docker exec mesh-e2e-orchestrator /usr/local/mesh/bin/mesh-run \
+    --pool e2e --pools-file /tmp/e2e-pools-cap1.yml \
+    --playbook /mesh-playbooks/mesh-slow.yml \
+    --inventory /tmp/e2e-inv --ssh-key /e2e-ssh/id_ed25519 >"$wslow_log" 2>&1 &
+wslow_pid=$!
+# Wait until the slot is actually held (flock -n contention), same probe as 24.
+wslot_held=0; deadline=$((SECONDS + 30))
+while [ $SECONDS -lt $deadline ]; do
+  wprobe_rc=0
+  docker exec mesh-e2e-orchestrator sh -c \
+    'flock -n /var/lib/mesh/slots/exec-e2e-a/slot.1 true' >/dev/null 2>&1 || wprobe_rc=$?
+  case "$wprobe_rc" in
+    0) sleep 1;;
+    1) wslot_held=1; break;;
+    *) kill "$wslow_pid" 2>/dev/null || true; fail "slot probe errored (rc=$wprobe_rc)";;
+  esac
+done
+[ "$wslot_held" = 1 ] || { kill "$wslow_pid" 2>/dev/null || true; fail "slow job never reserved the slot within 30s: $(tail -3 "$wslow_log")"; }
+# Dispatch WITH --wait while the slot is held. Must not refuse, must not hang.
+wait_t0=$SECONDS
+wait_out=$(timeout 90 docker exec -e MESH_WAIT_POLL=2 mesh-e2e-orchestrator \
+    /usr/local/mesh/bin/mesh-run \
+    --pool e2e --pools-file /tmp/e2e-pools-cap1.yml --wait 60 \
+    --playbook /mesh-playbooks/mesh-ping.yml \
+    --inventory /tmp/e2e-inv --ssh-key /e2e-ssh/id_ed25519 2>&1) && wait_rc=0 || wait_rc=$?
+wait_elapsed=$((SECONDS - wait_t0))
+case "$wait_rc" in
+  124|142) kill "$wslow_pid" 2>/dev/null || true; fail "--wait dispatch hung (never resolved the busy slot)";;
+  0) : ;;
+  *) kill "$wslow_pid" 2>/dev/null || true; fail "--wait dispatch failed (rc=$wait_rc): $(tail -3 <<<"$wait_out")";;
+esac
+grep -qE "node=exec-e2e-a unit=[^ ]+ rc=0" <<<"$wait_out" \
+  && pass "--wait queued the dispatch; it ran on exec-e2e-a after the slot freed (~${wait_elapsed}s)" \
+  || { kill "$wslow_pid" 2>/dev/null || true; fail "--wait dispatch did not complete on exec-e2e-a: $(tail -2 <<<"$wait_out")"; }
+wait "$wslow_pid" \
+  && pass "the slot-holding slow job completed rc=0 (cap of 1 never overshot)" \
+  || fail "the slot-holding job failed: $(tail -3 "$wslow_log")"
+rm -f "$wslow_log"
+
 echo "All mesh e2e regression checks passed."
