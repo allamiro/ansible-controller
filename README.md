@@ -26,6 +26,7 @@ Ubuntu 26.04-based Docker image that packages Ansible, OpenSSH, and everything n
 - **Auto-versioned** — every push to `main` is automatically tagged via conventional commits
 - **Published to two registries** — Docker Hub and GitHub Container Registry (GHCR)
 - **Security hardened** — non-root `ansible` user, `PermitRootLogin no`, pip-upgraded CVE packages, unreachable vendored binaries stripped
+- **Distributed execution mesh (opt-in)** — dispatch playbooks over a mutually-authenticated [Receptor](https://github.com/ansible/receptor) mesh to execution nodes inside networks the controller cannot route to ([details](#distributed-execution-mesh))
 
 ---
 
@@ -338,18 +339,23 @@ Key properties:
   failover (Tier 1), designed for active/active orchestrators later.
 - **Same supply chain** — the `ansible-orchestrator` and
   `ansible-execution-node` images build `FROM` the controller's digest and are
-  published by the same release pipeline (mesh Phase 11): multi-arch
-  manifests, cosign signatures, and the CVE gate, on Docker Hub and GHCR
-  alike:
+  published by the same release pipeline: multi-arch manifests, cosign
+  signatures, and the CVE gate, on Docker Hub and GHCR alike:
 
 ```bash
-docker pull ghcr.io/allamiro/ansible-orchestrator:latest
-docker pull ghcr.io/allamiro/ansible-execution-node:latest
+# Pin the release you deploy (vX.Y.Z from this repo's Releases page).
+# `latest` exists but is for evaluation only — see mesh/README.md.
+docker pull ghcr.io/allamiro/ansible-orchestrator:vX.Y.Z
+docker pull ghcr.io/allamiro/ansible-execution-node:vX.Y.Z
 ```
 
-Architecture and pipeline diagrams, PKI workflow, the e2e lab, and the
-regression suite are documented in [`mesh/README.md`](mesh/README.md); the full
-design of record is [`mesh/DESIGN.md`](mesh/DESIGN.md).
+The mesh ships with three documents, in reading order:
+
+| Document | Read it for |
+|---|---|
+| [`mesh/README.md`](mesh/README.md) | What the mesh is and the full deployment walk-through: PKI, control plane, nodes, first playbook |
+| [`mesh/RUNBOOK.md`](mesh/RUNBOOK.md) | Day-2 operations: enrolling and evicting nodes, credential rotation, upgrades, troubleshooting |
+| [`mesh/DESIGN.md`](mesh/DESIGN.md) | The design of record: architecture and HA decisions, non-disruption guarantees, and the verification matrix |
 
 ---
 
