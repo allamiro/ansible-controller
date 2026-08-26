@@ -249,12 +249,16 @@ step is checking out the release itself.
 # each is signed independently; an orchestrator signature says nothing
 # about the execution-node image:
 git fetch --tags
-git stash push --include-untracked -m "site files before vX.Y.Z"
+# The timestamp makes this run's stash message unique, so the guard below
+# can never match a stash left behind by an earlier run (e.g. one kept
+# for deliberate resolution after a pop conflict).
+msg="site files before vX.Y.Z ($(date +%s))"
+git stash push --include-untracked -m "$msg"
 git checkout vX.Y.Z
 # Pop ONLY the entry created above: a clean worktree creates no stash
 # ("No local changes to save" still exits 0), and an unqualified pop would
 # then apply whatever unrelated stash happened to be on top.
-ref=$(git stash list | grep -F "site files before vX.Y.Z" | head -1 | cut -d: -f1)
+ref=$(git stash list | grep -F "$msg" | head -1 | cut -d: -f1)
 [ -n "$ref" ] && git stash pop "$ref"
 for img in ansible-orchestrator ansible-execution-node; do
   cosign verify \
