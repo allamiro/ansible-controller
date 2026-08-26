@@ -55,11 +55,19 @@ logs:
 # sidecars. Needs issued identities under mesh/secrets/ first; the runbook
 # walks the full setup. All mesh targets use -i without -t so they also work
 # from scripts and CI.
+# orchestrator.override.yml (repo root, gitignored) points the ansible service
+# at the orchestrator image — required for dispatching (the stock controller
+# ships no receptorctl/mesh-run). When the file exists it is included
+# automatically, so the README's step 2 works through make; without it,
+# mesh-up still brings up the ingresses for a status-only control plane.
+MESH_COMPOSE = docker compose -f docker-compose.yml -f mesh/compose.mesh.yml \
+	$(if $(wildcard orchestrator.override.yml),-f orchestrator.override.yml,) --profile mesh
+
 mesh-up:
-	docker compose -f docker-compose.yml -f mesh/compose.mesh.yml --profile mesh up -d
+	$(MESH_COMPOSE) up -d
 
 mesh-down:
-	docker compose -f docker-compose.yml -f mesh/compose.mesh.yml --profile mesh down
+	$(MESH_COMPOSE) down
 
 # Mesh view from BOTH ingresses. One dead sidecar must not fail the status
 # (that is what Tier-1 redundancy is for) — but BOTH dead must: a green exit

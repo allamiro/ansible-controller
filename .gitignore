@@ -27,3 +27,7 @@ __pycache__/
 # Claude Code local agent config — developer-local, not part of the image
 .claude/
 CLAUDE.local.md
+
+# Site-local mesh compose override (points the ansible service at the
+# orchestrator image) — machine-specific, never committed
+orchestrator.override.yml

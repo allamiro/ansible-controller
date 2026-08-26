@@ -28,6 +28,13 @@ HA at two independent layers: **execution-node pools** and the **control plane**
 Built on **Receptor + Ansible Runner + mTLS** only. No web UI, REST API, database,
 message broker, or scheduler service — see [§11 Non-goals](#11-explicitly-deferred--non-goals).
 
+**Documentation map** (which page owns what — update the owner when behavior
+changes): [README.md](README.md) is the entry point and first-deployment
+guide; [RUNBOOK.md](RUNBOOK.md) owns day-2 procedures (enrollment, rotation,
+eviction, upgrade, recovery); this document owns the *why* — architecture,
+trust boundaries, failure semantics, tradeoffs — and the test matrix that
+keeps the other two honest.
+
 ---
 
 ## 1. Non-disruption guarantees (how the existing controller is protected)
