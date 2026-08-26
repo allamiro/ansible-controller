@@ -16,8 +16,9 @@ logs/*
 !logs/.gitkeep
 
 # SSH keys — never commit private keys
-ssh/id_*
-ssh/authorized_keys
+# The whole directory: keys of ANY filename (prod.pem, deploy_key, ...) must
+# be uncommittable, not just the id_* defaults.
+ssh/
 
 # Python
 __pycache__/
@@ -27,3 +28,7 @@ __pycache__/
 # Claude Code local agent config — developer-local, not part of the image
 .claude/
 CLAUDE.local.md
+
+# Site-local mesh compose override (points the ansible service at the
+# orchestrator image) — machine-specific, never committed
+orchestrator.override.yml

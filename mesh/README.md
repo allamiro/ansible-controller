@@ -62,10 +62,14 @@ project's test suite on every change):
    directions with certificates you issue yourself. A machine with no
    certificate, an expired one, one from a different authority, or a valid
    certificate for the wrong identity is refused at the door.
-2. **Nodes dial out.** Nothing ever connects *into* your protected network.
-   The execution node opens outbound TCP connections to your control host
+2. **Nodes dial out.** Nothing ever connects *into* your protected network:
+   the execution node opens outbound TCP connections to your control host
    (ports 27199 and 27200, one per ingress) and receives all its work over
-   them. Your inbound firewall rules stay exactly as they are.
+   them, so the protected network's inbound rules stay exactly as they are.
+   To be precise about the other side: the **control host** listens on those
+   two ports and must be reachable *from* the node networks — see the
+   [network requirements](#network-requirements). Both listeners refuse any
+   peer without a valid client certificate.
 3. **The master key stays offline.** The Certificate Authority key that mints
    identities lives on a machine that never joins the mesh — stealing any
    running container gets an attacker one identity, never the ability to
@@ -97,7 +101,7 @@ cross the wall:
 ```bash
 docker build -f docker/Dockerfile -t ansible-controller:dev .   # 1. the controller base
 mesh/tests/e2e-up.sh ansible-controller:dev                     # 2. build + start the lab (throwaway certificates issued for you)
-mesh/tests/e2e-check.sh                                         # 3. watch 29 checks prove every property above
+mesh/tests/e2e-check.sh                                         # 3. watch the verification suite prove every property above
 mesh/tests/e2e-down.sh                                          # tear it all down again
 ```
 
@@ -111,6 +115,35 @@ This lab is the complete distributed path end to end, and it is the supported
 way to run the full path today (see [What ships today](#what-ships-today-and-whats-next)).
 
 ## Setting up for real
+
+The lab above is a disposable evaluation environment; this section is the
+production path. One consistent example runs through every step: control host
+`ctrl.example.com`, one execution node `exec-dmz-a` inside a DMZ, targets
+reached from that node over SSH.
+
+### Who runs what
+
+| Component | Image | Runs on | Responsibility |
+|---|---|---|---|
+| Controller | `ansible-controller` | Control host | Direct playbook runs — unchanged by the mesh |
+| Orchestrator | `ansible-orchestrator` | Control host (replaces the controller image in place, same container) | Everything the controller does, plus dispatching mesh jobs |
+| Ingress A / B | `quay.io/ansible/receptor` (pinned) | Control host | The mesh's two entry doors; hold the only work-signing key |
+| Execution node | `ansible-execution-node` | One host inside each closed network | Runs playbooks next to the targets |
+| Targets | — | Closed networks | Managed over plain SSH; nothing installed |
+| Offline CA | — | A machine that stays off the network | Issues every mesh identity; holds `ca.key` |
+
+### Network requirements
+
+| Source | Destination | Port | Direction | Purpose |
+|---|---|---|---|---|
+| Execution node | Control host | TCP 27199 | Outbound from the node network | Receptor mesh, ingress A (mTLS) |
+| Execution node | Control host | TCP 27200 | Outbound from the node network | Receptor mesh, ingress B (mTLS, redundancy) |
+| Execution node | Its targets | TCP 22 | Inside the closed network | Ansible over SSH |
+| Controller | Directly-reachable targets | TCP 22 | Direct path | Unchanged non-mesh runs |
+
+Nothing connects inbound into a closed network. The control host is the only
+listener the mesh adds (27199/27200), and both listeners require a
+mesh-CA-issued client certificate before admitting a peer.
 
 ### What you'll need
 
@@ -193,7 +226,7 @@ key.
 On the control host:
 
 ```bash
-make mesh-up      # = docker compose -f docker-compose.yml -f mesh/compose.mesh.yml --profile mesh up -d
+make mesh-up      # ≈ docker compose -f docker-compose.yml -f mesh/compose.mesh.yml [-f orchestrator.override.yml] --profile mesh up -d
 ```
 
 This starts both ingress endpoints beside your controller and connects the
@@ -203,16 +236,21 @@ mounts, and the direct execution path are untouched — omit `--profile mesh`
 and none of this exists.
 
 **To dispatch from this host you also need the orchestrator image** — the
-stock controller deliberately carries no `receptorctl`/`mesh-run`. Point the
-`ansible` service at the published image (see
+stock controller deliberately carries no `receptorctl`/`mesh-run`. Create
+`orchestrator.override.yml` in the repository root (gitignored; `make
+mesh-up`/`mesh-down` include it automatically whenever it exists) pointing
+the `ansible` service at a pinned release of the published image (see
 [Getting the images](#getting-the-images)):
 
 ```yaml
-# orchestrator.override.yml — add as one more -f file on the compose command
+# CONTROL HOST — orchestrator.override.yml (repo root)
 services:
   ansible:
-    image: ghcr.io/allamiro/ansible-orchestrator:latest
+    image: ghcr.io/allamiro/ansible-orchestrator:v1.2.3   # pin your release
 ```
+
+Then `make mesh-up` again: compose replaces the container in place, keeping
+its name, mounts, and the direct execution path intact.
 
 ### Step 3 — connect your execution nodes
 
@@ -236,13 +274,38 @@ add an override file: [`tests/e2e.node-override.yml`](tests/e2e.node-override.ym
 is the shape, and it is how the e2e suite starts a node from the packaged file
 on every mesh change (check 26).
 
+### Step 4 — verify, then run the first playbook
+
+All on the control host. Success at each line is the acceptance test:
+
+```bash
+# CONTROL HOST
+make mesh-status                 # exec-dmz-a listed with a route, on at least one ingress
+make mesh-ping NODE=exec-dmz-a   # round-trip through the mesh returns replies
+
+# the SSH key the NODE will use to reach its targets, as a container path —
+# the compose setup already mounts ./ssh at /home/ansible/.ssh:
+make mesh-run NODE=exec-dmz-a PLAYBOOK=ping.yml INVENTORY=inventory/dmz.ini \
+  SSH_KEY=/home/ansible/.ssh/id_ed25519
+```
+
+A successful first run proves the whole chain: the play's output streams to
+your terminal, `$?` is the playbook's real exit code, and
+`logs/runner/<job-id>/` on the host holds `stdout`, `rc`, the per-task
+`job_events/`, and a `meta.json` whose status reads `succeeded`. If any line
+fails, the [troubleshooting table](#health-and-troubleshooting) maps the
+symptom to its fix.
+
 ## Running a job
 
 Dispatch with `make mesh-run` — `PLAYBOOK` is relative to `playbooks/` and
-`INVENTORY` to `configs/`, the same conventions as `make run`:
+`INVENTORY` to `configs/`, the same conventions as `make run`. Exactly one of
+`NODE`, `POOL`, or `ZONE` selects the destination; `SSH_KEY` (a container
+path) is the key the node uses to reach the play's targets:
 
 ```bash
-make mesh-run NODE=exec-dmz-a PLAYBOOK=site.yml INVENTORY=inventory/dmz.ini
+make mesh-run NODE=exec-dmz-a PLAYBOOK=site.yml INVENTORY=inventory/dmz.ini \
+  SSH_KEY=/home/ansible/.ssh/id_ed25519
 ```
 
 When every node in the pool is at its concurrency cap, the dispatch is refused
@@ -353,6 +416,32 @@ file.
 
 ---
 
+## Configuration reference
+
+Execution node (set in `.env` beside `compose.node.yml`; full commentary in
+[`node.env.example`](node.env.example)):
+
+| Variable | Required | Default | Purpose |
+|---|---|---|---|
+| `RECEPTOR_NODE_ID` | Yes | — | The identity in this node's certificate (e.g. `exec-dmz-a`) |
+| `RECEPTOR_PEERS` | Yes | — | Both ingresses, `host:port` comma-separated (e.g. `ctrl.example.com:27199,ctrl.example.com:27200`) |
+| `MESH_NODE_IMAGE` | No | `ghcr.io/allamiro/ansible-execution-node:latest` | Pin a release, or your site-built image |
+| `MESH_NODE_TLS_DIR` | No | `./secrets/receptor/issued/<node id>` | Directory holding `tls.crt`, `tls.key`, `ca.crt` |
+| `MESH_NODE_WORK_PUBKEY` | No | `./secrets/receptor/work-signing/work-public.pem` | Work-signing **public** key |
+| `RECEPTOR_LOG_LEVEL` | No | `info` | `debug`\|`info`\|`warning`\|`error` |
+| `MESH_NODE_PROJECT` | No | `mesh-node` | Compose project name; only for several nodes on one host |
+
+Control-host paths (inside the orchestrator container unless noted):
+
+| Path | What lives there |
+|---|---|
+| `/etc/mesh/pools.yml`, `/etc/mesh/zones.yml` | Pool/zone declarations — mounted from `mesh/config/`, read per dispatch (live-editable, no restart) |
+| `/var/lib/mesh/jobs/<job-id>/` | The authoritative per-job record: staged data, artifacts, `meta.json` (persisted via the `mesh-state` volume) |
+| `/var/lib/mesh/slots/<node>/` | Concurrency state: `slot.N` files, durable `.hold` markers, the persisted `cap` |
+| `/run/receptor/receptor.sock`, `receptor-b.sock` | The two ingress control sockets (authority boundary — never network-exposed) |
+| `logs/runner/<job-id>/` **(host)** | Operator-facing artifact copies: `stdout`, `rc`, `status`, `job_events/`, final `meta.json` |
+| `mesh/secrets/receptor/` **(host, gitignored)** | Issued bundles and the work-signing private key; `ca.key` never leaves the offline machine |
+
 ## Health and troubleshooting
 
 Check what the mesh can see:
@@ -374,6 +463,8 @@ each node advertises the work type that runs playbooks.
 | `mesh-run` refuses to retry a job whose outcome is unknown | The never-run-twice rule (above) | Once the node/ingress is back and the unit has finished, run `make mesh-collect JOB=<job-id>` to record the real result and free the slot without re-executing. Only if the unit never ran (or cannot be recovered) do you re-run by hand |
 | Dispatches report a node at capacity but nothing seems to run there | A job with an unknown outcome left a `.hold` marker keeping its slot reserved (capacity must not evaporate just because the dispatcher lost sight of an acknowledged job) | Read `/var/lib/mesh/slots/<node>/slot.<n>.hold` in the orchestrator — it names the job and unit. Prefer `make mesh-collect JOB=<job-id>`: it confirms the unit finished, records the outcome, releases the unit, and clears the marker in one step. (Manual fallback: confirm with `receptorctl work list --unit_id <unit>`, then delete the marker.) |
 | You raised `max_concurrent` but the old lower cap still applies | Raises are deliberately not automatic — a dispatcher can't tell a deliberate raise from a stale config snapshot, so the lowest accepted cap persists | After editing the config upward, delete the persisted record: `rm /var/lib/mesh/slots/<node>/cap` in the orchestrator; the next dispatch records the new value |
+| `mesh-status` exits nonzero: "no ingress responded" | The probe runs inside the `ansible-controller` container, so this means EITHER both ingresses are down OR that container is stopped / still running the stock controller image (no `receptorctl`) | First `docker ps` on the control host: is `ansible-controller` up, and on the orchestrator image? If it's on the stock image, create `orchestrator.override.yml` ([Step 2](#step-2--start-the-control-plane)) and re-run `make mesh-up`. If the container is fine, check `docker logs receptor-controller` / `receptor-controller-b` and `make mesh-up` to restart a dead sidecar. Dispatches during the outage were refused pre-submit ("no live receptor control socket") — nothing was executed, re-run them |
+| A job fails immediately and the node's log shows a signature/verification error | The node holds a different work-signing public key than the sidecars' private key — usually a rotation done in the wrong order or half-finished | Finish the rotation per the [RUNBOOK](RUNBOOK.md#5-rotate-credentials): distribute the current `work-public.pem` to every node (restart each), then confirm the sidecars mount the matching private key |
 
 ## Getting the images
 
@@ -386,13 +477,16 @@ release you already run:
 | `ansible-orchestrator` | Controller + the dispatcher (`mesh-run`, `receptorctl`) | Control host |
 | `ansible-execution-node` | Orchestrator + the mesh agent (hardened build, no SSH server) | Inside each closed network |
 
-All three ship per release to Docker Hub and GHCR — multi-arch, cosign-signed,
-Trivy-gated — with the mesh images built `FROM` the exact controller digest
-pushed by the same run:
+All three ship per release to Docker Hub and GHCR — multi-arch
+(amd64/arm64), cosign-signed, Trivy-gated — with the mesh images built `FROM`
+the exact controller digest pushed by the same run, so a release is
+internally consistent by construction. **Pin a release tag (or digest) in
+production**; `latest` moves on every merge and is for evaluation only (the
+tag scheme is in the [root README](../README.md#image-tags)):
 
 ```bash
-docker pull ghcr.io/allamiro/ansible-orchestrator:latest
-docker pull ghcr.io/allamiro/ansible-execution-node:latest
+docker pull ghcr.io/allamiro/ansible-orchestrator:v1.2.3
+docker pull ghcr.io/allamiro/ansible-execution-node:v1.2.3
 ```
 
 Prefer building from your checkout instead? The
@@ -425,6 +519,21 @@ orchestrators (Tier 2), fan-out sharding, auto-routing — is listed in
 [DESIGN.md §11](DESIGN.md#11-explicitly-deferred--non-goals) and gets built
 when a real driver exists.
 
+## Terminology
+
+| Term | Meaning |
+|---|---|
+| **Controller** | The stock image running direct (non-mesh) playbook runs; unchanged by the mesh |
+| **Orchestrator** | The controller image plus the dispatcher — what the `ansible` service runs once you enable dispatching |
+| **Ingress (A/B)** | The two receptor endpoints on the control host that nodes dial into; the mesh's entry doors |
+| **Execution node** | The container inside a closed network that runs playbooks next to the targets |
+| **Target** | A machine managed over SSH; never runs mesh software |
+| **Job** | One `mesh-run` dispatch: a UUID, a record under `/var/lib/mesh/jobs/`, artifacts, a `meta.json` |
+| **Unit** | Receptor's handle for the job on the node (`unit_id` in `meta.json`); what `receptorctl work …` commands take |
+| **Pool / zone** | An ordered list of candidate nodes with per-node caps / a friendly name mapping to a pool |
+| **Slot / `.hold`** | One unit of a node's `max_concurrent` / the durable marker that keeps a slot reserved while a job's outcome is unknown |
+| **`results-incomplete`** | A recorded state: the job was acknowledged but its results stream broke — recover with `make mesh-collect` |
+
 ## Where things live
 
 ```text
@@ -439,7 +548,7 @@ mesh/
 ├── config/receptor/   # ingress endpoint configs (A and B)
 ├── pki/               # certificate tooling: CA, node requests, signing
 ├── secrets/           # your issued bundles (gitignored; CA key stays offline)
-└── tests/             # the ten-minute lab + its 29-check verification suite
+└── tests/             # the ten-minute lab + its e2e verification suite
 ```
 
 Operating it day to day — enrolling nodes, rotating credentials, evicting a

@@ -19,6 +19,12 @@ name: Mesh CI
 # main pushes alike — and never publishes; publishing the mesh images (mesh
 # plan Phase 11) lives in docker-publish.yml, which builds them FROM the
 # controller digest it pushes in the same run.
+# Markdown is excluded: unlike docker-image.yml (which must run on every PR
+# because a docs-only merge to main still publishes a freshly resolved image —
+# see its header), this workflow's outputs are fully repo-determined and it
+# never publishes. A docs-only change under mesh/ or docker/ cannot alter what
+# it builds, so four image builds plus the e2e suite would prove nothing; a
+# change touching code AND docs still runs everything.
 on:
   pull_request:
     branches: ["main"]
@@ -28,6 +34,8 @@ on:
       - ".dockerignore"
       - ".trivyignore"
       - ".github/workflows/mesh-image.yml"
+      - "!docker/**/*.md"
+      - "!mesh/**/*.md"
   push:
     branches: ["main"]
     paths:
@@ -36,6 +44,8 @@ on:
       - ".dockerignore"
       - ".trivyignore"
       - ".github/workflows/mesh-image.yml"
+      - "!docker/**/*.md"
+      - "!mesh/**/*.md"
 
 jobs:
   lint:
