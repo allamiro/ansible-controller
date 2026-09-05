@@ -9,6 +9,10 @@ name: Build & Publish (Docker Hub + GHCR)
 # vX.Y.Z is provably layered on the controller tagged vX.Y.Z, never on whatever
 # `latest` happened to point at (mesh plan Phase 11 — extend the matrix, don't
 # fork it).
+#
+# The mesh images' Docker Hub overviews (the README tab on hub.docker.com) are
+# tracked in .github/dockerhub/<image>.md and synced by the hub-overviews job
+# below on every non-PR run, so the Hub page can never lag the shipped image.
 
 on:
   push:
@@ -372,3 +376,51 @@ jobs:
               --timeout 10m \
               "ghcr.io/${{ github.repository_owner }}/${name}:${tag}"
           done
+
+  # ---- Docker Hub overviews for the mesh images (the README tab on Hub) ----
+  # Hub has no way to derive an overview from the image, and a repository with
+  # none shows "No overview available" — which is what both mesh images showed
+  # until this job. The controller's overview predates it and is still edited
+  # on Hub directly. Runs after merge so the overview never describes tags
+  # that have not been published yet; a failure here does not unpublish
+  # anything, it only leaves the previous overview in place.
+  #
+  # The description API needs a token with read/write/DELETE scope (the
+  # action's documented requirement) — a push-only read/write token fails this
+  # job with an authentication error while the image publish above succeeds.
+  hub-overviews:
+    name: Sync Docker Hub overview (${{ matrix.image }})
+    if: github.event_name != 'pull_request'
+    needs: merge
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    # Two main pushes in quick succession run this job twice, and nothing in
+    # the Hub API orders them: the run that finishes LAST wins, which can be
+    # the older commit's overview. One group per image serialises the pushes;
+    # cancel-in-progress stays off so a run that already holds the API call
+    # completes, and a newer pending run then overwrites it in order.
+    concurrency:
+      group: hub-overview-${{ matrix.image }}
+      cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # short: the one-liner under the repository name (Hub caps it at 100 bytes)
+          - image: ansible-orchestrator
+            short: "Ansible Controller + mesh dispatcher: run playbooks on execution nodes in networks you cannot reach"
+          - image: ansible-execution-node
+            short: "Mesh execution node: runs Ansible playbooks inside closed networks, dialing out over mTLS. No sshd."
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Push overview to Docker Hub
+        uses: peter-evans/dockerhub-description@v5
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.image }}
+          readme-filepath: .github/dockerhub/${{ matrix.image }}.md
+          short-description: ${{ matrix.short }}

@@ -1,8 +1,10 @@
 name: Auto-tag
 
 # Runs after every push to main that changes actual code or config.
-# Pure documentation changes (README, issue templates, LICENSE) are excluded
-# so they don't generate a new image version.
+# Pure documentation changes (README, issue templates, LICENSE, the Docker Hub
+# overviews under .github/dockerhub/) are excluded so they don't generate a new
+# image version. docker-publish.yml has no such filter, so an overview-only
+# push still syncs the Hub page — as latest/sha-* only, with no new release.
 #
 # Bump rules (conventional commits):
 #   feat!: / BREAKING CHANGE  →  major  (v1.0.0 → v2.0.0)
@@ -26,6 +28,7 @@ on:
       - "LICENSE"
       - ".github/ISSUE_TEMPLATE/**"
       - ".github/PULL_REQUEST_TEMPLATE.md"
+      - ".github/dockerhub/**"
 
 jobs:
   tag:
