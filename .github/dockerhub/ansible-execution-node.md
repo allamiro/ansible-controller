@@ -40,7 +40,9 @@ See the **Tags** tab for the current version list.
 - **Issues & feature requests:** https://github.com/allamiro/ansible-controller/issues
 - **Also published to GHCR:** `ghcr.io/allamiro/ansible-execution-node`
 - **Architectures:** `linux/amd64`, `linux/arm64` — both built on native runners
-- **User:** uid 1000 (`ansible`), receptor runs as PID 1 · **Exposed ports:** none
+- **User:** uid 1000 (`ansible`), receptor runs as PID 1 · **Listening ports:** none — the
+  image inherits the controller's `EXPOSE 22` metadata, but no sshd is started and nothing
+  listens on it (so skip `docker run -P`)
 - **Health check:** built in — `receptorctl status` on the node's local control socket, so
   `docker compose up --wait` returns only once the node is actually up
 - **Maintainer:** Tamir Suliman
@@ -123,8 +125,9 @@ docker run -d --name mesh-node-exec-dmz-a --restart unless-stopped \
   allamiro1/ansible-execution-node:0.23.1
 ```
 
-No `-p` flags: the node publishes nothing. It only needs outbound TCP to the control host
-on **27199** (ingress A) and **27200** (ingress B), and SSH reachability to its targets.
+No `-p` flags: nothing listens in a node (the inherited `EXPOSE 22` is metadata only). It
+needs just outbound TCP to the control host on **27199** (ingress A) and **27200** (ingress
+B), and SSH reachability to its targets.
 
 ### Then, on the control host
 

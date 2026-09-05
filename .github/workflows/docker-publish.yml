@@ -396,6 +396,14 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
+    # Two main pushes in quick succession run this job twice, and nothing in
+    # the Hub API orders them: the run that finishes LAST wins, which can be
+    # the older commit's overview. One group per image serialises the pushes;
+    # cancel-in-progress stays off so a run that already holds the API call
+    # completes, and a newer pending run then overwrites it in order.
+    concurrency:
+      group: hub-overview-${{ matrix.image }}
+      cancel-in-progress: false
     strategy:
       fail-fast: false
       matrix:

@@ -55,9 +55,12 @@ completely unchanged, plus:
   (process) on this side of the mesh.
 - **`receptorctl` 1.6.7** — talks to the receptor ingress sidecars over their control sockets.
 
-The build **asserts** at image-build time that not one controller package pin moved and that
-the added set is exactly the pinned closure above, so the orchestrator is reproducible for a
-given controller digest.
+The build **asserts** at image-build time that no controller package pin moved and that the
+added set is exactly the pinned closure above, so the orchestrator is reproducible for a given
+controller digest. One deliberate, documented exception: `click` is pinned to 8.3.3 (the
+controller ships 8.4.2) because `receptorctl` 1.6.7 caps it below 8.4.0. The controller's
+only `click` consumer is `black` (via `ansible-lint`), which 8.3.3 satisfies, and `pip check`
+re-verifies the whole dependency graph after the downgrade.
 
 This image is the **control side only**. The mesh endpoints your nodes dial (ingress A and B)
 are receptor sidecars started next to it by the repository's compose overlay; the mesh peer
@@ -120,14 +123,24 @@ Or call the dispatcher directly inside the container for flags `make` doesn't su
 ```bash
 docker exec -i ansible-controller /usr/local/mesh/bin/mesh-run \
   --zone dmz --playbook /configs/playbooks/site.yml --inventory /configs/inventory/dmz.ini \
-  --ssh-key /home/ansible/.ssh/id_ed25519 --wait 120
+  --ssh-key /home/ansible/.ssh/id_ed25519 --wait 120 \
+  --ansible-cfg /configs/ansible.cfg --galaxy-dir /configs/.galaxy
 ```
+
+The job runs **on the node**, so only what travels with it is available there: `make mesh-run`
+ships the playbook directory and inventory. If your playbooks depend on the controller's
+`ansible.cfg` or on roles and collections installed from `requirements.yml`, pass
+`--ansible-cfg` and `--galaxy-dir` as above. Python packages a plugin needs at runtime
+(`boto3` and friends) are not per-job content — bake them into the node image instead (see
+the execution node's page).
 
 | Flag | Purpose |
 |------|---------|
 | `--node <id>` / `--pool <name>` / `--zone <name>` | Where to run — exactly one. Pools and zones pick a healthy node with a free slot |
 | `--playbook <file>` / `--inventory <file>` | Container paths under `/configs` |
 | `--ssh-key <file>` | Private key for the node to reach its targets; travels only inside the encrypted stream, never logged, destroyed on both sides when the job ends |
+| `--ansible-cfg <file>` | Ship an `ansible.cfg` with the job (e.g. `/configs/ansible.cfg`). The node runs the playbook with **its own** defaults otherwise. Refused if the playbook directory already ships one |
+| `--galaxy-dir <dir>` | Ship Galaxy content with the job: the directory's `roles/` and `collections/` are merged next to the playbook (the controller installs to `/configs/.galaxy`). A same-name clash with the playbook's own roles is refused rather than silently shadowed |
 | `--wait <seconds>` | Block until a slot frees instead of refusing pre-submit (default `0`, fail fast) |
 | `--collect <job-id>` | Re-attach to a `results-incomplete` job: records the real result and frees its slot **without re-executing** |
 | `--jobs-dir`, `--log-dir`, `--pools-file`, `--zones-file`, `--socket` | Override the defaults listed under Volumes |
