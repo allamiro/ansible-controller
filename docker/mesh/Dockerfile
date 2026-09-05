@@ -148,13 +148,15 @@ LABEL org.opencontainers.image.title="Ansible Mesh Orchestrator"
 # precedent as the controller's pip-vendor patch — the binary is rebuilt from
 # the EXACT v1.6.7 tag commit with only those three modules bumped to their
 # fixed releases. Drop this stage and return to COPYing upstream's binary once
-# a receptor release ships with patched deps. (The Phase 3 sidecar still runs
+# a receptor release ships with patched deps. The pins move whenever the scan
+# gate finds a fixed CVE in one of them (x/crypto v0.53.0 -> v0.55.0 for
+# CVE-2026-56854; x/net and x/text follow x/crypto's own go.mod requirements). (The Phase 3 sidecar still runs
 # upstream's image; switching it to this build is a follow-up once this image
 # is published, mesh plan Phase 11.)
 FROM golang:1.25-trixie@sha256:2c4c60ef415fbfa5e90300722293bef36c5e63fae17570ce18f580af933dbd73 AS receptor-build
 WORKDIR /src
 # Tag commit pinned, not the tag name — tags can be moved, commits cannot.
-RUN git clone --filter=blob:none https://github.com/ansible/receptor .  && git checkout -q d0798033b600f6f6ad0709e99dc7d58379a22bc6  && go get golang.org/x/crypto@v0.53.0 golang.org/x/net@v0.56.0 golang.org/x/text@v0.39.0  && go mod tidy  && CGO_ENABLED=0 go build -trimpath       -ldflags "-s -w -X github.com/ansible/receptor/internal/version.Version=1.6.7"       -o /receptor ./cmd/receptor-cl  && test "$(/receptor --version)" = "1.6.7"
+RUN git clone --filter=blob:none https://github.com/ansible/receptor .  && git checkout -q d0798033b600f6f6ad0709e99dc7d58379a22bc6  && go get golang.org/x/crypto@v0.55.0 golang.org/x/net@v0.57.0 golang.org/x/text@v0.41.0  && go mod tidy  && CGO_ENABLED=0 go build -trimpath       -ldflags "-s -w -X github.com/ansible/receptor/internal/version.Version=1.6.7"       -o /receptor ./cmd/receptor-cl  && test "$(/receptor --version)" = "1.6.7"
 
 # ---- execution-node: the image that RUNS work on a zone's network ----
 # = controller + ansible-runner (worker) + receptor (the mesh peer itself).

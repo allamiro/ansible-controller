@@ -318,7 +318,7 @@ risk column; anything that touches it must pass [§9.1](#91-non-disruption-check
       — built `FROM` the orchestrator stage rather than `${BASE}` so the pinned
       pip closure and its build-time assertions exist in exactly one place
 - [x] receptor rebuilt from the v1.6.7 tag commit with patched Go modules
-      (x/crypto 0.53.0, x/net 0.56.0, x/text 0.39.0) — upstream's binary carries
+      (x/crypto 0.55.0, x/net 0.57.0, x/text 0.41.0) — upstream's binary carries
       11 fixable HIGH CVEs and no fixed release exists yet; drop the source
       stage when upstream ships one
 - [x] Override the inherited port-22 `HEALTHCHECK` with a Receptor-readiness check (node runs receptor, not sshd; runs as uid 1000)
