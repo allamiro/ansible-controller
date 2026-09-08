@@ -137,14 +137,26 @@ make_runner() { # description tag access_level image extra_volume_args...
     --docker-pull-policy if-not-present "$@" \
     || die "runner registration failed for $desc"
 }
-# Each REQUIRED registration is checked by name — a raw count would let two
-# half-failed bootstraps (e.g. two validate registrations, no deploy) pass.
-runner_registered() { docker exec gitlab-lab-runner sh -c "grep -q 'name = \"$1\"' /etc/gitlab-runner/config.toml 2>/dev/null"; }
-if ! runner_registered lab-validate; then
+# Each REQUIRED registration is checked by name locally AND against GitLab —
+# a config.toml entry whose runner was deleted/paused/re-leveled server-side
+# would otherwise satisfy a local-only check while jobs hang or, worse, a
+# deploy runner made unprotected serves branch pipelines.
+runner_registered() { # name expected-access-level
+  docker exec gitlab-lab-runner sh -c "grep -q 'name = \"$1\"' /etc/gitlab-runner/config.toml 2>/dev/null" || return 1
+  local rid det
+  rid=$(glab GET "/projects/$PID/runners?per_page=100" | jq -r "[.[] | select(.description==\"$1\")][0].id // empty")
+  [ -n "$rid" ] || return 1
+  det=$(glab GET "/runners/$rid") || return 1
+  jq -e ".paused == false and .access_level == \"$2\"" <<<"$det" >/dev/null || return 1
+}
+drop_runner() { docker exec gitlab-lab-runner gitlab-runner unregister --name "$1" >/dev/null 2>&1 || true; }
+if ! runner_registered lab-validate not_protected; then
+  drop_runner lab-validate
   # validate: no secrets, no sockets, no mesh volumes — safe for MR pipelines
   make_runner lab-validate mesh-validate not_protected ansible-controller:e2e
 fi
-if ! runner_registered lab-deploy; then
+if ! runner_registered lab-deploy ref_protected; then
+  drop_runner lab-deploy
   # deploy: ref_protected; job containers get ONLY the three mesh volumes.
   # /run/receptor = submission authority; /var/lib/mesh = job state (so the
   # no-resubmission guard and collect work); /e2e-ssh = the disposable key.
@@ -206,18 +218,18 @@ glab GET "/projects/$PID/protected_branches/main" | jq -e \
 glab PUT "/projects/$PID" \
   --data-urlencode "only_allow_merge_if_pipeline_succeeds=true" \
   --data-urlencode "remove_source_branch_after_merge=true" >/dev/null
-# create-or-reconcile: an existing variable with the wrong value fails every
-# deploy's tripwire, and an unprotected one leaks to branch pipelines
+# create-or-reconcile: wrong value fails every deploy's tripwire, an
+# unprotected one leaks to branch pipelines, and a narrowed environment
+# scope silently hides it from the deploy job. Anything off → recreate
+# with the exact shape (a variable, unlike branch protection, has no
+# dangerous unconfigured window).
 dv=$(glab GET "/projects/$PID/variables/DEPLOY_ALLOWED" 2>/dev/null || echo '{}')
-if [ "$(jq -r '.value // empty' <<<"$dv")" != true ] || [ "$(jq -r '.protected' <<<"$dv")" != true ]; then
-  if [ "$(jq -r '.key // empty' <<<"$dv")" = DEPLOY_ALLOWED ]; then
-    glab PUT "/projects/$PID/variables/DEPLOY_ALLOWED" \
-      --data-urlencode "value=true" --data-urlencode "protected=true" >/dev/null
-  else
-    glab POST "/projects/$PID/variables" \
-      --data-urlencode "key=DEPLOY_ALLOWED" --data-urlencode "value=true" \
-      --data-urlencode "protected=true" >/dev/null
-  fi
+if ! jq -e '.value == "true" and .protected == true and .environment_scope == "*"' <<<"$dv" >/dev/null; then
+  [ "$(jq -r '.key // empty' <<<"$dv")" = DEPLOY_ALLOWED ] && \
+    glab DELETE "/projects/$PID/variables/DEPLOY_ALLOWED" >/dev/null 2>&1 || true
+  glab POST "/projects/$PID/variables" \
+    --data-urlencode "key=DEPLOY_ALLOWED" --data-urlencode "value=true" \
+    --data-urlencode "protected=true" --data-urlencode "environment_scope=*" >/dev/null
 fi
 
 cat > "$STATE/summary" <<SUMMARY

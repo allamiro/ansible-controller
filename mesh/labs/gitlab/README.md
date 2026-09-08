@@ -172,11 +172,13 @@ docker exec mesh-e2e-orchestrator receptorctl --socket /run/receptor/receptor.so
 docker exec mesh-e2e-orchestrator receptorctl --socket /run/receptor/receptor-b.sock work list
 
 # 2a. A matching unit exists and shows an error Detail / never started
-#     (e.g. "could not verify signature"): release it, then record the
-#     verdict via the collect job — trigger it with
+#     (e.g. "could not verify signature"): release it — VIA THE SAME SOCKET
+#     THAT LISTED IT (work records are ingress-specific; a unit created
+#     through ingress B exists only on receptor-b.sock) — then record the
+#     verdict via the collect job, triggered with
 #         JOB_ID=<job-id>  RESOLVE_AMBIGUOUS=failed
 #     (the script performs the record transition atomically and stamps it):
-docker exec mesh-e2e-orchestrator receptorctl --socket /run/receptor/receptor.sock work release <unit-id>
+docker exec mesh-e2e-orchestrator receptorctl --socket <the-socket-that-listed-it> work release <unit-id>
 
 # 2b. A matching unit exists and RAN (or is running): adopt it — trigger the
 #     collect job with
