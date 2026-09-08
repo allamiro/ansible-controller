@@ -1,0 +1,92 @@
+# Fresh single-box GitLab CE + Runner (+ a demo SSH target for standalone
+# runs), for a host that does not already run one. (Already running the
+# disposable lab's GitLab from mesh/labs/gitlab/? Reuse it — gitlab/setup.sh
+# takes any reachable instance's URL; do not start a second on the same port.)
+#
+# BEFORE first startup, create the interpolation/state files (no circular
+# dependency on setup.sh — it needs the GitLab API and runs afterwards):
+#
+#   mkdir -p gitlab/.gitlab-state
+#   echo 0 > gitlab/.gitlab-state/fips0
+#   # ALPHANUMERIC ONLY: the value is embedded in Omnibus's Ruby config in
+#   # single quotes — a quote character would break GitLab's first boot.
+#   echo "LAB_ROOT_PASSWORD=Lab$(openssl rand -hex 12)" > gitlab/.gitlab-state/lab.env
+#   echo "GITLAB_PORT=8929" >> gitlab/.gitlab-state/lab.env
+#
+#   docker compose --env-file gitlab/.gitlab-state/lab.env \
+#     -f gitlab/compose.gitlab.yml up -d --wait
+
+name: gitlab-prod
+
+services:
+  gitlab:
+    image: gitlab/gitlab-ce:19.3.1-ce.0
+    container_name: gitlab-prod-gitlab
+    hostname: ${GITLAB_HOST:-gitlab.lab.local}
+    shm_size: "256m"
+    networks:
+      labnet:
+        aliases: ["${GITLAB_HOST:-gitlab.lab.local}"]
+    ports:
+      - "${GITLAB_PORT:-8929}:${GITLAB_PORT:-8929}"
+    environment:
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url 'http://${GITLAB_HOST:-gitlab.lab.local}:${GITLAB_PORT:-8929}'
+        gitlab_rails['initial_root_password'] = '${LAB_ROOT_PASSWORD}'
+        gitlab_rails['gitlab_shell_ssh_port'] = 2222
+        prometheus_monitoring['enable'] = false
+        puma['worker_processes'] = 2
+        sidekiq['max_concurrency'] = 5
+    volumes:
+      - gitlab-config:/etc/gitlab
+      - gitlab-logs:/var/log/gitlab
+      - gitlab-data:/var/opt/gitlab
+      # FIPS-host workaround (RHEL/STIG): the Ubuntu-based image's OpenSSL
+      # cannot run in FIPS mode; mask the flag inside this container only.
+      # The fips0 file (a literal "0") is created in the pre-startup step
+      # documented above; setup.sh re-asserts it later.
+      - ./.gitlab-state/fips0:/proc/sys/crypto/fips_enabled:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:${GITLAB_PORT:-8929}/-/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 60
+      start_period: 480s
+
+  runner:
+    image: gitlab/gitlab-runner:v19.3.1
+    container_name: gitlab-prod-runner
+    networks: [labnet]
+    volumes:
+      # runner INFRASTRUCTURE holds the docker socket (docker executor);
+      # job containers never do. setup.sh registers the validate/deploy
+      # runner pair into runner-config on first bootstrap.
+      - /var/run/docker.sock:/var/run/docker.sock
+      - runner-config:/etc/gitlab-runner
+    depends_on:
+      gitlab:
+        condition: service_healthy
+
+  # Demo target for STANDALONE-mode runs: a plain sshd host on a network the
+  # controller joins via gitlab/controller.override.yml. setup.sh seeds its
+  # authorized key from the controller's ./ssh/id_ed25519.pub.
+  direct-target:
+    image: ${TARGET_IMAGE:-ansible-controller:e2e}
+    container_name: gitlab-prod-direct-target
+    networks:
+      directnet:
+        aliases: [direct-target]
+    volumes:
+      - ./.gitlab-state/target-ssh:/home/ansible/.ssh:ro
+      - target-host-keys:/etc/ssh/host_keys
+
+networks:
+  labnet:
+  directnet:
+
+volumes:
+  gitlab-config:
+  gitlab-logs:
+  gitlab-data:
+  runner-config:
+  target-host-keys:

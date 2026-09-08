@@ -250,5 +250,8 @@ Runners     : lab-validate (tag mesh-validate, unprotected)
 Mesh        : compose project mesh-e2e (node exec-e2e-a, target mesh-e2e-target)
 Teardown    : mesh/labs/gitlab/lab-down.sh
 SUMMARY
+say "controller entrypoint (ctl) extension"
+"$LAB/ctl-up.sh"
+
 say "lab is up"
 cat "$STATE/summary"

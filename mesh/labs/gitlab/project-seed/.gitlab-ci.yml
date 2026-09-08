@@ -1,25 +1,35 @@
-# Git-managed Ansible automation through the Receptor mesh.
+# Git-managed Ansible automation — GitLab as the everyday interface.
 #
-# Enforcement model (GitLab CE — Free tier):
-#   - MR approvals exist in CE but CANNOT be made blocking (approval RULES are
-#     a Premium feature). The technically enforced gate is instead:
-#       * protected main: nobody pushes, only Maintainers merge
-#       * "pipelines must succeed" merge check (validate must pass)
-#       * the deploy runner accepts PROTECTED refs only, so no branch or MR
-#         pipeline can ever reach the mesh control socket
-#       * DEPLOY_ALLOWED is a protected variable — visible to protected-ref
-#         pipelines only; the deploy script asserts it as a tripwire
-#   - Execution binds to the immutable reviewed commit: the runner checks out
-#     $CI_COMMIT_SHA (detached), and the deploy job stamps that SHA into the
-#     play's variables and its artifacts.
+# Two invocation channels exist side by side, both behind the SAME protected-
+# ref gate (the lab-deploy runner accepts protected refs only):
+#   - SSH channel (deploy-* jobs): the job holds no mesh authority at all; it
+#     SSHes to the controller (key in a protected file variable, host key
+#     PINNED in CTL_KNOWN_HOSTS) and invokes ctl-run, which fetches THIS
+#     project at $CI_COMMIT_SHA from GitLab and executes it. The environment
+#     map on the controller — not this file — decides mode, destination,
+#     inventory, and credentials.
+#   - Socket channel (collect): the proven recovery path keeps running where
+#     the mesh state lives, via the runner's mounted volumes.
 #
-# The deploy job is when:manual — a human releases each execution. GitLab job
-# "retry" is guarded by scripts/mesh-deploy.sh: it refuses to dispatch while
-# any tracked mesh job is in a non-final state (submit-ambiguous /
-# results-incomplete / running), preserving the dispatcher's no-resubmission
-# boundary; recover with the collect job first.
+# CE governance (verified): approvals are optional in CE; the enforced gate
+# is protected main + pipelines-must-succeed + protected runner/variables +
+# these manual buttons. resource_group serializes THIS project's deploy/
+# collect jobs; ctl-run's per-environment lock serializes across everything
+# else that could reach the controller.
 
 stages: [validate, deploy, collect]
+
+workflow:
+  rules:
+    # schedule/trigger/tag first: the duplicate-suppression rule below must
+    # only kill PUSH pipelines that have an MR twin, never these sources
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "trigger"
+    - if: $CI_COMMIT_TAG
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
+      when: never
+    - if: $CI_COMMIT_BRANCH
 
 validate:
   stage: validate
@@ -30,57 +40,97 @@ validate:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_COMMIT_TAG
   script:
-    - ansible --version
     - ansible-playbook --syntax-check -i inventory/lab.ini playbooks/site.yml playbooks/ping.yml
     - ansible-lint playbooks/ || { echo "ansible-lint findings above"; exit 1; }
 
-deploy:
-  stage: deploy
-  tags: [mesh-deploy]
+# ---- SSH channel to the controller ------------------------------------------
+.ctl-ssh:
+  tags: [mesh-deploy]                   # protected runner: protected refs only
   image:
-    name: ansible-orchestrator:e2e
+    name: ansible-controller:e2e
     entrypoint: [""]
+  resource_group: mesh-lab
+  before_script:
+    - chmod 600 "$CTL_SSH_KEY"
+    - CTL="ssh -i $CTL_SSH_KEY -o UserKnownHostsFile=$CTL_KNOWN_HOSTS -o StrictHostKeyChecking=yes -o BatchMode=yes ansible@${CTL_HOST:-ctl.lab.local}"
+
+# routine execution after review: merge to protected main, human releases
+deploy-mesh:
+  extends: .ctl-ssh
+  stage: deploy
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
       when: manual
-  # GitLab serializes jobs sharing a resource_group, closing the window in
-  # which two concurrently released deploys could both pass the unresolved-
-  # state scan before either records its own dispatch.
-  resource_group: mesh-lab
-  environment:
-    name: mesh-lab
-  variables:
-    MESH_NODE: exec-e2e-a
-    PLAYBOOK: site.yml
-    MESH_WAIT: "60"
+  environment: { name: lab-mesh }
+  variables: { PLAYBOOK: playbooks/site.yml }
   script:
-    - scripts/mesh-deploy.sh
-  artifacts:
-    when: always
-    paths: [mesh-artifacts/]
-    expire_in: 1 week
-  timeout: 15m
+    - $CTL ctl-run --env lab-mesh --project "$CI_PROJECT_PATH" --sha "$CI_COMMIT_SHA"
+        --playbook "$PLAYBOOK" --pipeline "$CI_PIPELINE_ID" --job "$CI_JOB_ID" --wait 120
 
-# Manual recovery for a run whose results stream broke (results-incomplete)
-# or whose submission outcome is unknown (submit-ambiguous). Pass the mesh
-# job id when triggering:  JOB_ID=<uuid>
-# For a record frozen at created/submitting/running because the deploy job
-# container was killed (cancel/timeout) before mesh-run could finalize, also
-# set RECONCILE=1 — the script verifies the record is stale and no unit is
-# still Running before transitioning it to a collectable state.
+deploy-direct:
+  extends: .ctl-ssh
+  stage: deploy
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+      when: manual
+  environment: { name: lab-direct }
+  variables: { PLAYBOOK: playbooks/site.yml }
+  script:
+    - $CTL ctl-run --env lab-direct --project "$CI_PROJECT_PATH" --sha "$CI_COMMIT_SHA"
+        --playbook "$PLAYBOOK" --pipeline "$CI_PIPELINE_ID" --job "$CI_JOB_ID"
+
+# scheduled connectivity check (create the schedule in CI/CD > Schedules)
+scheduled-check:
+  extends: .ctl-ssh
+  stage: deploy
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+  environment: { name: lab-mesh }
+  script:
+    - $CTL ctl-run --env lab-mesh --project "$CI_PROJECT_PATH" --sha "$CI_COMMIT_SHA"
+        --playbook playbooks/ping.yml --pipeline "$CI_PIPELINE_ID" --job "$CI_JOB_ID" --wait 90
+
+# API-triggered execution: needs the trigger token AND the explicit consent
+# variable — a trigger without DEPLOY_CONFIRM=yes creates no deploy job.
+api-deploy:
+  extends: .ctl-ssh
+  stage: deploy
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "trigger" && $DEPLOY_CONFIRM == "yes"
+  environment: { name: lab-mesh }
+  variables: { PLAYBOOK: playbooks/site.yml }
+  script:
+    - $CTL ctl-run --env lab-mesh --project "$CI_PROJECT_PATH" --sha "$CI_COMMIT_SHA"
+        --playbook "$PLAYBOOK" --pipeline "$CI_PIPELINE_ID" --job "$CI_JOB_ID" --wait 120
+
+# protected-tag releases: same channel, released ref. Requires the tag
+# PATTERN to be protected (bootstrap protects v* — an unprotected tag can
+# never reach the ref_protected deploy runner).
+tag-deploy:
+  extends: .ctl-ssh
+  stage: deploy
+  rules:
+    - if: $CI_COMMIT_TAG
+      when: manual
+  environment: { name: lab-mesh }
+  variables: { PLAYBOOK: playbooks/site.yml }
+  script:
+    - $CTL ctl-run --env lab-mesh --project "$CI_PROJECT_PATH" --sha "$CI_COMMIT_SHA"
+        --playbook "$PLAYBOOK" --pipeline "$CI_PIPELINE_ID" --job "$CI_JOB_ID" --wait 120
+
+# ---- socket channel: result recovery (proven path, unchanged) ---------------
+# JOB_ID=<mesh uuid>; RECONCILE=1 for stale active records;
+# RESOLVE_AMBIGUOUS=failed|<unit-id> for operator verdicts.
 collect:
   stage: collect
   tags: [mesh-deploy]
-  # needs:[] frees collect from stage ordering: it must be playable exactly
-  # when deploy failed or was canceled — a stage-ordered manual job would be
-  # skipped in that pipeline, locking the operator out of recovery.
-  needs: []
   image:
     name: ansible-orchestrator:e2e
     entrypoint: [""]
-  # recovery-only: it must never hold the pipeline out of the success state
-  # when no recovery is needed
+  needs: []
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
       when: manual

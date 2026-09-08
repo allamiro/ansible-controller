@@ -32,7 +32,7 @@ echo "==> removing leftover runner JOB containers (lab network only)"
 # compose/e2e teardown below runs.
 for c in $(docker ps -aq --filter network=gitlab-lab_labnet || true); do
   name=$(docker inspect -f '{{.Name}}' "$c" 2>/dev/null | tr -d /) || continue
-  case "$name" in gitlab-lab-gitlab|gitlab-lab-runner|'') continue;; esac
+  case "$name" in gitlab-lab-gitlab|gitlab-lab-runner|gitlab-lab-ctl|gitlab-lab-direct-target|'') continue;; esac
   if docker rm -f "$c" >/dev/null 2>&1; then
     echo "    removed job container $name"
   elif docker inspect "$c" >/dev/null 2>&1; then
@@ -40,6 +40,9 @@ for c in $(docker ps -aq --filter network=gitlab-lab_labnet || true); do
     fail=1
   fi   # vanished between listing and rm: nothing to do
 done
+
+echo "==> ctl extension stack (containers + volumes)"
+docker compose -f "$LAB/compose.ctl.yml" down -v --remove-orphans || fail=1
 
 echo "==> gitlab-lab stack (containers + volumes)"
 docker compose -f "$LAB/compose.gitlab.yml" down -v --remove-orphans || fail=1

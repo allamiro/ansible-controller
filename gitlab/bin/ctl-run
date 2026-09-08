@@ -1,0 +1,252 @@
+#!/bin/bash
+# ctl-run — the controller-side GitLab project fetch-and-run command.
+#
+#   ctl-run --env <name> --project <group/path> --sha <40-hex> \
+#           --playbook <relative.yml> [--pipeline N --job N] [--wait N]
+#   ctl-run --collect <mesh-job-uuid>            # pass-through recovery
+#
+# This is the ONE integration point between GitLab and the controller: a CI
+# job (or an operator) invokes it over authenticated SSH; it fetches the
+# EXACT reviewed commit from GitLab into an isolated per-run directory and
+# executes it through the existing engines — ansible-playbook (standalone)
+# or /usr/local/mesh/bin/mesh-run (mesh). It adds NO service, NO API, and
+# NO new execution path.
+#
+# AUTHORIZATION MODEL — the caller chooses almost nothing:
+#   - The ENVIRONMENT MAP (/etc/ctl-run/environments.yml, administrator-
+#     owned, mounted read-only) decides the execution mode, the mesh
+#     destination, the inventory path inside the project, the target
+#     credential, the GitLab base URL, and WHICH PROJECTS an environment
+#     may run. The caller supplies only: env name, project path (checked
+#     against the allowlist), commit SHA, playbook path, and optional
+#     GitLab pipeline/job ids for the audit record.
+#   - Fetch credentials (read-only deploy tokens) live in
+#     /etc/ctl-run/secrets/<env>.token on the CONTROLLER — CI never sees
+#     them and cannot choose which one is used.
+#   - Being able to run this command at all IS the deployment authority:
+#     it executes as the controller's ansible user, whose broad local
+#     privileges (mesh sockets = submission authority, passwordless sudo
+#     on the controller) are the repository's documented reality. The
+#     enforced boundary is WHO CAN LOG IN — the protected deploy runner's
+#     key — not this wrapper. This wrapper validates inputs and stages
+#     safely; it is not a sandbox for malicious playbooks. Trusted-author
+#     review (protected branches) is the control for playbook content.
+#
+# EXECUTION SEMANTICS preserved from the platform:
+#   - never-run-twice: mesh dispatch inherits mesh-run's guarantees; this
+#     wrapper additionally refuses to dispatch while any tracked mesh job
+#     is non-final (the CI-retry guard), and holds a per-environment lock
+#     so two invocations cannot interleave fetch/dispatch.
+#   - real exit codes: the playbook's rc is this command's rc.
+#   - audit: /var/lib/gitlab-runs/records/<run-id>.json links project,
+#     sha, pipeline, job, env, mode, staging dir, mesh uuid and rc. This
+#     record is NEW metadata added by this integration (nothing in the
+#     platform recorded GitLab identifiers before).
+#
+# Explicitly NOT supported (documented, refused): git submodules and LFS
+# content; project paths, envs, SHAs or playbook paths outside the strict
+# grammars below; URLs or credential names supplied by the caller.
+set -euo pipefail
+
+ENVS_FILE="${CTL_RUN_ENVS:-/etc/ctl-run/environments.yml}"
+SECRETS_DIR="${CTL_RUN_SECRETS:-/etc/ctl-run/secrets}"
+RUNS_DIR="${CTL_RUN_DIR:-/var/lib/gitlab-runs}"
+MESH_RUN=/usr/local/mesh/bin/mesh-run
+
+die() { echo "ctl-run: ERROR: $*" >&2; exit 2; }
+
+ENVN= PROJECT= SHA= PLAYBOOK= PIPELINE= JOB= WAIT=120 COLLECT=
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --env)      ENVN="${2:?}"; shift 2;;
+    --project)  PROJECT="${2:?}"; shift 2;;
+    --sha)      SHA="${2:?}"; shift 2;;
+    --playbook) PLAYBOOK="${2:?}"; shift 2;;
+    --pipeline) PIPELINE="${2:?}"; shift 2;;
+    --job)      JOB="${2:?}"; shift 2;;
+    --wait)     WAIT="${2:?}"; shift 2;;
+    --collect)  COLLECT="${2:?}"; shift 2;;
+    *) die "unknown argument: $1";;
+  esac
+done
+
+# ---- recovery pass-through ---------------------------------------------------
+if [ -n "$COLLECT" ]; then
+  case "$COLLECT" in *[!0-9a-fA-F-]*|'') die "--collect takes a mesh job uuid";; esac
+  exec "$MESH_RUN" --collect "$COLLECT"
+fi
+
+# ---- strict input grammars (reject shell/path games at the boundary) ----------
+[ -n "$ENVN" ] && [ -n "$PROJECT" ] && [ -n "$SHA" ] && [ -n "$PLAYBOOK" ] \
+  || die "usage: ctl-run --env <name> --project <group/path> --sha <40-hex> --playbook <rel.yml> [--pipeline N --job N --wait N]"
+case "$ENVN"     in *[!a-z0-9-]*|''|-*) die "env '$ENVN' invalid ([a-z0-9-]+)";; esac
+case "$PROJECT"  in *[!A-Za-z0-9._/-]*|''|/*|*..*) die "project '$PROJECT' invalid";; esac
+case "$SHA"      in *[!0-9a-f]*|'') die "sha must be 40 lowercase hex";; esac
+[ "${#SHA}" -eq 40 ] || die "sha must be exactly 40 hex characters (got ${#SHA})"
+case "$PLAYBOOK" in *[!A-Za-z0-9._/-]*|''|/*|*..*) die "playbook '$PLAYBOOK' invalid (relative, no ..)";; esac
+case "$PLAYBOOK" in *.yml|*.yaml) ;; *) die "playbook must be a .yml/.yaml path";; esac
+case "$WAIT"     in *[!0-9]*|'') die "--wait must be a number";; esac
+for n in $PIPELINE $JOB; do case "$n" in *[!0-9]*) die "--pipeline/--job must be numeric";; esac; done
+
+# ---- environment map (admin-owned; python for real YAML parsing) --------------
+[ -f "$ENVS_FILE" ] || die "no environment map at $ENVS_FILE"
+envjson=$(python3 - "$ENVS_FILE" "$ENVN" 2>&1 <<'PY'
+import sys, json
+try:
+    import yaml
+    with open(sys.argv[1]) as f: data = yaml.safe_load(f)
+except ImportError:
+    sys.exit("pyyaml missing in this runtime")
+envs = (data or {}).get("environments") or {}
+e = envs.get(sys.argv[2])
+if not isinstance(e, dict): sys.exit(f"environment '{sys.argv[2]}' is not defined")
+print(json.dumps(e))
+PY
+) || die "environment lookup failed: $envjson"
+efield() { python3 -c "import json,sys; e=json.loads(sys.argv[1]); v=e.get(sys.argv[2],''); print(v if v is not None else '')" "$envjson" "$1"; }
+eallowed() { python3 -c "
+import json,sys
+e=json.loads(sys.argv[1])
+sys.exit(0 if sys.argv[2] in (e.get('allowed_projects') or []) else 1)" "$envjson" "$PROJECT"; }
+
+MODE=$(efield mode); GITLAB_URL=$(efield gitlab_url); INV_REL=$(efield inventory)
+SSH_KEY=$(efield ssh_key); NODE=$(efield node); POOL=$(efield pool); ZONE=$(efield zone)
+GALAXY=$(efield galaxy_dir); HOSTKEY_CHECKING=$(efield hostkey_checking)
+case "$MODE" in standalone|mesh) ;; *) die "environment '$ENVN' has invalid mode '$MODE'";; esac
+[ -n "$GITLAB_URL" ] || die "environment '$ENVN' defines no gitlab_url"
+[ -n "$INV_REL" ] || die "environment '$ENVN' defines no inventory"
+case "$INV_REL" in /*|*..*) die "environment inventory path must be project-relative";; esac
+eallowed || die "project '$PROJECT' is not allowed in environment '$ENVN'"
+TOKEN_FILE="$SECRETS_DIR/$ENVN.token"
+[ -r "$TOKEN_FILE" ] || die "no fetch credential for environment '$ENVN' (expected $TOKEN_FILE on the controller)"
+
+# ---- per-environment serialization + CI-retry guard ---------------------------
+mkdir -p "$RUNS_DIR/locks" "$RUNS_DIR/records"
+exec 9>"$RUNS_DIR/locks/$ENVN"
+flock -n 9 || die "environment '$ENVN' is busy (another ctl-run holds its lock) — refusing to interleave"
+if [ "$MODE" = mesh ]; then
+  unresolved=""
+  for m in /var/lib/mesh/jobs/*/meta.json; do
+    [ -f "$m" ] || continue
+    s=$(sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$m" | tail -1)
+    case "$s" in created|submitting|running|submit-ambiguous|results-incomplete)
+      unresolved="$unresolved $(basename "$(dirname "$m")")($s)";; esac
+  done
+  [ -z "$unresolved" ] || die "unresolved mesh job(s):$unresolved — recover first (ctl-run --collect <uuid>, or the lab README's ambiguous procedure); refusing to dispatch"
+fi
+
+# ---- fetch the exact reviewed commit ------------------------------------------
+RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+STAGE="$RUNS_DIR/$ENVN/$SHA/$RUN_ID"
+mkdir -p "$STAGE"
+cleanup_stage_on_refusal() { rm -rf "$STAGE"; }
+# token file format: <deploy-token-username>:<token> — deploy tokens
+# authenticate only with their generated username
+IFS=: read -r CTL_GIT_USER CTL_GIT_TOKEN < "$TOKEN_FILE"
+[ -n "$CTL_GIT_USER" ] && [ -n "$CTL_GIT_TOKEN" ] || die "malformed credential file for '$ENVN' (expected user:token)"
+export CTL_GIT_USER CTL_GIT_TOKEN
+proj_url="$GITLAB_URL/${PROJECT}.git"
+echo "ctl-run: env=$ENVN mode=$MODE project=$PROJECT sha=$SHA"
+git -C "$STAGE" init -q
+git -C "$STAGE" remote add origin "$proj_url"
+# credentials travel via a one-shot helper, never the URL/argv
+ghelper='!f() { echo "username=$CTL_GIT_USER"; echo "password=$CTL_GIT_TOKEN"; }; f'
+GIT_ASKPASS=/bin/true git -C "$STAGE" -c credential.helper="$ghelper" \
+  fetch -q --depth 1 origin "$SHA" 2>/dev/null \
+  || { GIT_ASKPASS=/bin/true git -C "$STAGE" -c credential.helper="$ghelper" \
+         fetch -q origin '+refs/heads/*:refs/remotes/origin/*' 2>/dev/null \
+       && git -C "$STAGE" cat-file -e "$SHA^{commit}" 2>/dev/null; } \
+  || { cleanup_stage_on_refusal; die "cannot fetch commit $SHA from $PROJECT — wrong SHA, revoked token, or unreachable GitLab"; }
+unset CTL_GIT_TOKEN CTL_GIT_USER
+git -C "$STAGE" -c advice.detachedHead=false checkout -q "$SHA"
+[ "$(git -C "$STAGE" rev-parse HEAD)" = "$SHA" ] || { cleanup_stage_on_refusal; die "checkout does not match the requested SHA"; }
+# explicit refusals: content this integration does not stage
+[ ! -f "$STAGE/.gitmodules" ] || { cleanup_stage_on_refusal; die "project uses git submodules — unsupported by this integration (documented refusal)"; }
+if grep -qs 'filter=lfs' "$STAGE/.gitattributes" 2>/dev/null; then
+  cleanup_stage_on_refusal; die "project uses Git LFS — unsupported by this integration (documented refusal)"
+fi
+rm -rf "$STAGE/.git"   # execution works from an immutable tree, not a repo
+
+# provenance convention: a project carrying playbooks/vars/commit.yml gets
+# the REAL reviewed commit stamped over the committed placeholder, so the
+# managed host records exactly what was applied
+if [ -f "$STAGE/playbooks/vars/commit.yml" ]; then
+  printf -- '---\nlab_commit: "%s"\nlab_pipeline: "%s"\n' "$SHA" "${PIPELINE:-none}" \
+    > "$STAGE/playbooks/vars/commit.yml"
+fi
+
+PB="$STAGE/$PLAYBOOK"; INV="$STAGE/$INV_REL"
+[ -f "$PB" ]  || { cleanup_stage_on_refusal; die "playbook '$PLAYBOOK' not in the fetched tree"; }
+[ -e "$INV" ] || { cleanup_stage_on_refusal; die "environment inventory '$INV_REL' not in the fetched tree"; }
+
+record() { # status rc [mesh_job]
+  python3 - "$RUNS_DIR/records/$RUN_ID.json" <<PY
+import json, sys, os, tempfile
+rec = {
+  "run_id": "$RUN_ID", "env": "$ENVN", "mode": "$MODE",
+  "project": "$PROJECT", "sha": "$SHA", "playbook": "$PLAYBOOK",
+  "gitlab_pipeline": "${PIPELINE:-}", "gitlab_job": "${JOB:-}",
+  "stage_dir": "$STAGE", "status": "$1", "rc": "$2", "mesh_job": "${3:-}",
+}
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(sys.argv[1]))
+with os.fdopen(fd, "w") as f: json.dump(rec, f)
+os.replace(tmp, sys.argv[1])
+PY
+}
+record started ""
+
+# ---- execute -------------------------------------------------------------------
+rc=0
+if [ "$MODE" = standalone ]; then
+  args=( -i "$INV" )
+  [ -n "$SSH_KEY" ] && args+=( --private-key "$SSH_KEY" )
+  # host-key checking follows the site's ansible.cfg unless the ENV MAP
+  # explicitly overrides (e.g. a lab whose targets regenerate host keys) —
+  # ctl-run never weakens a hardened configuration on its own
+  [ -n "$HOSTKEY_CHECKING" ] && export ANSIBLE_HOST_KEY_CHECKING="$HOSTKEY_CHECKING"
+  ansible-playbook "${args[@]}" "$PB" || rc=$?
+  echo "ctl-run: run=$RUN_ID standalone rc=$rc"
+  record finished "$rc"
+else
+  dest=()
+  [ -n "$NODE" ] && dest+=( --node "$NODE" )
+  [ -n "$POOL" ] && dest+=( --pool "$POOL" )
+  [ -n "$ZONE" ] && dest+=( --zone "$ZONE" )
+  [ "${#dest[@]}" = 2 ] || { record refused 2; die "environment '$ENVN' must define exactly one of node/pool/zone"; }
+  margs=( "${dest[@]}" --playbook "$PB" --inventory "$INV" --wait "$WAIT" )
+  [ -n "$SSH_KEY" ] && margs+=( --ssh-key "$SSH_KEY" )
+  [ -n "$GALAXY" ]  && margs+=( --galaxy-dir "$GALAXY" )
+  touch "$STAGE/.dispatch-sentinel"
+  out=$("$MESH_RUN" "${margs[@]}" 2>&1 | tee /dev/stderr) || rc=${PIPESTATUS[0]}
+  mesh_job=$(grep -E '^mesh-run: ' <<<"$out" | grep -o 'job=[0-9a-f-]*' | head -1 | cut -d= -f2 || true)
+  if [ -z "$mesh_job" ]; then
+    # a broken stream can end the run before mesh-run prints an id — adopt
+    # only a record CREATED SINCE the sentinel that matches THIS dispatch
+    pbb=$(basename "$PB")
+    for d in $(find /var/lib/mesh/jobs -mindepth 1 -maxdepth 1 -type d -newer "$STAGE/.dispatch-sentinel" 2>/dev/null); do
+      grep -qs "\"playbook\": \"$pbb\"" "$d/meta.json" || continue
+      if [ -n "$mesh_job" ]; then mesh_job=""; break; fi   # two matches: refuse to guess
+      mesh_job=$(basename "$d")
+    done
+  fi
+  echo "ctl-run: run=$RUN_ID mesh rc=$rc mesh_job=${mesh_job:-unknown}"
+  record finished "$rc" "${mesh_job:-}"
+  if [ -n "$mesh_job" ] && [ -f "/var/lib/mesh/jobs/$mesh_job/meta.json" ]; then
+    # extend the mesh record with the GitLab linkage (new metadata, additive)
+    python3 - "/var/lib/mesh/jobs/$mesh_job/meta.json" <<PY || true
+import json, sys, os, tempfile
+p = sys.argv[1]
+with open(p) as f: m = json.load(f)
+m["gitlab"] = {"project": "$PROJECT", "sha": "$SHA",
+               "pipeline": "${PIPELINE:-}", "job": "${JOB:-}",
+               "env": "$ENVN", "ctl_run": "$RUN_ID"}
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(p))
+with os.fdopen(fd, "w") as f: json.dump(m, f)
+os.replace(tmp, p)
+PY
+  fi
+fi
+
+# staged trees are kept for the audit trail of the LAST few runs only
+ls -1dt "$RUNS_DIR/$ENVN"/*/* 2>/dev/null | tail -n +6 | xargs -r rm -rf
+exit "$rc"

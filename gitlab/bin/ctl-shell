@@ -1,0 +1,23 @@
+#!/bin/bash
+# Forced command for the CI deploy key (authorized_keys: restrict,command=).
+# Narrows that key's authority from "shell as ansible" to "ctl-run only":
+# the original command must be a plain ctl-run invocation, free of shell
+# metacharacters, and is exec'd word-split — never re-interpreted by a shell.
+# (ctl-run then enforces its own strict argument grammars.)
+set -euo pipefail
+cmd="${SSH_ORIGINAL_COMMAND:-}"
+case "$cmd" in
+  "ctl-run "*) ;;
+  *) echo "ctl-shell: this key may only invoke ctl-run" >&2; exit 2;;
+esac
+case "$cmd" in
+  *[\;\&\|\`\$\<\>\(\)\{\}\\\'\"\*\?\~\!]*) echo "ctl-shell: rejected — shell metacharacters in command" >&2; exit 2;;
+esac
+read -r -a argv <<<"$cmd"
+# Escalate deliberately: mesh control sockets are 0600 to the receptor uid
+# (socket access IS submission authority), and the platform's supported
+# dispatch path (make mesh-run -> docker exec) already runs as root. The
+# ansible account holds broad passwordless sudo by the platform's design,
+# so this channel grants the SAME authority — constrained to ctl-run's
+# argv by this forced command, not widened by it.
+exec sudo -n /usr/local/lab-bin/"${argv[0]}" "${argv[@]:1}"
