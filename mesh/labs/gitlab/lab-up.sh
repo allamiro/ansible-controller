@@ -107,8 +107,15 @@ if ! glab GET "/projects/root%2Fmesh-automation" >/dev/null 2>&1; then
     --data-urlencode "initialize_with_readme=false" >/dev/null
 fi
 PID=$(glab GET "/projects/root%2Fmesh-automation" | jq -r .id)
+# add-or-tolerate-existing, then VERIFY: a swallowed transient failure here
+# would surface later as inexplicable dev1 permission errors
 glab POST "/projects/$PID/members" \
   --data-urlencode "user_id=$DEV_ID" --data-urlencode "access_level=30" >/dev/null 2>&1 || true
+lvl=$(glab GET "/projects/$PID/members/all/$DEV_ID" 2>/dev/null | jq -r '.access_level // 0')
+if [ "$lvl" -lt 30 ]; then
+  glab PUT "/projects/$PID/members/$DEV_ID" --data-urlencode "access_level=30" >/dev/null \
+    || die "dev1 is not a Developer on the project (access_level=$lvl) and could not be raised"
+fi
 
 say "runners: validate (unprotected) + deploy (ref_protected)"
 make_runner() { # description tag access_level image extra_volume_args...
@@ -166,19 +173,33 @@ prot=$(glab GET "/projects/$PID/protected_branches/main" 2>/dev/null || echo '{}
 if ! jq -e '(.push_access_levels | length == 1 and .[0].access_level == 0)
             and (.merge_access_levels | length == 1 and .[0].access_level == 40)
             and (.allow_force_push == false)' <<<"$prot" >/dev/null; then
+  # The policy is absent or WRONG (extra principals, force push, ...).
+  # PATCH cannot help here: it APPENDS access entries rather than replacing
+  # extras, so a drifted policy must be recreated. The brief unprotected
+  # window exists only in this already-wrong state; the POST is retried and
+  # a persistent failure aborts LOUDLY rather than leaving main silently
+  # open. The exact-match rerun path above never enters this branch.
   if [ "$(jq -r '.name // empty' <<<"$prot")" = main ]; then
-    glab PATCH "/projects/$PID/protected_branches/main" \
-      --data-urlencode "allowed_to_push[][access_level]=0" \
-      --data-urlencode "allowed_to_merge[][access_level]=40" \
-      --data-urlencode "allow_force_push=false" >/dev/null
-  else
-    glab POST "/projects/$PID/protected_branches" \
+    glab DELETE "/projects/$PID/protected_branches/main" >/dev/null
+  fi
+  for attempt in 1 2 3; do
+    if glab POST "/projects/$PID/protected_branches" \
       --data-urlencode "name=main" \
       --data-urlencode "push_access_level=0" \
       --data-urlencode "merge_access_level=40" \
-      --data-urlencode "allow_force_push=false" >/dev/null
-  fi
+      --data-urlencode "allow_force_push=false" >/dev/null; then
+      break
+    fi
+    [ "$attempt" = 3 ] && die "FAILED to protect main after 3 attempts — main is currently UNPROTECTED; re-run lab-up.sh or protect it in the UI before using the lab"
+    sleep 3
+  done
 fi
+# post-condition, whichever path ran: the exact policy is in force
+glab GET "/projects/$PID/protected_branches/main" | jq -e \
+  '(.push_access_levels | length == 1 and .[0].access_level == 0)
+   and (.merge_access_levels | length == 1 and .[0].access_level == 40)
+   and (.allow_force_push == false)' >/dev/null \
+  || die "main protection verification failed"
 glab PUT "/projects/$PID" \
   --data-urlencode "only_allow_merge_if_pipeline_succeeds=true" \
   --data-urlencode "remove_source_branch_after_merge=true" >/dev/null
