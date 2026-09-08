@@ -33,8 +33,8 @@ flowchart LR
         N3["exec-net20-a"] ; N4["exec-net20-b"]
     end
     N1 & N2 & N3 & N4 -. "dials OUT, mTLS" .-> A
-    N1 -- SSH --> T1["dmz servers"]
-    N3 -- SSH --> T2["net20 servers"]
+    N1 -- "SSH / WinRM" --> T1["dmz servers<br/>(Linux or Windows)"]
+    N3 -- "SSH / WinRM" --> T2["net20 servers<br/>(Linux or Windows)"]
 ```
 
 This guide deploys **2 networks × 2 nodes each** for dispatch failover.
@@ -62,7 +62,7 @@ search-and-replace with your real ones before running anything.
 | Control host | 1 | Linux x86_64/arm64 | Docker Engine + `docker compose` plugin, `git`, `make`, `openssl`; `cosign` recommended |
 | Execution node | 4 (2 per network) | Linux x86_64/arm64 | Docker Engine + `docker compose` plugin, `openssl`, `curl` |
 | Secure admin workstation | 1 (can be a laptop) | Linux/macOS | `openssl` only |
-| Your targets | existing servers | any | nothing new — just SSH access from their local node |
+| Your targets | existing servers | any (incl. Windows) | nothing new — SSH (22) or WinRM (5985/5986) access from their local node |
 
 Install Docker per the [official instructions](https://docs.docker.com/engine/install/)
 for your distribution, then confirm on each host:
@@ -90,6 +90,19 @@ all live inside that image.
   `podman healthcheck run <container>` yourself).
 
 Pick one runtime per host — don't mix.
+
+### Windows targets (WinRM)
+
+Nothing extra to install: `pywinrm` with NTLM support is baked into the
+controller image and inherited by the execution-node image, so a node
+manages Windows servers in its network over WinRM exactly as it manages
+Linux over SSH — the node is the WinRM client, dialing out to TCP
+5985/5986 on the target. Declare the connection in the inventory
+(`ansible_connection=winrm`, `ansible_winrm_transport=ntlm`, …) per the
+main README's [WinRM section](../README.md#managing-windows-hosts-winrm).
+One limit applies on nodes just as on the controller: the **Kerberos**
+transport needs system libraries the image does not ship — NTLM works out
+of the box.
 
 ---
 

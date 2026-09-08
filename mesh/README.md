@@ -138,8 +138,9 @@ reached from that node over SSH.
 |---|---|---|---|---|
 | Execution node | Control host | TCP 27199 | Outbound from the node network | Receptor mesh, ingress A (mTLS) |
 | Execution node | Control host | TCP 27200 | Outbound from the node network | Receptor mesh, ingress B (mTLS, redundancy) |
-| Execution node | Its targets | TCP 22 | Inside the closed network | Ansible over SSH |
-| Controller | Directly-reachable targets | TCP 22 | Direct path | Unchanged non-mesh runs |
+| Execution node | Its Linux/Unix targets | TCP 22 | Inside the closed network | Ansible over SSH |
+| Execution node | Its Windows targets | TCP 5985/5986 | Inside the closed network | Ansible over WinRM (pywinrm/NTLM ships in the node image; see the main README's [WinRM section](../README.md#managing-windows-hosts-winrm)) |
+| Controller | Directly-reachable targets | TCP 22 (SSH) / 5985–5986 (WinRM) | Direct path | Unchanged non-mesh runs |
 
 Nothing connects inbound into a closed network. The control host is the only
 listener the mesh adds (27199/27200), and both listeners require a
