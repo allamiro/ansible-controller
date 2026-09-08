@@ -1,0 +1,5 @@
+---
+# Overwritten by scripts/mesh-deploy.sh at dispatch time with the pipeline's
+# $CI_COMMIT_SHA. The committed defaults make local syntax checks pass.
+lab_commit: "uncommitted"
+lab_pipeline: "none"

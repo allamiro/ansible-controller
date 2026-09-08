@@ -1,0 +1,85 @@
+# GitLab CE integration lab — the Git/CI half of the demonstration.
+#
+# This compose project is DELIBERATELY separate from the mesh: the mesh half
+# is the repository's disposable e2e environment (mesh/tests/e2e.compose.yml,
+# project "mesh-e2e"), started by lab-up.sh before this file. The two stacks
+# share NO network — the only coupling is that the deploy runner's JOB
+# containers mount three mesh-e2e named volumes (control sockets, job state,
+# the disposable SSH key), configured at runner registration in lab-up.sh.
+# Control-socket write access IS work-submission authority in the mesh's
+# trust model, which is exactly why only the ref_protected deploy runner's
+# jobs ever see that volume.
+#
+# Versions are pinned; lab-up.sh asserts the pins here match what it expects.
+# Everything (volumes included) is destroyed by lab-down.sh.
+
+name: gitlab-lab
+
+services:
+  gitlab:
+    image: gitlab/gitlab-ce:19.3.1-ce.0
+    container_name: gitlab-lab-gitlab
+    hostname: gitlab.lab.local
+    shm_size: "256m"
+    networks:
+      labnet:
+        aliases: [gitlab.lab.local]
+    ports:
+      - "8929:8929"          # host access for the operator + seed pushes
+    environment:
+      # Trimmed for a 6-CPU/30G lab host: no monitoring stack, small
+      # puma/sidekiq. external_url carries the port so every clone URL GitLab
+      # hands to runners resolves both on labnet (alias above) and from the
+      # host (published port). LAB_ROOT_PASSWORD comes from the generated
+      # .lab-state/lab.env — disposable, never committed.
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url 'http://gitlab.lab.local:8929'
+        gitlab_rails['initial_root_password'] = '${LAB_ROOT_PASSWORD}'
+        gitlab_rails['gitlab_shell_ssh_port'] = 2222
+        prometheus_monitoring['enable'] = false
+        puma['worker_processes'] = 2
+        sidekiq['max_concurrency'] = 5
+        nginx['client_max_body_size'] = '64m'
+    volumes:
+      - gitlab-config:/etc/gitlab
+      - gitlab-logs:/var/log/gitlab
+      - gitlab-data:/var/opt/gitlab
+      # FIPS-host workaround: on a FIPS-enabled host (RHEL/derivatives,
+      # /proc/sys/crypto/fips_enabled=1) the Ubuntu-based GitLab image's
+      # OpenSSL tries FIPS mode, has no FIPS provider, and every crypto call
+      # fails ("PRNG is not seeded" at first ssh-keygen). Masking the flag
+      # inside this DISPOSABLE container lets its stock OpenSSL run normally;
+      # it changes nothing on the host. lab-up.sh writes the fips0 file.
+      - ./.lab-state/fips0:/proc/sys/crypto/fips_enabled:ro
+    # /-/health needs no auth from the container's own loopback (monitoring
+    # whitelist). Omnibus reconfigure on first boot takes several minutes.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8929/-/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 60
+      start_period: 480s
+
+  runner:
+    image: gitlab/gitlab-runner:v19.3.1
+    container_name: gitlab-lab-runner
+    networks: [labnet]
+    volumes:
+      # The runner INFRASTRUCTURE container drives the docker executor, so it
+      # holds the docker socket. Job containers do NOT: the validate runner
+      # registration adds no volumes at all, and the deploy registration adds
+      # only the three mesh-e2e volumes. Neither ever mounts this socket.
+      - /var/run/docker.sock:/var/run/docker.sock
+      - runner-config:/etc/gitlab-runner
+    depends_on:
+      gitlab:
+        condition: service_healthy
+
+networks:
+  labnet:
+
+volumes:
+  gitlab-config:
+  gitlab-logs:
+  gitlab-data:
+  runner-config:

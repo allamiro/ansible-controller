@@ -1,0 +1,22 @@
+---
+# The lab's "real" automation: stamps the reviewed commit onto the target.
+# lab_commit/lab_pipeline come from playbooks/vars/commit.yml, written by
+# scripts/mesh-deploy.sh from $CI_COMMIT_SHA at dispatch time — the managed
+# host itself records which reviewed commit was applied.
+- name: Apply lab configuration to the mesh target
+  hosts: all
+  gather_facts: false
+  vars_files:
+    - vars/commit.yml
+  tasks:
+    - name: Report where this play executes
+      ansible.builtin.debug:
+        msg: "EXECUTED-ON={{ lookup('ansible.builtin.pipe', 'uname -n') }} TARGET={{ inventory_hostname }}"
+
+    - name: Record the deployed commit on the target
+      ansible.builtin.copy:
+        dest: /home/ansible/lab-deployed.txt
+        content: |
+          commit={{ lab_commit }}
+          pipeline={{ lab_pipeline }}
+        mode: "0644"

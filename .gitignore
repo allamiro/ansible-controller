@@ -32,3 +32,6 @@ CLAUDE.local.md
 # Site-local mesh compose override (points the ansible service at the
 # orchestrator image) — machine-specific, never committed
 orchestrator.override.yml
+
+# GitLab integration lab — generated credentials/tokens, never committed
+mesh/labs/gitlab/.lab-state/

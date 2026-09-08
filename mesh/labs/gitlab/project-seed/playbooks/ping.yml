@@ -1,0 +1,12 @@
+---
+# Connectivity proof: reaches the target over SSH from wherever the play runs.
+- name: Ping the mesh target
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Reach the target over SSH
+      ansible.builtin.ping:
+
+    - name: Report where this play executes
+      ansible.builtin.debug:
+        msg: "EXECUTED-ON={{ lookup('ansible.builtin.pipe', 'uname -n') }} TARGET={{ inventory_hostname }}"
