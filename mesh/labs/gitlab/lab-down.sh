@@ -24,10 +24,14 @@ echo "==> removing leftover runner JOB containers (lab network only)"
 # name filter could kill another GitLab Runner's unrelated jobs. -a includes
 # jobs already stopped by a runner interruption. The stack's own two
 # containers are excluded; compose down removes them with their network.
-for c in $(docker ps -aq --filter network=gitlab-lab_labnet); do
-  name=$(docker inspect -f '{{.Name}}' "$c" | tr -d /)
-  case "$name" in gitlab-lab-gitlab|gitlab-lab-runner) continue;; esac
-  docker rm -f "$c" >/dev/null && echo "    removed job container $name"
+# Tolerate races throughout: the runner may finish/remove a job container
+# between the listing and the inspect/rm — that must not abort the script
+# before the compose/e2e teardown below runs.
+for c in $(docker ps -aq --filter network=gitlab-lab_labnet || true); do
+  name=$(docker inspect -f '{{.Name}}' "$c" 2>/dev/null | tr -d /) || continue
+  case "$name" in gitlab-lab-gitlab|gitlab-lab-runner|'') continue;; esac
+  docker rm -f "$c" >/dev/null 2>&1 || true
+  echo "    removed job container $name"
 done
 
 echo "==> gitlab-lab stack (containers + volumes)"

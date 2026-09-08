@@ -65,6 +65,10 @@ deploy:
 # Manual recovery for a run whose results stream broke (results-incomplete)
 # or whose submission outcome is unknown (submit-ambiguous). Pass the mesh
 # job id when triggering:  JOB_ID=<uuid>
+# For a record frozen at created/submitting/running because the deploy job
+# container was killed (cancel/timeout) before mesh-run could finalize, also
+# set RECONCILE=1 — the script verifies the record is stale and no unit is
+# still Running before transitioning it to a collectable state.
 collect:
   stage: collect
   tags: [mesh-deploy]

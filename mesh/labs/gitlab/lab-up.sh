@@ -45,7 +45,12 @@ avail_mem=$(awk '/MemAvailable/{print int($2/1024/1024)}' /proc/meminfo)
 [ "$avail_mem" -ge 6 ] || die "need >=6 GiB available RAM for GitLab CE + mesh, have ${avail_mem} GiB"
 avail_disk=$(df -BG --output=avail /var/lib/docker 2>/dev/null | tail -1 | tr -dc 0-9 || echo 0)
 [ "${avail_disk:-0}" -ge 10 ] || die "need >=10 GB free under /var/lib/docker, have ${avail_disk} GB"
-if ss -ltn 2>/dev/null | grep -q ':8929 '; then die "host port 8929 is already in use"; fi
+# port conflict check — but a rerun over THIS lab's own GitLab is fine (the
+# bootstrap below is idempotent and must be reachable after a partial run)
+if ss -ltn 2>/dev/null | grep -q ':8929 ' \
+   && ! docker ps --format '{{.Names}}' | grep -qx gitlab-lab-gitlab; then
+  die "host port 8929 is in use by something other than this lab"
+fi
 mkdir -p "$STATE"
 
 say "mesh half: disposable e2e environment from ${CONTROLLER_IMAGE}"

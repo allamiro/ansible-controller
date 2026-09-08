@@ -31,7 +31,14 @@ for m in /var/lib/mesh/jobs/*/meta.json; do
 done
 if [ -n "$unresolved" ]; then
   echo "REFUSING to dispatch — unresolved mesh job(s):$unresolved" >&2
-  echo "Recover first: run the 'collect' job with JOB_ID=<uuid>, or inspect /var/lib/mesh/jobs/<uuid>/meta.json." >&2
+  echo "Recover first, per status:" >&2
+  echo "  results-incomplete      -> run the collect job with JOB_ID=<uuid>" >&2
+  echo "  created/submitting/running (stale — e.g. the deploy container was" >&2
+  echo "  killed by cancel/timeout) -> run the collect job with JOB_ID=<uuid>" >&2
+  echo "                              AND RECONCILE=1 (verifies the record is" >&2
+  echo "                              stale and no unit is Running first)" >&2
+  echo "  submit-ambiguous        -> inspect 'receptorctl work list' by hand;" >&2
+  echo "                             see the lab README's operator procedure" >&2
   exit 1
 fi
 
@@ -60,7 +67,7 @@ rc=0
 # only the DISPATCHER's own lines carry the authoritative id — ansible task
 # output could echo an unrelated job= token
 job=$(grep -E '^mesh-run: ' mesh-run.log | grep -o 'job=[0-9a-f-]*' | head -1 | cut -d= -f2 || true)
-[ -n "$job" ] || job=$(grep -oE '\(job=[0-9a-f-]+\)' mesh-run.log | head -1 | tr -d '()' | cut -d= -f2 || true)
+[ -n "$job" ] || job=$(grep -E '^mesh-run: ' mesh-run.log | grep -oE '\(job=[0-9a-f-]+\)' | head -1 | tr -d '()' | cut -d= -f2 || true)
 # a broken results stream can end the run before mesh-run prints any id —
 # fall back to the job dir created SINCE THIS INVOCATION's sentinel, never
 # an older pipeline's
@@ -80,7 +87,7 @@ if [ -n "$job" ] && [ -d "/var/lib/mesh/jobs/$job" ]; then
   cp "/var/lib/mesh/jobs/$job/meta.json" mesh-artifacts/ 2>/dev/null || true
   # mesh-run exports rc/stdout at the artifacts top level; find keeps this
   # robust should a runner layout ever nest them one level down
-  rcf=$(find "/var/lib/mesh/jobs/$job/artifacts" -maxdepth 2 -name rc 2>/dev/null | head -1)
+  rcf=$(find "/var/lib/mesh/jobs/$job/artifacts" -maxdepth 2 -name rc 2>/dev/null | head -1 || true)
   [ -n "$rcf" ] && { cp "$rcf" mesh-artifacts/ansible-rc 2>/dev/null || true
     cp "$(dirname "$rcf")/stdout" mesh-artifacts/ansible-stdout 2>/dev/null || true; }
 fi
