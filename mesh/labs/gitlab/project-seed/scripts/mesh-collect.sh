@@ -26,15 +26,39 @@ if [ "${RECONCILE:-0}" = "1" ] && [ -f "$META" ]; then
   status=$(sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$META" | tail -1)
   case "$status" in
     created|submitting|running)
+      # Four independent staleness/liveness proofs before touching the record
+      # — a detached dispatcher can survive a GitLab cancel (see README), so
+      # "old meta" alone proves nothing:
+      # (1) the record untouched for >120s;
       age=$(( $(date +%s) - $(stat -c %Y "$META") ))
       [ "$age" -gt 120 ] || { echo "record is only ${age}s old — a dispatcher may still be live; refusing to reconcile" >&2; exit 3; }
+      # (2) the dispatcher's own slot lock is free: a live mesh-run (or its
+      # children) holds an exclusive flock on the slot whose .hold names this
+      # job — the implementation's own liveness signal;
+      slot=$(grep -l "job=$JOB_ID" /var/lib/mesh/slots/*/slot.*.hold 2>/dev/null | head -1 | sed 's/\.hold$//' || true)
+      if [ -n "$slot" ] && ! flock -n "$slot" true 2>/dev/null; then
+        echo "slot lock $slot is still held — a dispatcher process is alive; refusing to reconcile" >&2; exit 3
+      fi
+      # (3) the whole job tree quiescent for 60s (a surviving dispatcher
+      # streaming results writes into artifacts/ continuously);
+      if [ -n "$(find "/var/lib/mesh/jobs/$JOB_ID" -newermt '-60 seconds' -print -quit 2>/dev/null)" ]; then
+        echo "job tree changed within the last 60s — something is still writing; refusing to reconcile" >&2; exit 3
+      fi
+      # (4) at least one ingress probe SUCCEEDS and none reports the unit
+      # Running — probe failure is not evidence of anything (fail closed).
       unit=$(sed -n 's/.*"unit_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$META" | tail -1)
       if [ -n "$unit" ]; then
-        # the unit must not be actively Running on any live ingress
+        probe_ok=0
         for s in /run/receptor/receptor.sock /run/receptor/receptor-b.sock; do
-          state=$(receptorctl --socket "$s" work list 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('$unit',{}).get('StateName',''))" 2>/dev/null || true)
-          [ "$state" = "Running" ] && { echo "unit $unit is still Running on $s — not stale; refusing to reconcile" >&2; exit 3; }
+          out=$(receptorctl --socket "$s" work list 2>/dev/null) || continue
+          probe_ok=1
+          state=$(printf '%s' "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('$unit',{}).get('StateName',''))" 2>/dev/null || echo PARSE-ERROR)
+          case "$state" in
+            Running) echo "unit $unit is still Running on $s — refusing to reconcile" >&2; exit 3;;
+            PARSE-ERROR) echo "could not parse work list from $s — refusing to reconcile" >&2; exit 3;;
+          esac
         done
+        [ "$probe_ok" = 1 ] || { echo "no ingress answered a work-list probe — cannot prove the unit stopped; refusing to reconcile" >&2; exit 3; }
         newstatus=results-incomplete   # dispatcher gone, unit known → collect can re-attach
       elif [ "$status" = "created" ]; then
         newstatus=failed               # nothing ever left this host
@@ -42,7 +66,18 @@ if [ "${RECONCILE:-0}" = "1" ] && [ -f "$META" ]; then
         newstatus=submit-ambiguous     # submit may have left the host; operator work-list procedure
       fi
       echo "reconciling stale '$status' record (age ${age}s, unit '${unit:-none}') -> $newstatus"
-      sed -i "s/\"status\": \"$status\"/\"status\": \"$newstatus\"/" "$META"
+      # atomic rewrite, stamping the transition time like the dispatcher does
+      python3 - "$META" "$status" "$newstatus" <<'PY'
+import json, os, sys, tempfile, datetime
+path, old, new = sys.argv[1:4]
+with open(path) as f: m = json.load(f)
+if m.get("status") != old: sys.exit(f"status changed underneath us ({m.get('status')!r}) — aborting")
+m["status"] = new
+m["updated"] = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S%z")
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path))
+with os.fdopen(fd, "w") as f: json.dump(m, f)
+os.replace(tmp, path)
+PY
       ;;
   esac
 fi

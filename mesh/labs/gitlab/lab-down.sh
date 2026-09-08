@@ -19,19 +19,26 @@ LAB="mesh/labs/gitlab"
 unset COMPOSE_PROJECT_NAME
 fail=0
 
+echo "==> stopping the runner so it cannot spawn new job containers mid-teardown"
+docker stop gitlab-lab-runner >/dev/null 2>&1 || true
+
 echo "==> removing leftover runner JOB containers (lab network only)"
 # Scope strictly to containers attached to THIS lab's network — a host-wide
 # name filter could kill another GitLab Runner's unrelated jobs. -a includes
 # jobs already stopped by a runner interruption. The stack's own two
 # containers are excluded; compose down removes them with their network.
-# Tolerate races throughout: the runner may finish/remove a job container
-# between the listing and the inspect/rm — that must not abort the script
-# before the compose/e2e teardown below runs.
+# Tolerate races throughout: a job container may finish/vanish between the
+# listing and the inspect/rm — that must not abort the script before the
+# compose/e2e teardown below runs.
 for c in $(docker ps -aq --filter network=gitlab-lab_labnet || true); do
   name=$(docker inspect -f '{{.Name}}' "$c" 2>/dev/null | tr -d /) || continue
   case "$name" in gitlab-lab-gitlab|gitlab-lab-runner|'') continue;; esac
-  docker rm -f "$c" >/dev/null 2>&1 || true
-  echo "    removed job container $name"
+  if docker rm -f "$c" >/dev/null 2>&1; then
+    echo "    removed job container $name"
+  elif docker inspect "$c" >/dev/null 2>&1; then
+    echo "    WARNING: could not remove job container $name — it may block volume removal" >&2
+    fail=1
+  fi   # vanished between listing and rm: nothing to do
 done
 
 echo "==> gitlab-lab stack (containers + volumes)"
