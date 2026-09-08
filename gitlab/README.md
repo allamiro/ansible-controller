@@ -37,7 +37,7 @@ cp -n gitlab/environments.example.yml gitlab/.gitlab-state/environments.yml
 docker compose -f docker-compose.yml -f gitlab/controller.override.yml up -d
 # 4. bootstrap (project, runner wiring, keys, env map, CI variables):
 gitlab/setup.sh http://localhost:8929
-# 4. from a pipeline (or by hand over the same channel):
+# 5. from a pipeline (or by hand over the same channel):
 #      ssh -i <ci-key> ansible@ctl.prod.local \
 #        ctl-run --env prod-direct --project root/mesh-automation \
 #                --sha <reviewed-40-hex> --playbook playbooks/site.yml
@@ -55,8 +55,11 @@ job's status.
 # 1. mesh PKI (real scripts; throwaway CA is fine on a test box):
 mesh/pki/mesh-ca-init.sh "local test CA"
 mesh/pki/work-sign-init.sh
-mesh/pki/controller-cert.sh controller-a receptor-controller
-mesh/pki/controller-cert.sh controller-b receptor-controller-b
+# the node dials the ingresses as ${MESH_PEER_HOST:-host.docker.internal}; that
+# name MUST be a DNS SAN on the ingress certs or receptor's hostname check fails
+# (ARCHITECTURE.md §5 records this exact rejection). Pass it as an extra SAN:
+mesh/pki/controller-cert.sh controller-a receptor-controller "${MESH_PEER_HOST:-host.docker.internal}"
+mesh/pki/controller-cert.sh controller-b receptor-controller-b "${MESH_PEER_HOST:-host.docker.internal}"
 mesh/pki/node-csr.sh exec-local-a && mesh/pki/node-sign.sh csr/exec-local-a.csr exec-local-a
 cp mesh/secrets/receptor/csr/exec-local-a.key mesh/secrets/receptor/issued/exec-local-a/tls.key
 chmod 600 mesh/secrets/receptor/issued/exec-local-a/tls.key

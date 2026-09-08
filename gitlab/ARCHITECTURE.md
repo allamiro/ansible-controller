@@ -236,3 +236,13 @@ staging via galaxy_dir and node-side Vault password provisioning), Vault-based t
 procedure for the pinned CI known_hosts, retention policy for
 `/var/lib/gitlab-runs` records beyond the keep-last-5 staging trim, and
 site decisions on which projects each environment allowlists.
+
+Two known limitations of the current mesh path:
+**mesh project-root staging** — `mesh-run` stages the playbook's *directory* as
+the project root (roles/templates/files that are siblings of the playbook travel;
+repo-root `roles/`, `collections/`, `group_vars/`, or a root `ansible.cfg` fetched
+at the SHA do **not**). Mesh projects must therefore keep a self-contained playbook
+layout, or a follow-up must teach `mesh-run` to stage an explicit project root
+distinct from the playbook. **Bootstrap PAT lifecycle** — the root `api` PAT is now
+self-revocable after wiring via `REVOKE_BOOTSTRAP=1 gitlab/setup.sh <url>`, but the
+operator must actually run it; it is not automatic on completion.

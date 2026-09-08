@@ -26,6 +26,11 @@ STATE="gitlab/.gitlab-state"
 say() { printf '\n==> %s\n' "$*"; }
 die() { echo "ERROR: $*" >&2; exit 1; }
 mkdir -p "$STATE/ctl-secrets"
+# The state dir holds the highest-authority secrets (the root PAT, and lab.env
+# with the GitLab root password) — make it owner-only and enforce 0600 on those
+# files (the fresh-install steps have the operator drop them here).
+chmod 700 "$STATE" 2>/dev/null || true
+for f in "$STATE/pat" "$STATE/lab.env"; do [ -f "$f" ] && chmod 600 "$f"; done
 echo 0 > "$STATE/fips0"
 
 # a PAT: own state first, then the disposable lab's
@@ -37,10 +42,30 @@ PAT=$(cat "$PATF")
 (umask 077; printf 'header = "PRIVATE-TOKEN: %s"\n' "$PAT" > "$STATE/.curl-auth")
 glab() { local m="$1" p="$2"; shift 2; curl -sfS -K "$STATE/.curl-auth" -X "$m" "$GLURL/api/v4$p" "$@"; }
 glab GET /user >/dev/null || die "PAT does not authenticate against $GLURL"
+
+# bootstrap PAT lifecycle: after wiring is complete, revoke it so the root-scoped
+# api token does not linger. REVOKE_BOOTSTRAP=1 gitlab/setup.sh <url>
+if [ "${REVOKE_BOOTSTRAP:-}" = 1 ]; then
+  say "revoking the bootstrap PAT (self) and removing the local copy"
+  glab DELETE /personal_access_tokens/self >/dev/null 2>&1 \
+    && echo "    PAT revoked in GitLab" \
+    || echo "    self-revoke unsupported on this CE build — revoke it in the UI (Settings > Access tokens)"
+  rm -f "$PATF" "$STATE/.curl-auth"
+  exit 0
+fi
 ENC=$(printf %s "$PROJ" | sed 's|/|%2F|g')
 if ! PID=$(glab GET "/projects/$ENC" 2>/dev/null | jq -r .id) || [ -z "$PID" ] || [ "$PID" = null ]; then
   say "project $PROJ absent — creating and seeding it (fresh-GitLab path)"
-  glab POST /projects --data-urlencode "name=$(basename "$PROJ")" \
+  # resolve the requested namespace so a nested path (e.g. platform/mesh-auto)
+  # is created THERE, not silently under root (basename-only would do the latter,
+  # then the group/path lookup below would never find it)
+  ns=$(dirname "$PROJ"); pathseg=$(basename "$PROJ"); nsid=""
+  if [ "$ns" != "." ]; then
+    nsid=$(glab GET "/namespaces/$(printf %s "$ns" | sed 's|/|%2F|g')" 2>/dev/null | jq -r '.id // empty')
+    [ -n "$nsid" ] || die "namespace '$ns' not found — create the group/user first, or use a path you own"
+  fi
+  glab POST /projects --data-urlencode "path=$pathseg" --data-urlencode "name=$pathseg" \
+    ${nsid:+--data-urlencode "namespace_id=$nsid"} \
     --data-urlencode "visibility=private" --data-urlencode "initialize_with_readme=false" >/dev/null
   PID=$(glab GET "/projects/$ENC" | jq -r .id)
   [ -n "$PID" ] && [ "$PID" != null ] || die "project creation failed"
@@ -68,9 +93,13 @@ fi
 # (no push; Maintainer merge) + merges require green pipelines. Applying this
 # outside the creation branch stops an existing project's deploy jobs from
 # stranding on the ref_protected runner, or a loose project bypassing the gate.
+# DELETE any existing protection first, then set the intended policy — a bare
+# POST 409s on an already-protected branch and || true would hide it, leaving an
+# existing project's looser levels in place. A just-seeded project has none yet.
+glab DELETE "/projects/$PID/protected_branches/main" >/dev/null 2>&1 || true
 glab POST "/projects/$PID/protected_branches" --data-urlencode "name=main" \
   --data-urlencode "push_access_level=0" --data-urlencode "merge_access_level=40" \
-  --data-urlencode "allow_force_push=false" >/dev/null 2>&1 || true
+  --data-urlencode "allow_force_push=false" >/dev/null
 glab PUT "/projects/$PID" --data-urlencode "only_allow_merge_if_pipeline_succeeds=true" >/dev/null
 # tag-deploy runs on the protected runner: releases need protected tags
 glab GET "/projects/$PID/protected_tags/v%2A" >/dev/null 2>&1 || \
@@ -90,6 +119,25 @@ if ! grep -qs : "$STATE/ctl-secrets/prod-mesh.token"; then
   for e in prod-direct prod-mesh prod-windows; do echo "$user:$tok" > "$STATE/ctl-secrets/$e.token"; done
 fi
 chmod 700 "$STATE/ctl-secrets"; chmod 600 "$STATE/ctl-secrets/"*.token
+
+say "pipeline trigger token (for the seed pipeline's api-deploy job)"
+# The seed pipeline ships an api-deploy job gated on CI_PIPELINE_SOURCE==trigger
+# AND DEPLOY_CONFIRM==yes. Provision the trigger token it needs; it is a standing
+# credential that can START pipelines (not run jobs), stored 0600. Delete it if
+# you do not use external triggering:
+#   curl -K "$STATE/.curl-auth" -X DELETE "$GLURL/api/v4/projects/$PID/triggers/<id>"
+if [ ! -s "$STATE/trigger-token" ]; then
+  tr=$(glab POST "/projects/$PID/triggers" --data-urlencode "description=ctl-api-trigger")
+  ttok=$(jq -r .token <<<"$tr"); tid=$(jq -r .id <<<"$tr")
+  if [ -n "$ttok" ] && [ "$ttok" != null ]; then
+    (umask 077; printf '%s\n' "$ttok" > "$STATE/trigger-token")
+    echo "    trigger token stored at $STATE/trigger-token (id $tid). Trigger a run with:"
+    echo "      curl -X POST -F token=<trigger-token> -F ref=main -F variables[DEPLOY_CONFIRM]=yes \\"
+    echo "        $GLURL/api/v4/projects/$PID/trigger/pipeline"
+  else
+    echo "    trigger token creation skipped (API returned none)"
+  fi
+fi
 
 say "CI -> controller SSH key (generated in-container: FIPS-host safe)"
 if [ ! -f "$STATE/ci_ed25519" ]; then
@@ -112,17 +160,23 @@ say "controller->target key (./ssh/id_ed25519) + demo target's authorized_keys"
 # half in the demo target's authorized_keys — gitlab/compose.gitlab.yml mounts
 # .gitlab-state/target-ssh as that target's ~/.ssh — else Test case A fails with
 # SSH authentication errors.
-if [ ! -f ssh/id_ed25519 ]; then
-  timg=$(docker inspect --type container -f '{{.Config.Image}}' ansible-controller 2>/dev/null) || timg=
-  [ -n "$timg" ] || timg=ansible-controller:e2e
-  docker run --rm -v "$PWD/ssh":/w --entrypoint bash "$timg" -euc \
-    'ssh-keygen -q -t ed25519 -N "" -C "controller->target" -f /w/id_ed25519; chown '"$(id -u):$(id -g)"' /w/id_ed25519 /w/id_ed25519.pub'
-  chmod 600 ssh/id_ed25519
-fi
-mkdir -p "$STATE/target-ssh" && chmod 700 "$STATE/target-ssh"
-grep -qsF "$(cat ssh/id_ed25519.pub)" "$STATE/target-ssh/authorized_keys" 2>/dev/null \
-  || cat ssh/id_ed25519.pub >> "$STATE/target-ssh/authorized_keys"
-chmod 600 "$STATE/target-ssh/authorized_keys"
+mkdir -p ssh "$STATE/target-ssh"
+timg=$(docker inspect --type container -f '{{.Config.Image}}' ansible-controller 2>/dev/null) || timg=
+[ -n "$timg" ] || timg=ansible-controller:e2e
+# One root-in-container step so ownership is correct on ANY host uid: the key
+# must be readable by the controller's ansible user (uid 1000), and the target's
+# sshd StrictModes requires its ~/.ssh + authorized_keys owned by uid 1000. The
+# CI authorized_keys (already written above) is re-owned to 1000 here too.
+docker run --rm -u 0 -v "$PWD/ssh":/ctl -v "$PWD/$STATE/target-ssh":/tgt \
+  --entrypoint bash "$timg" -euc '
+    set -e
+    [ -f /ctl/id_ed25519 ] || ssh-keygen -q -t ed25519 -N "" -C "controller->target" -f /ctl/id_ed25519
+    pub=$(cat /ctl/id_ed25519.pub)
+    grep -qsF "$pub" /tgt/authorized_keys 2>/dev/null || printf "%s\n" "$pub" >> /tgt/authorized_keys
+    chown 1000:1000 /ctl/id_ed25519 /ctl/id_ed25519.pub /tgt /tgt/authorized_keys
+    [ -f /ctl/authorized_keys ] && chown 1000:1000 /ctl/authorized_keys || true
+    chmod 600 /ctl/id_ed25519 /tgt/authorized_keys; chmod 700 /tgt'
+
 
 say "controller wiring (compose override) — start/refresh it now"
 docker compose -f docker-compose.yml -f gitlab/controller.override.yml up -d --wait --no-build ansible
@@ -153,7 +207,17 @@ if docker inspect --type container "$RUNNER_CONTAINER" >/dev/null 2>&1; then
   JOB_NET="${GITLAB_NETWORK:-gitlab-prod_labnet}"
   reg() { # name tag access image extra...
     local n="$1" t="$2" a="$3" i="$4"; shift 4
-    docker exec "$RUNNER_CONTAINER" sh -c "grep -q 'name = \"$n\"' /etc/gitlab-runner/config.toml 2>/dev/null" && return 0
+    if docker exec "$RUNNER_CONTAINER" sh -c "grep -q 'name = \"$n\"' /etc/gitlab-runner/config.toml 2>/dev/null"; then
+      # already registered — but an earlier registration (before the mesh volumes
+      # were added) would persist WITHOUT them and silently break collect; if any
+      # required mount is absent from config.toml, unregister and re-register.
+      local ok=1
+      for arg in "$@"; do case "$arg" in *:/run/receptor|*:/var/lib/mesh)
+        docker exec "$RUNNER_CONTAINER" sh -c "grep -qF ':${arg##*:}' /etc/gitlab-runner/config.toml 2>/dev/null" || ok=0;; esac; done
+      [ "$ok" = 1 ] && return 0
+      echo "    $n is registered but missing a required mesh mount — re-registering"
+      docker exec "$RUNNER_CONTAINER" gitlab-runner unregister --name "$n" >/dev/null 2>&1 || true
+    fi
     local tok
     tok=$(glab POST /user/runners --data-urlencode "runner_type=project_type" \
       --data-urlencode "project_id=$PID" --data-urlencode "description=$n" \
@@ -171,7 +235,7 @@ if docker inspect --type container "$RUNNER_CONTAINER" >/dev/null 2>&1; then
   # (/var/lib/mesh) — mount the same mesh volumes the disposable lab's deploy
   # runner gets. Project prefix = the controller compose project (dir basename
   # by default); override MESH_VOL_PREFIX if you renamed it.
-  MESH_VOL_PREFIX="${MESH_VOL_PREFIX:-ansible-controller}"
+  MESH_VOL_PREFIX="${MESH_VOL_PREFIX:-${COMPOSE_PROJECT_NAME:-$(basename "$PWD")}}"
   reg prod-deploy mesh-deploy ref_protected "${DEPLOY_IMAGE:-ansible-orchestrator:e2e}" \
     --docker-volumes "${MESH_VOL_PREFIX}_receptor-runtime:/run/receptor" \
     --docker-volumes "${MESH_VOL_PREFIX}_mesh-state:/var/lib/mesh"

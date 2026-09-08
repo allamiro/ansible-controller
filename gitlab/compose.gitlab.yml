@@ -3,6 +3,21 @@
 # disposable lab's GitLab from mesh/labs/gitlab/? Reuse it — gitlab/setup.sh
 # takes any reachable instance's URL; do not start a second on the same port.)
 #
+# PREREQUISITE — the demo target and the seeded pipeline/runners default to the
+# local `ansible-controller:e2e` tag (and, for the mesh case, `ansible-orchestrator
+# :e2e` / `ansible-execution-node:e2e`). Those tags are built by the mesh test
+# suite, NOT by this fresh flow, so produce them first — either build+tag the
+# controller:
+#     make build
+#     docker tag "$(docker compose images -q ansible | head -1)" ansible-controller:e2e
+#   or pull the published controller and tag it:
+#     docker pull ghcr.io/allamiro/ansible-controller:latest
+#     docker tag  ghcr.io/allamiro/ansible-controller:latest ansible-controller:e2e
+#   For the mesh test case (Test B) also build ansible-orchestrator:e2e and
+#   ansible-execution-node:e2e (see mesh/tests/e2e-up.sh), or override
+#   TARGET_IMAGE / VALIDATE_IMAGE / DEPLOY_IMAGE / MESH_NODE_IMAGE with tags that
+#   already exist on this host.
+#
 # BEFORE first startup, create the interpolation/state files (no circular
 # dependency on setup.sh — it needs the GitLab API and runs afterwards):
 #
