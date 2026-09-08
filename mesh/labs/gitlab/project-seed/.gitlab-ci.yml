@@ -1,0 +1,94 @@
+# Git-managed Ansible automation through the Receptor mesh.
+#
+# Enforcement model (GitLab CE — Free tier):
+#   - MR approvals exist in CE but CANNOT be made blocking (approval RULES are
+#     a Premium feature). The technically enforced gate is instead:
+#       * protected main: nobody pushes, only Maintainers merge
+#       * "pipelines must succeed" merge check (validate must pass)
+#       * the deploy runner accepts PROTECTED refs only, so no branch or MR
+#         pipeline can ever reach the mesh control socket
+#       * DEPLOY_ALLOWED is a protected variable — visible to protected-ref
+#         pipelines only; the deploy script asserts it as a tripwire
+#   - Execution binds to the immutable reviewed commit: the runner checks out
+#     $CI_COMMIT_SHA (detached), and the deploy job stamps that SHA into the
+#     play's variables and its artifacts.
+#
+# The deploy job is when:manual — a human releases each execution. GitLab job
+# "retry" is guarded by scripts/mesh-deploy.sh: it refuses to dispatch while
+# any tracked mesh job is in a non-final state (submit-ambiguous /
+# results-incomplete / running), preserving the dispatcher's no-resubmission
+# boundary; recover with the collect job first.
+
+stages: [validate, deploy, collect]
+
+validate:
+  stage: validate
+  tags: [mesh-validate]
+  image:
+    name: ansible-controller:e2e
+    entrypoint: [""]
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH
+  script:
+    - ansible --version
+    - ansible-playbook --syntax-check -i inventory/lab.ini playbooks/site.yml playbooks/ping.yml
+    - ansible-lint playbooks/ || { echo "ansible-lint findings above"; exit 1; }
+
+deploy:
+  stage: deploy
+  tags: [mesh-deploy]
+  image:
+    name: ansible-orchestrator:e2e
+    entrypoint: [""]
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+      when: manual
+  # GitLab serializes jobs sharing a resource_group, closing the window in
+  # which two concurrently released deploys could both pass the unresolved-
+  # state scan before either records its own dispatch.
+  resource_group: mesh-lab
+  environment:
+    name: mesh-lab
+  variables:
+    MESH_NODE: exec-e2e-a
+    PLAYBOOK: site.yml
+    MESH_WAIT: "60"
+  script:
+    - scripts/mesh-deploy.sh
+  artifacts:
+    when: always
+    paths: [mesh-artifacts/]
+    expire_in: 1 week
+  timeout: 15m
+
+# Manual recovery for a run whose results stream broke (results-incomplete)
+# or whose submission outcome is unknown (submit-ambiguous). Pass the mesh
+# job id when triggering:  JOB_ID=<uuid>
+# For a record frozen at created/submitting/running because the deploy job
+# container was killed (cancel/timeout) before mesh-run could finalize, also
+# set RECONCILE=1 — the script verifies the record is stale and no unit is
+# still Running before transitioning it to a collectable state.
+collect:
+  stage: collect
+  tags: [mesh-deploy]
+  # needs:[] frees collect from stage ordering: it must be playable exactly
+  # when deploy failed or was canceled — a stage-ordered manual job would be
+  # skipped in that pipeline, locking the operator out of recovery.
+  needs: []
+  image:
+    name: ansible-orchestrator:e2e
+    entrypoint: [""]
+  # recovery-only: it must never hold the pipeline out of the success state
+  # when no recovery is needed
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+      when: manual
+      allow_failure: true
+  resource_group: mesh-lab
+  script:
+    - scripts/mesh-collect.sh "$JOB_ID"
+  artifacts:
+    when: always
+    paths: [mesh-artifacts/]
+    expire_in: 1 week
