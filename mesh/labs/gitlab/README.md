@@ -198,12 +198,29 @@ duplicated.
 
 ## Credentials, rotation, retention
 
-Everything is disposable and scoped to the lab: root/dev1 passwords and the
-PAT in `.lab-state/` (rotate by deleting the file entries and re-running the
-relevant bootstrap step, or just rebuild), per-runner tokens revocable in
-the GitLab UI, the mesh SSH key and PKI live in compose volumes /
-`mesh/tests/.e2e-pki` and die with `lab-down.sh --purge`. GitLab job
-artifacts expire in 1 week. Nothing here is a production credential.
+Everything is disposable and scoped to the lab; nothing here is a
+production credential. GitLab job artifacts expire in 1 week; the mesh SSH
+key and PKI live in compose volumes / `mesh/tests/.e2e-pki` and die with
+`lab-down.sh --purge`; per-runner tokens are revocable in the GitLab UI.
+
+Rotating credentials **while keeping the GitLab volumes** requires changing
+them *in GitLab* — the `.lab-state/` files are only records
+(`initial_root_password` applies to first boot only, and the bootstrap
+skips user creation when the user exists):
+
+```bash
+# rotate a user password (root shown; same for dev1), then update lab.env
+# by hand so the file matches reality:
+docker exec gitlab-lab-gitlab gitlab-rails runner \
+  'u=User.find_by_username("root"); u.password=u.password_confirmation="NEW-VALUE"; u.save!'
+
+# rotate the API token: delete the record and re-run lab-up.sh — its PAT
+# validation detects the missing token and mints a fresh one:
+rm mesh/labs/gitlab/.lab-state/pat && mesh/labs/gitlab/lab-up.sh
+```
+
+The zero-thought alternative is a full rebuild:
+`lab-down.sh --purge && lab-up.sh` regenerates every credential.
 
 ## Tear it down
 

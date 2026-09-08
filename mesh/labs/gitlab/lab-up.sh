@@ -112,9 +112,12 @@ PID=$(glab GET "/projects/root%2Fmesh-automation" | jq -r .id)
 glab POST "/projects/$PID/members" \
   --data-urlencode "user_id=$DEV_ID" --data-urlencode "access_level=30" >/dev/null 2>&1 || true
 lvl=$(glab GET "/projects/$PID/members/all/$DEV_ID" 2>/dev/null | jq -r '.access_level // 0')
-if [ "$lvl" -lt 30 ]; then
+if [ "$lvl" != 30 ]; then
+  # EXACTLY Developer: a leftover Maintainer grant from experimentation
+  # would let dev1 merge to protected main, silently voiding the lab's
+  # review gate on reruns
   glab PUT "/projects/$PID/members/$DEV_ID" --data-urlencode "access_level=30" >/dev/null \
-    || die "dev1 is not a Developer on the project (access_level=$lvl) and could not be raised"
+    || die "dev1 must be exactly a Developer (found access_level=$lvl) and could not be set"
 fi
 
 say "runners: validate (unprotected) + deploy (ref_protected)"
@@ -203,10 +206,19 @@ glab GET "/projects/$PID/protected_branches/main" | jq -e \
 glab PUT "/projects/$PID" \
   --data-urlencode "only_allow_merge_if_pipeline_succeeds=true" \
   --data-urlencode "remove_source_branch_after_merge=true" >/dev/null
-glab GET "/projects/$PID/variables/DEPLOY_ALLOWED" >/dev/null 2>&1 || \
-  glab POST "/projects/$PID/variables" \
-    --data-urlencode "key=DEPLOY_ALLOWED" --data-urlencode "value=true" \
-    --data-urlencode "protected=true" >/dev/null
+# create-or-reconcile: an existing variable with the wrong value fails every
+# deploy's tripwire, and an unprotected one leaks to branch pipelines
+dv=$(glab GET "/projects/$PID/variables/DEPLOY_ALLOWED" 2>/dev/null || echo '{}')
+if [ "$(jq -r '.value // empty' <<<"$dv")" != true ] || [ "$(jq -r '.protected' <<<"$dv")" != true ]; then
+  if [ "$(jq -r '.key // empty' <<<"$dv")" = DEPLOY_ALLOWED ]; then
+    glab PUT "/projects/$PID/variables/DEPLOY_ALLOWED" \
+      --data-urlencode "value=true" --data-urlencode "protected=true" >/dev/null
+  else
+    glab POST "/projects/$PID/variables" \
+      --data-urlencode "key=DEPLOY_ALLOWED" --data-urlencode "value=true" \
+      --data-urlencode "protected=true" >/dev/null
+  fi
+fi
 
 cat > "$STATE/summary" <<SUMMARY
 GitLab      : $GITLAB_URL_HOST   (root / see $STATE/lab.env)
