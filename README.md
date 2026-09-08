@@ -130,7 +130,8 @@ inherits `sshpass`, so the same inventory works over the mesh.
 ### 3 — Generate an SSH key and copy it to your servers
 
 ```bash
-# Generate a key pair into ssh/
+# Generate a key pair into ssh/ (the directory is gitignored, so create it first)
+mkdir -p ssh && chmod 700 ssh
 ssh-keygen -t ed25519 -C "ansible-controller" -f ssh/id_ed25519 -N ""
 chmod 600 ssh/id_ed25519
 
@@ -355,6 +356,7 @@ The mesh ships with three documents, in reading order:
 |---|---|
 | [`mesh/README.md`](mesh/README.md) | What the mesh is and the full deployment walk-through: PKI, control plane, nodes, first playbook |
 | [`mesh/RUNBOOK.md`](mesh/RUNBOOK.md) | Day-2 operations: enrolling and evicting nodes, credential rotation, upgrades, troubleshooting |
+| [`mesh/EXTERNAL-CA.md`](mesh/EXTERNAL-CA.md) | Alternative deployment where your organization's own CA signs the certificates (CSR configs included) |
 | [`mesh/DESIGN.md`](mesh/DESIGN.md) | The design of record: architecture and HA decisions, non-disruption guarantees, and the verification matrix |
 
 ---

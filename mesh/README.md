@@ -173,6 +173,11 @@ Every participant gets a certificate before it may join. The scripts in
 [`mesh/pki/`](pki/) do all the OpenSSL-free heavy lifting; you only decide
 names.
 
+> **Using your organization's own CA instead?** Follow
+> [EXTERNAL-CA.md](EXTERNAL-CA.md) — a self-contained walkthrough where your
+> PKI signs the CSRs (including the `.cnf` files and the SAN requirements
+> your CA must honour) and this step's scripts are not used.
+
 ```mermaid
 flowchart LR
     P1["<b>offline machine</b><br/>create the CA<br/><i>once</i>"] --> P2["<b>each node</b><br/>generate key + request<br/><i>key never leaves</i>"]
