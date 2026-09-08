@@ -142,11 +142,18 @@ make_runner() { # description tag access_level image extra_volume_args...
 # would otherwise satisfy a local-only check while jobs hang or, worse, a
 # deploy runner made unprotected serves branch pipelines.
 runner_registered() { # name expected-access-level
-  docker exec gitlab-lab-runner sh -c "grep -q 'name = \"$1\"' /etc/gitlab-runner/config.toml 2>/dev/null" || return 1
+  # The id comes from the LOCAL registration's own config.toml block —
+  # matching by description server-side could validate a different (e.g.
+  # stale duplicate) registration than the one this runner actually runs.
   local rid det
-  rid=$(glab GET "/projects/$PID/runners?per_page=100" | jq -r "[.[] | select(.description==\"$1\")][0].id // empty")
+  rid=$(docker exec gitlab-lab-runner awk -v want="$1" '
+    /\[\[runners\]\]/ { name=""; id="" }
+    /^[[:space:]]*name[[:space:]]*=/ { gsub(/"/,""); name=$3 }
+    /^[[:space:]]*id[[:space:]]*=/   { id=$3 }
+    name==want && id!="" { print id; exit }
+  ' /etc/gitlab-runner/config.toml 2>/dev/null)
   [ -n "$rid" ] || return 1
-  det=$(glab GET "/runners/$rid") || return 1
+  det=$(glab GET "/runners/$rid" 2>/dev/null) || return 1
   jq -e ".paused == false and .access_level == \"$2\"" <<<"$det" >/dev/null || return 1
 }
 drop_runner() { docker exec gitlab-lab-runner gitlab-runner unregister --name "$1" >/dev/null 2>&1 || true; }
