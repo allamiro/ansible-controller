@@ -270,8 +270,12 @@ openssl x509 -in controller-a.crt -noout -text | grep -EA4 "Subject Alternative 
 #  (The number of colons before the id varies by openssl version — only the
 #  OID and the id matter.)  And no DNS names beyond the three you requested.
 openssl verify -CAfile /path/to/corp-chain.pem -purpose sslserver controller-a.crt
-#  -purpose sslserver also catches a CA template that dropped the requested
-#  EKUs — a chain-only check would still say OK for a cert mTLS will reject.
+#  -purpose sslserver also catches a CA template that SUBSTITUTED the
+#  requested EKUs (e.g. a codeSigning-only cert fails with "unsuitable
+#  certificate purpose") — a chain-only check would say OK for a cert mTLS
+#  will reject. A cert with no EKU extension at all passes, correctly so:
+#  X.509 treats an absent EKU as valid for every purpose, and so does the
+#  mesh's TLS stack.
 ```
 
 If the `othername` line is missing, your CA rewrote the SANs — go back to
@@ -370,9 +374,12 @@ openssl x509 -in csr/exec-dmz-a.crt -noout -text | grep -EA4 "Subject Alternativ
 #  "exec-dmz-a" (colon count before the id varies by openssl version), and
 #  no DNS name other than exec-dmz-a.
 openssl verify -CAfile /path/to/corp-chain.pem -purpose sslclient csr/exec-dmz-a.crt
-#  -purpose sslclient also catches a CA template that dropped the requested
-#  EKUs — the node authenticates as a TLS client, and a chain-only check
-#  would still say OK for a cert mTLS will reject.
+#  The node authenticates as a TLS client. -purpose sslclient catches a CA
+#  template that SUBSTITUTED the requested EKUs (a serverAuth-only or
+#  codeSigning cert fails here before it fails in production) — a
+#  chain-only check would say OK for a cert mTLS will reject. A cert with
+#  no EKU extension at all passes, correctly so: X.509 treats an absent
+#  EKU as valid for every purpose, and so does the mesh's TLS stack.
 
 cp csr/exec-dmz-a.crt        issued/exec-dmz-a/tls.crt
 cp csr/exec-dmz-a.key        issued/exec-dmz-a/tls.key
