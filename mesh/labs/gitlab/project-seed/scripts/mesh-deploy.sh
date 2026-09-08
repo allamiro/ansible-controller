@@ -37,8 +37,11 @@ if [ -n "$unresolved" ]; then
   echo "  killed by cancel/timeout) -> run the collect job with JOB_ID=<uuid>" >&2
   echo "                              AND RECONCILE=1 (verifies the record is" >&2
   echo "                              stale and no unit is Running first)" >&2
-  echo "  submit-ambiguous        -> inspect 'receptorctl work list' by hand;" >&2
-  echo "                             see the lab README's operator procedure" >&2
+  echo "  submit-ambiguous        -> human judgment required: follow the" >&2
+  echo "                             'Operator procedure: resolving submit-" >&2
+  echo "                             ambiguous' section of mesh/labs/gitlab/" >&2
+  echo "                             README.md (work list -> release/adopt ->" >&2
+  echo "                             finalize record -> clear hold)" >&2
   exit 1
 fi
 

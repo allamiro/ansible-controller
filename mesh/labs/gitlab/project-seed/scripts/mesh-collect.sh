@@ -36,12 +36,32 @@ if [ "${RECONCILE:-0}" = "1" ] && [ -f "$META" ]; then
       # children) holds an exclusive flock on the slot whose .hold names this
       # job — the implementation's own liveness signal;
       slot=$(grep -l "job=$JOB_ID" /var/lib/mesh/slots/*/slot.*.hold 2>/dev/null | head -1 | sed 's/\.hold$//' || true)
-      if [ -n "$slot" ] && ! flock -n "$slot" true 2>/dev/null; then
-        echo "slot lock $slot is still held — a dispatcher process is alive; refusing to reconcile" >&2; exit 3
+      if [ -n "$slot" ]; then
+        if ! flock -n "$slot" true 2>/dev/null; then
+          echo "slot lock $slot is still held — a dispatcher process is alive; refusing to reconcile" >&2; exit 3
+        fi
+      else
+        # No .hold names this job — a dispatcher dying between 'created' and
+        # writing the marker leaves exactly this shape, but so does one still
+        # ALIVE in that window (it already holds a slot flock). This collect
+        # job shares the deploy jobs' resource_group, so no legitimate
+        # dispatch runs concurrently: ANY held slot lock here means a
+        # surviving dispatcher — refuse.
+        for sl in /var/lib/mesh/slots/*/slot.[0-9]*; do
+          [ -e "$sl" ] || continue
+          case "$sl" in *.hold) continue;; esac
+          if ! flock -n "$sl" true 2>/dev/null; then
+            echo "slot lock $sl is held with no marker for this job — a dispatcher is alive somewhere; refusing to reconcile" >&2; exit 3
+          fi
+        done
       fi
       # (3) the whole job tree quiescent for 60s (a surviving dispatcher
-      # streaming results writes into artifacts/ continuously);
-      if [ -n "$(find "/var/lib/mesh/jobs/$JOB_ID" -newermt '-60 seconds' -print -quit 2>/dev/null)" ]; then
+      # streaming results writes into artifacts/ continuously). An
+      # UNINSPECTABLE tree is unknown, not quiescent — fail closed.
+      if ! recent=$(find "/var/lib/mesh/jobs/$JOB_ID" -newermt '-60 seconds' -print -quit 2>&1); then
+        echo "cannot inspect the job tree ($recent) — refusing to reconcile" >&2; exit 3
+      fi
+      if [ -n "$recent" ]; then
         echo "job tree changed within the last 60s — something is still writing; refusing to reconcile" >&2; exit 3
       fi
       # (4) at least one ingress probe SUCCEEDS and none reports the unit

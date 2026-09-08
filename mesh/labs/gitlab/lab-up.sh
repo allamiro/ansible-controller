@@ -127,10 +127,14 @@ make_runner() { # description tag access_level image extra_volume_args...
     --docker-pull-policy if-not-present "$@" \
     || die "runner registration failed for $desc"
 }
-reg_count=$(docker exec gitlab-lab-runner sh -c "grep -c '\\[\\[runners\\]\\]' /etc/gitlab-runner/config.toml 2>/dev/null" || echo 0)
-if [ "${reg_count:-0}" -lt 2 ]; then
+# Each REQUIRED registration is checked by name — a raw count would let two
+# half-failed bootstraps (e.g. two validate registrations, no deploy) pass.
+runner_registered() { docker exec gitlab-lab-runner sh -c "grep -q 'name = \"$1\"' /etc/gitlab-runner/config.toml 2>/dev/null"; }
+if ! runner_registered lab-validate; then
   # validate: no secrets, no sockets, no mesh volumes — safe for MR pipelines
   make_runner lab-validate mesh-validate not_protected ansible-controller:e2e
+fi
+if ! runner_registered lab-deploy; then
   # deploy: ref_protected; job containers get ONLY the three mesh volumes.
   # /run/receptor = submission authority; /var/lib/mesh = job state (so the
   # no-resubmission guard and collect work); /e2e-ssh = the disposable key.
