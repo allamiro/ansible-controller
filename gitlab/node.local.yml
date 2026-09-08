@@ -38,7 +38,9 @@ services:
 networks:
   nodenet:
   # the node reaches the demo target's network, as a real node reaches its
-  # closed network's servers
+  # closed network's servers. Default matches the fresh stack
+  # (gitlab/compose.gitlab.yml, project gitlab-prod); reusing the disposable
+  # lab? Export DIRECT_NETWORK=gitlab-lab-ctl_directnet.
   directnet:
     external: true
-    name: ${DIRECT_NETWORK:-gitlab-lab-ctl_directnet}
+    name: ${DIRECT_NETWORK:-gitlab-prod_directnet}

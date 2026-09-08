@@ -28,7 +28,16 @@ services:
       directnet: {}
     volumes:
       - ./gitlab/bin:/usr/local/lab-bin:ro
-      - ./gitlab/.gitlab-state/environments.yml:/etc/ctl-run/environments.yml:ro
+      # Long syntax + create_host_path:false: with short syntax, a MISSING env
+      # map is silently created as a DIRECTORY, and ctl-run then rejects the
+      # mounted path (not a file). Fail the compose up loudly instead — create
+      # the map first (setup.sh, or the README pre-flight).
+      - type: bind
+        source: ./gitlab/.gitlab-state/environments.yml
+        target: /etc/ctl-run/environments.yml
+        read_only: true
+        bind:
+          create_host_path: false
       - ./gitlab/.gitlab-state/ctl-secrets:/etc/ctl-run/secrets:ro
       - gitlab-runs:/var/lib/gitlab-runs
 

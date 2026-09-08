@@ -45,16 +45,33 @@ if ! PID=$(glab GET "/projects/$ENC" 2>/dev/null | jq -r .id) || [ -z "$PID" ] |
   PID=$(glab GET "/projects/$ENC" | jq -r .id)
   [ -n "$PID" ] && [ "$PID" != null ] || die "project creation failed"
   seed=$(mktemp -d); cp -r mesh/labs/gitlab/project-seed/. "$seed/"
+  # the seed pipeline ships lab-* environment names (the disposable lab runs
+  # under them); this fresh path provisions prod-* CI variables, deploy tokens,
+  # and env-map entries, so rewrite the seeded pipeline to the prod-* names it
+  # will actually run under (else deploy jobs get no CTL_SSH_KEY by scope, or
+  # ctl-run rejects an undefined environment)
+  sed -i 's/\blab-direct\b/prod-direct/g; s/\blab-mesh\b/prod-mesh/g' "$seed/.gitlab-ci.yml"
   git -C "$seed" init -q -b main
   git -C "$seed" -c user.name="Lab Operator" -c user.email="lab@lab.local" add -A
   git -C "$seed" -c user.name="Lab Operator" -c user.email="lab@lab.local" commit -qm "seed: mesh automation project"
-  git -C "$seed" push -q "$(printf %s "$GLURL" | sed "s|://|://root:$PAT@|")/$PROJ.git" main
+  # push over an askpass helper: the root PAT reaches git only through the
+  # environment, never argv (visible via ps/proc) or a persisted remote
+  askpass=$(mktemp); chmod 700 "$askpass"
+  printf '#!/bin/sh\ncase "$1" in Username*) echo root;; *) printf %%s "$GL_PUSH_PAT";; esac\n' > "$askpass"
+  GL_PUSH_PAT="$PAT" GIT_ASKPASS="$askpass" GIT_TERMINAL_PROMPT=0 \
+    git -C "$seed" push -q "$GLURL/$PROJ.git" main
+  rm -f "$askpass"
   rm -rf "$seed"
-  glab POST "/projects/$PID/protected_branches" --data-urlencode "name=main" \
-    --data-urlencode "push_access_level=0" --data-urlencode "merge_access_level=40" \
-    --data-urlencode "allow_force_push=false" >/dev/null 2>&1 || true
-  glab PUT "/projects/$PID" --data-urlencode "only_allow_merge_if_pipeline_succeeds=true" >/dev/null
 fi
+
+# governance for BOTH fresh and existing projects (idempotent): main protected
+# (no push; Maintainer merge) + merges require green pipelines. Applying this
+# outside the creation branch stops an existing project's deploy jobs from
+# stranding on the ref_protected runner, or a loose project bypassing the gate.
+glab POST "/projects/$PID/protected_branches" --data-urlencode "name=main" \
+  --data-urlencode "push_access_level=0" --data-urlencode "merge_access_level=40" \
+  --data-urlencode "allow_force_push=false" >/dev/null 2>&1 || true
+glab PUT "/projects/$PID" --data-urlencode "only_allow_merge_if_pipeline_succeeds=true" >/dev/null
 # tag-deploy runs on the protected runner: releases need protected tags
 glab GET "/projects/$PID/protected_tags/v%2A" >/dev/null 2>&1 || \
   glab POST "/projects/$PID/protected_tags" --data-urlencode "name=v*" \
@@ -88,6 +105,24 @@ mkdir -p ssh && chmod 700 ssh
 line="restrict,command=\"/usr/local/lab-bin/ctl-shell\" $(cat "$STATE/ci_ed25519.pub")"
 grep -qsF "$(cat "$STATE/ci_ed25519.pub")" ssh/authorized_keys 2>/dev/null || echo "$line" >> ssh/authorized_keys
 chmod 600 ssh/authorized_keys
+
+say "controller->target key (./ssh/id_ed25519) + demo target's authorized_keys"
+# prod-direct reaches the demo target as /home/ansible/.ssh/id_ed25519 (the
+# controller's ./ssh mount). Generate it FIPS-safe if absent, and put its public
+# half in the demo target's authorized_keys — gitlab/compose.gitlab.yml mounts
+# .gitlab-state/target-ssh as that target's ~/.ssh — else Test case A fails with
+# SSH authentication errors.
+if [ ! -f ssh/id_ed25519 ]; then
+  timg=$(docker inspect --type container -f '{{.Config.Image}}' ansible-controller 2>/dev/null) || timg=
+  [ -n "$timg" ] || timg=ansible-controller:e2e
+  docker run --rm -v "$PWD/ssh":/w --entrypoint bash "$timg" -euc \
+    'ssh-keygen -q -t ed25519 -N "" -C "controller->target" -f /w/id_ed25519; chown '"$(id -u):$(id -g)"' /w/id_ed25519 /w/id_ed25519.pub'
+  chmod 600 ssh/id_ed25519
+fi
+mkdir -p "$STATE/target-ssh" && chmod 700 "$STATE/target-ssh"
+grep -qsF "$(cat ssh/id_ed25519.pub)" "$STATE/target-ssh/authorized_keys" 2>/dev/null \
+  || cat ssh/id_ed25519.pub >> "$STATE/target-ssh/authorized_keys"
+chmod 600 "$STATE/target-ssh/authorized_keys"
 
 say "controller wiring (compose override) — start/refresh it now"
 docker compose -f docker-compose.yml -f gitlab/controller.override.yml up -d --wait --no-build ansible
@@ -131,7 +166,15 @@ if docker inspect --type container "$RUNNER_CONTAINER" >/dev/null 2>&1; then
       --docker-pull-policy if-not-present "$@" || die "runner registration failed for $n"
   }
   reg prod-validate mesh-validate not_protected "${VALIDATE_IMAGE:-ansible-controller:e2e}"
-  reg prod-deploy mesh-deploy ref_protected "${DEPLOY_IMAGE:-ansible-orchestrator:e2e}"
+  # the deploy runner also runs the collect job (scripts/mesh-collect.sh), which
+  # needs the controller's submission socket (/run/receptor) and job state
+  # (/var/lib/mesh) — mount the same mesh volumes the disposable lab's deploy
+  # runner gets. Project prefix = the controller compose project (dir basename
+  # by default); override MESH_VOL_PREFIX if you renamed it.
+  MESH_VOL_PREFIX="${MESH_VOL_PREFIX:-ansible-controller}"
+  reg prod-deploy mesh-deploy ref_protected "${DEPLOY_IMAGE:-ansible-orchestrator:e2e}" \
+    --docker-volumes "${MESH_VOL_PREFIX}_receptor-runtime:/run/receptor" \
+    --docker-volumes "${MESH_VOL_PREFIX}_mesh-state:/var/lib/mesh"
 else
   echo "    no $RUNNER_CONTAINER container — assuming an existing runner setup (e.g. the disposable lab's)"
 fi
