@@ -49,8 +49,10 @@ export_artifacts() { # copies the sanitized set; never env/, never keys
   [ -f "$META" ] && cp "$META" mesh-artifacts/ 2>/dev/null || true
   local rcf
   rcf=$(find "/var/lib/mesh/jobs/$JOB_ID/artifacts" -maxdepth 2 -name rc 2>/dev/null | head -1 || true)
-  [ -n "$rcf" ] && { cp "$rcf" mesh-artifacts/ansible-rc 2>/dev/null || true
-    cp "$(dirname "$rcf")/stdout" mesh-artifacts/ansible-stdout 2>/dev/null || true; }
+  if [ -n "$rcf" ]; then   # a bare && tail would return 1 here and trip set -e
+    cp "$rcf" mesh-artifacts/ansible-rc 2>/dev/null || true
+    cp "$(dirname "$rcf")/stdout" mesh-artifacts/ansible-stdout 2>/dev/null || true
+  fi
 }
 run_collect() {
   rc=0

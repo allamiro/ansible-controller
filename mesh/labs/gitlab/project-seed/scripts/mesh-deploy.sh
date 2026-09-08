@@ -76,7 +76,8 @@ job=$(grep -E '^mesh-run: ' mesh-run.log | grep -o 'job=[0-9a-f-]*' | head -1 | 
 # adopt one whose record matches THIS dispatch (node + playbook): the
 # resource_group serializes CI deploys, not a human running mesh-run by
 # hand at the same moment
-job_source=dispatcher-line
+job_source=none
+[ -n "$job" ] && job_source=dispatcher-line
 if [ -z "$job" ]; then
   for d in $(find /var/lib/mesh/jobs -mindepth 1 -maxdepth 1 -type d -newer /tmp/.dispatch-start 2>/dev/null); do
     m="$d/meta.json"; [ -f "$m" ] || continue
@@ -102,8 +103,10 @@ if [ -n "$job" ] && [ -d "/var/lib/mesh/jobs/$job" ]; then
   # mesh-run exports rc/stdout at the artifacts top level; find keeps this
   # robust should a runner layout ever nest them one level down
   rcf=$(find "/var/lib/mesh/jobs/$job/artifacts" -maxdepth 2 -name rc 2>/dev/null | head -1 || true)
-  [ -n "$rcf" ] && { cp "$rcf" mesh-artifacts/ansible-rc 2>/dev/null || true
-    cp "$(dirname "$rcf")/stdout" mesh-artifacts/ansible-stdout 2>/dev/null || true; }
+  if [ -n "$rcf" ]; then   # a bare && tail would return 1 here and trip set -e
+    cp "$rcf" mesh-artifacts/ansible-rc 2>/dev/null || true
+    cp "$(dirname "$rcf")/stdout" mesh-artifacts/ansible-stdout 2>/dev/null || true
+  fi
 fi
 
 echo "mesh job=${job:-none} rc=$rc"

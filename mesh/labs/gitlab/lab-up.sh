@@ -160,8 +160,12 @@ say "enforcement: protected main (push=no one, merge=maintainers) + merge checks
 # Never delete-then-recreate: a failure between the two would leave main
 # unprotected, and even success opens a brief writable window on reruns.
 prot=$(glab GET "/projects/$PID/protected_branches/main" 2>/dev/null || echo '{}')
-if [ "$(jq -r '.push_access_levels[0].access_level // -1' <<<"$prot")" != 0 ] \
-   || [ "$(jq -r '.merge_access_levels[0].access_level // -1' <<<"$prot")" != 40 ]; then
+# the WHOLE policy must match to skip: exactly one push level (0), exactly
+# one merge level (40), and force pushes off — a partial match could leave
+# extra actors or force pushes permitted from an earlier partial run
+if ! jq -e '(.push_access_levels | length == 1 and .[0].access_level == 0)
+            and (.merge_access_levels | length == 1 and .[0].access_level == 40)
+            and (.allow_force_push == false)' <<<"$prot" >/dev/null; then
   if [ "$(jq -r '.name // empty' <<<"$prot")" = main ]; then
     glab PATCH "/projects/$PID/protected_branches/main" \
       --data-urlencode "allowed_to_push[][access_level]=0" \
