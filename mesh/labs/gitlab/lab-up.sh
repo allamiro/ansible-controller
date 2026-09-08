@@ -141,7 +141,7 @@ make_runner() { # description tag access_level image extra_volume_args...
 # a config.toml entry whose runner was deleted/paused/re-leveled server-side
 # would otherwise satisfy a local-only check while jobs hang or, worse, a
 # deploy runner made unprotected serves branch pipelines.
-runner_registered() { # name expected-access-level
+runner_registered() { # name expected-access-level required-tag
   # The id comes from the LOCAL registration's own config.toml block —
   # matching by description server-side could validate a different (e.g.
   # stale duplicate) registration than the one this runner actually runs.
@@ -154,15 +154,17 @@ runner_registered() { # name expected-access-level
   ' /etc/gitlab-runner/config.toml 2>/dev/null)
   [ -n "$rid" ] || return 1
   det=$(glab GET "/runners/$rid" 2>/dev/null) || return 1
-  jq -e ".paused == false and .access_level == \"$2\"" <<<"$det" >/dev/null || return 1
+  # tag_list must still carry the tag the CI jobs select on — a tag renamed
+  # in the UI leaves jobs pending forever with an otherwise-valid runner
+  jq -e ".paused == false and .access_level == \"$2\" and (.tag_list | index(\"$3\") != null)" <<<"$det" >/dev/null || return 1
 }
 drop_runner() { docker exec gitlab-lab-runner gitlab-runner unregister --name "$1" >/dev/null 2>&1 || true; }
-if ! runner_registered lab-validate not_protected; then
+if ! runner_registered lab-validate not_protected mesh-validate; then
   drop_runner lab-validate
   # validate: no secrets, no sockets, no mesh volumes — safe for MR pipelines
   make_runner lab-validate mesh-validate not_protected ansible-controller:e2e
 fi
-if ! runner_registered lab-deploy ref_protected; then
+if ! runner_registered lab-deploy ref_protected mesh-deploy; then
   drop_runner lab-deploy
   # deploy: ref_protected; job containers get ONLY the three mesh volumes.
   # /run/receptor = submission authority; /var/lib/mesh = job state (so the
