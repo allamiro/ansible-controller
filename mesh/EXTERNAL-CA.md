@@ -52,14 +52,15 @@ search-and-replace with your real ones before running anything.
 | `vX.Y.Z` | The release you are deploying — pick the latest from the [Releases page](https://github.com/allamiro/ansible-controller/releases) | |
 | `exec-dmz-a`, `exec-dmz-b`, `exec-net20-a`, `exec-net20-b` | Node IDs. Letters, digits, `.` `_` `-` only. The ID is baked into the certificate — pick names you will keep | |
 | `dmz`, `net20` | Your network segment names (used for pools/zones and inventory files) | |
-| `corp-chain.pem` | Your CA chain file — see [Part 1](#part-1--what-to-ask-your-pki-team) | |
+| `mesh-ca.pem` | The mesh trust anchor installed on every endpoint — see [Part 1](#part-1--what-to-ask-your-pki-team) | |
+| `corp-chain.pem` | Your CA's full chain, used only for admin-side `openssl verify` — see [Part 1](#part-1--what-to-ask-your-pki-team) | |
 
 ## The machines and what each one needs
 
 | Machine | Count | OS | Must have installed |
 |---|---|---|---|
 | Control host | 1 | Linux x86_64/arm64 | Docker Engine + `docker compose` plugin, `git`, `make`, `openssl`; `cosign` recommended |
-| Execution node | 4 (2 per network) | Linux x86_64/arm64 | Docker Engine + `docker compose` plugin, `openssl` |
+| Execution node | 4 (2 per network) | Linux x86_64/arm64 | Docker Engine + `docker compose` plugin, `openssl`, `curl` |
 | Secure admin workstation | 1 (can be a laptop) | Linux/macOS | `openssl` only |
 | Your targets | existing servers | any | nothing new — just SSH access from their local node |
 
@@ -107,16 +108,26 @@ single CSR before doing all six:
    the template must allow subject information to be *supplied in the
    request*.
 2. **Ask for a dedicated issuing intermediate for the mesh** if at all
-   possible. The chain file you receive becomes the trust anchor on every
-   mesh endpoint — if it's your whole corporate root, then *anyone* who can
-   obtain a corp certificate carrying a receptor `otherName` can join your
-   mesh. A mesh-only intermediate keeps the blast radius small.
+   possible. What you install as the trust anchor decides who can join — if
+   it's your whole corporate root, then *anyone* who can obtain a corp
+   certificate carrying a receptor `otherName` can join your mesh. A
+   mesh-only intermediate keeps the blast radius small.
 3. **Key usage**: `digitalSignature, keyEncipherment`; extended key usage
    **both** `serverAuth` and `clientAuth` (nodes are TLS clients dialing out;
    the ingresses are servers; one profile serves all identities).
-4. **Get the chain file** (issuing intermediate + any parents up to the root,
-   PEM format, concatenated). This guide calls it `corp-chain.pem`. Also note
-   the certificate lifetime they issue — you own tracking expiry
+4. **Get two PEM files**, and keep them apart — they have different jobs:
+   - **`mesh-ca.pem`** — the mesh trust anchor: *only* the dedicated issuing
+     intermediate's certificate (or the root, if that CA signs the mesh certs
+     directly). This is what gets installed as `ca.crt` on every mesh
+     endpoint. Do **not** include the parents up to a shared corporate root
+     here — that would make the shared root a trust anchor and reopen the
+     door point 2 just closed.
+   - **`corp-chain.pem`** — the full chain (issuing intermediate + parents up
+     to the root, concatenated). Used only for the `openssl verify` checks in
+     this guide; it is never installed into any mesh bundle (`ca.crt`), and
+     you can delete it from a host once its checks pass.
+
+   Also note the certificate lifetime they issue — you own tracking expiry
    ([Part 7](#part-7--renewal-and-day-2)).
 
 ## Part 2 — Work-signing keypair (secure workstation, once)
@@ -132,6 +143,8 @@ mkdir -p ~/mesh-keys && cd ~/mesh-keys
 openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out work-private.pem
 openssl pkey -in work-private.pem -pubout -out work-public.pem
 chmod 600 work-private.pem
+chmod 644 work-public.pem   # a restrictive umask would otherwise leave it 0600,
+                            # unreadable by the node container (uid 1000)
 ```
 
 Distribution rules — this is the part people get wrong:
@@ -252,9 +265,13 @@ repo's own CA would have enforced:
 
 ```bash
 openssl x509 -in controller-a.crt -noout -text | grep -EA4 "Subject Alternative Name"
-#  MUST list:  othername: 1.3.6.1.4.1.2312.19.1::controller-a   (exactly one)
-#  and no DNS names beyond the three you requested.
-openssl verify -CAfile /path/to/corp-chain.pem controller-a.crt
+#  MUST show exactly ONE othername, for OID 1.3.6.1.4.1.2312.19.1, ending in
+#  the identity — e.g. "othername: 1.3.6.1.4.1.2312.19.1:controller-a".
+#  (The number of colons before the id varies by openssl version — only the
+#  OID and the id matter.)  And no DNS names beyond the three you requested.
+openssl verify -CAfile /path/to/corp-chain.pem -purpose sslserver controller-a.crt
+#  -purpose sslserver also catches a CA template that dropped the requested
+#  EKUs — a chain-only check would still say OK for a cert mTLS will reject.
 ```
 
 If the `othername` line is missing, your CA rewrote the SANs — go back to
@@ -268,13 +285,15 @@ mkdir -p mesh/secrets/receptor/issued/controller-a \
          mesh/secrets/receptor/issued/controller-b \
          mesh/secrets/receptor/work-signing
 
+# ca.crt is the mesh trust anchor ONLY (mesh-ca.pem) — never the full
+# corporate chain; see Part 1, point 4:
 cp mesh/secrets/receptor/csr/controller-a.crt mesh/secrets/receptor/issued/controller-a/tls.crt
 cp mesh/secrets/receptor/csr/controller-a.key mesh/secrets/receptor/issued/controller-a/tls.key
-cp /path/to/corp-chain.pem                    mesh/secrets/receptor/issued/controller-a/ca.crt
+cp /path/to/mesh-ca.pem                       mesh/secrets/receptor/issued/controller-a/ca.crt
 
 cp mesh/secrets/receptor/csr/controller-b.crt mesh/secrets/receptor/issued/controller-b/tls.crt
 cp mesh/secrets/receptor/csr/controller-b.key mesh/secrets/receptor/issued/controller-b/tls.key
-cp /path/to/corp-chain.pem                    mesh/secrets/receptor/issued/controller-b/ca.crt
+cp /path/to/mesh-ca.pem                       mesh/secrets/receptor/issued/controller-b/ca.crt
 
 # work-private.pem from Part 2 (scp it from the secure workstation):
 cp /path/to/work-private.pem mesh/secrets/receptor/work-signing/work-private.pem
@@ -347,17 +366,23 @@ chmod 600 exec-dmz-a.key
 ```bash
 cd /opt/mesh-node/secrets/receptor
 openssl x509 -in csr/exec-dmz-a.crt -noout -text | grep -EA4 "Subject Alternative Name"
-#  MUST list:  othername: 1.3.6.1.4.1.2312.19.1::exec-dmz-a   (exactly one)
-#  and no DNS name other than exec-dmz-a.
-openssl verify -CAfile /path/to/corp-chain.pem csr/exec-dmz-a.crt
+#  MUST show exactly ONE othername, for OID 1.3.6.1.4.1.2312.19.1, ending in
+#  "exec-dmz-a" (colon count before the id varies by openssl version), and
+#  no DNS name other than exec-dmz-a.
+openssl verify -CAfile /path/to/corp-chain.pem -purpose sslclient csr/exec-dmz-a.crt
+#  -purpose sslclient also catches a CA template that dropped the requested
+#  EKUs — the node authenticates as a TLS client, and a chain-only check
+#  would still say OK for a cert mTLS will reject.
 
 cp csr/exec-dmz-a.crt        issued/exec-dmz-a/tls.crt
 cp csr/exec-dmz-a.key        issued/exec-dmz-a/tls.key
-cp /path/to/corp-chain.pem   issued/exec-dmz-a/ca.crt
+# the mesh trust anchor ONLY (mesh-ca.pem) — never the full corporate chain:
+cp /path/to/mesh-ca.pem      issued/exec-dmz-a/ca.crt
 # work-public.pem from Part 2 (the PUBLIC half — never work-private.pem):
 cp /path/to/work-public.pem  work-signing/work-public.pem
 
 chmod 600 issued/exec-dmz-a/tls.key
+chmod 644 work-signing/work-public.pem      # must be readable by uid 1000
 sudo chown -R 1000:1000 issued/exec-dmz-a   # the container reads the bundle as uid 1000
 ```
 
@@ -472,7 +497,10 @@ records which node actually ran it.
   `openssl x509 -in tls.crt -noout -enddate`. Renewal = same CSR flow
   (regenerating the key too is better hygiene and costs nothing), verify the
   SANs, replace `tls.crt`(+`tls.key`), then
-  `docker compose -f compose.node.yml up -d --wait`.
+  `docker compose -f compose.node.yml up -d --force-recreate --wait` —
+  `--force-recreate` matters: receptor loads its credentials at startup, and
+  a plain `up` leaves the running container (and the old certificate) in
+  place because nothing in the compose config changed.
 - **Work-signing rotation, node eviction, troubleshooting**: the
   [RUNBOOK](RUNBOOK.md) applies unchanged from §3 onward — only its signing
   steps are replaced by your CA.
@@ -483,7 +511,8 @@ records which node actually ran it.
 
 ## Final checklist
 
-- [ ] PKI team confirmed SAN-preserving signing (incl. OID `1.3.6.1.4.1.2312.19.1`) and provided `corp-chain.pem`
+- [ ] PKI team confirmed SAN-preserving signing (incl. OID `1.3.6.1.4.1.2312.19.1`) and provided both `mesh-ca.pem` (trust anchor) and `corp-chain.pem` (verification chain)
+- [ ] Every installed `ca.crt` is `mesh-ca.pem` only — no shared corporate root on any mesh host
 - [ ] Work-signing pair created; private half on control host **only**, public half on every node
 - [ ] Control host: repo at `vX.Y.Z`, `orchestrator.override.yml` written, images cosign-verified
 - [ ] Both controller certs verified (`othername` + chain) and assembled under `mesh/secrets/receptor/issued/`
