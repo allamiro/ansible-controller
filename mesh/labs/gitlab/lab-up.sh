@@ -157,12 +157,24 @@ if ! glab GET "/projects/$PID/repository/branches/main" >/dev/null 2>&1; then
 fi
 
 say "enforcement: protected main (push=no one, merge=maintainers) + merge checks + protected variable"
-glab DELETE "/projects/$PID/protected_branches/main" >/dev/null 2>&1 || true
-glab POST "/projects/$PID/protected_branches" \
-  --data-urlencode "name=main" \
-  --data-urlencode "push_access_level=0" \
-  --data-urlencode "merge_access_level=40" \
-  --data-urlencode "allow_force_push=false" >/dev/null
+# Never delete-then-recreate: a failure between the two would leave main
+# unprotected, and even success opens a brief writable window on reruns.
+prot=$(glab GET "/projects/$PID/protected_branches/main" 2>/dev/null || echo '{}')
+if [ "$(jq -r '.push_access_levels[0].access_level // -1' <<<"$prot")" != 0 ] \
+   || [ "$(jq -r '.merge_access_levels[0].access_level // -1' <<<"$prot")" != 40 ]; then
+  if [ "$(jq -r '.name // empty' <<<"$prot")" = main ]; then
+    glab PATCH "/projects/$PID/protected_branches/main" \
+      --data-urlencode "allowed_to_push[][access_level]=0" \
+      --data-urlencode "allowed_to_merge[][access_level]=40" \
+      --data-urlencode "allow_force_push=false" >/dev/null
+  else
+    glab POST "/projects/$PID/protected_branches" \
+      --data-urlencode "name=main" \
+      --data-urlencode "push_access_level=0" \
+      --data-urlencode "merge_access_level=40" \
+      --data-urlencode "allow_force_push=false" >/dev/null
+  fi
+fi
 glab PUT "/projects/$PID" \
   --data-urlencode "only_allow_merge_if_pipeline_succeeds=true" \
   --data-urlencode "remove_source_branch_after_merge=true" >/dev/null

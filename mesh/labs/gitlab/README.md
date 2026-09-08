@@ -172,21 +172,20 @@ docker exec mesh-e2e-orchestrator receptorctl --socket /run/receptor/receptor.so
 docker exec mesh-e2e-orchestrator receptorctl --socket /run/receptor/receptor-b.sock work list
 
 # 2a. A matching unit exists and shows an error Detail / never started
-#     (e.g. "could not verify signature"): release it, then finalize:
+#     (e.g. "could not verify signature"): release it, then record the
+#     verdict via the collect job — trigger it with
+#         JOB_ID=<job-id>  RESOLVE_AMBIGUOUS=failed
+#     (the script performs the record transition atomically and stamps it):
 docker exec mesh-e2e-orchestrator receptorctl --socket /run/receptor/receptor.sock work release <unit-id>
-#     record the outcome as failed (nothing executed):
-docker exec mesh-e2e-orchestrator sh -c \
-  'sed -i "s/\"status\": \"submit-ambiguous\"/\"status\": \"failed\"/" /var/lib/mesh/jobs/<job-id>/meta.json'
 
-# 2b. A matching unit exists and RAN (or is running): adopt it —
-#     write its id into the record, mark results-incomplete, then collect:
-docker exec mesh-e2e-orchestrator sh -c \
-  'sed -i "s/\"unit_id\": \"\"/\"unit_id\": \"<unit-id>\"/; s/\"status\": \"submit-ambiguous\"/\"status\": \"results-incomplete\"/" /var/lib/mesh/jobs/<job-id>/meta.json'
-# then run the collect job (JOB_ID=<job-id>) — it records the real rc
-# without re-executing.
+# 2b. A matching unit exists and RAN (or is running): adopt it — trigger the
+#     collect job with
+#         JOB_ID=<job-id>  RESOLVE_AMBIGUOUS=<unit-id>
+#     It writes the unit into the record, marks it results-incomplete, and
+#     collects the real rc without re-executing.
 
 # 2c. NO plausible unit on either ingress: nothing left this host's ingress
-#     layer — same finalization as 2a.
+#     layer — same verdict as 2a (RESOLVE_AMBIGUOUS=failed).
 
 # 3. The job's slot .hold names the operator step: clear it only after 2a/2c
 #    confirmation (or after 2b's collect, which frees it itself):

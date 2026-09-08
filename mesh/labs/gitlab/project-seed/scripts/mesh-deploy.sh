@@ -72,17 +72,28 @@ rc=0
 job=$(grep -E '^mesh-run: ' mesh-run.log | grep -o 'job=[0-9a-f-]*' | head -1 | cut -d= -f2 || true)
 [ -n "$job" ] || job=$(grep -E '^mesh-run: ' mesh-run.log | grep -oE '\(job=[0-9a-f-]+\)' | head -1 | tr -d '()' | cut -d= -f2 || true)
 # a broken results stream can end the run before mesh-run prints any id —
-# fall back to the job dir created SINCE THIS INVOCATION's sentinel, never
-# an older pipeline's
+# fall back to job dirs created SINCE THIS INVOCATION's sentinel, but only
+# adopt one whose record matches THIS dispatch (node + playbook): the
+# resource_group serializes CI deploys, not a human running mesh-run by
+# hand at the same moment
+job_source=dispatcher-line
 if [ -z "$job" ]; then
-  job=$(basename "$(find /var/lib/mesh/jobs -mindepth 1 -maxdepth 1 -type d -newer /tmp/.dispatch-start 2>/dev/null | head -1)" 2>/dev/null || true)
-  [ "$job" = "jobs" ] && job=""
+  for d in $(find /var/lib/mesh/jobs -mindepth 1 -maxdepth 1 -type d -newer /tmp/.dispatch-start 2>/dev/null); do
+    m="$d/meta.json"; [ -f "$m" ] || continue
+    grep -q "\"node\": \"$MESH_NODE\"" "$m" && grep -q "\"playbook\": \"$PLAYBOOK\"" "$m" || continue
+    if [ -n "$job" ]; then
+      echo "WARNING: multiple new job records match this dispatch — refusing to guess; resolve via /var/lib/mesh/jobs by hand" >&2
+      job=""; job_source=ambiguous-fallback; break
+    fi
+    job=$(basename "$d"); job_source=fallback-correlated
+  done
 fi
 mkdir -p mesh-artifacts
 {
   echo "commit=${CI_COMMIT_SHA:-}"
   echo "pipeline=${CI_PIPELINE_ID:-}"
   echo "mesh_job=${job:-none}"
+  echo "mesh_job_source=${job_source:-none}"
   echo "mesh_rc=$rc"
 } > mesh-artifacts/provenance.txt
 cp mesh-run.log mesh-artifacts/ 2>/dev/null || true
