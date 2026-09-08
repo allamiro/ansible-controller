@@ -93,16 +93,34 @@ Pick one runtime per host — don't mix.
 
 ### Windows targets (WinRM)
 
-Nothing extra to install: `pywinrm` with NTLM support is baked into the
-controller image and inherited by the execution-node image, so a node
+The **transport** is built in: `pywinrm` with NTLM support is baked into
+the controller image and inherited by the execution-node image, so a node
 manages Windows servers in its network over WinRM exactly as it manages
 Linux over SSH — the node is the WinRM client, dialing out to TCP
 5985/5986 on the target. Declare the connection in the inventory
 (`ansible_connection=winrm`, `ansible_winrm_transport=ntlm`, …) per the
 main README's [WinRM section](../README.md#managing-windows-hosts-winrm).
-One limit applies on nodes just as on the controller: the **Kerberos**
-transport needs system libraries the image does not ship — NTLM works out
-of the box.
+
+The **modules** are a separate step: `ansible.windows` (win_ping,
+win_copy, …) is Galaxy content, not part of ansible-core or the images.
+On the control host, declare it in `configs/requirements.yml` and install
+with `make galaxy` (lands in `/configs/.galaxy`), then dispatch with the
+collections staged into the job payload — the node receives them with the
+work, no node-side installation:
+
+```bash
+docker exec -i ansible-controller /usr/local/mesh/bin/mesh-run \
+  --node exec-dmz-a --playbook /configs/playbooks/win-site.yml \
+  --inventory /configs/inventory/windows.ini \
+  --galaxy-dir /configs/.galaxy --wait 120
+```
+
+(`--galaxy-dir` is a dispatcher flag; the `make mesh-run` wrapper does not
+pass it.) Two limits, on nodes and controller alike: the **Kerberos**
+transport needs system libraries the images do not ship (NTLM works out of
+the box), and any extra *Python* libraries a collection's plugins need
+belong in a site-extended node image — Python packages are deliberately
+not staged per job.
 
 ---
 
