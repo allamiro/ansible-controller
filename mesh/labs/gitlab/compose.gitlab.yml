@@ -28,9 +28,12 @@ services:
       - "8929:8929"          # host access for the operator + seed pushes
     environment:
       # Trimmed for a 6-CPU/30G lab host: no monitoring stack, small
-      # puma/sidekiq. external_url carries the port so every clone URL GitLab
-      # hands to runners resolves both on labnet (alias above) and from the
-      # host (published port). LAB_ROOT_PASSWORD comes from the generated
+      # puma/sidekiq. external_url carries the port; gitlab.lab.local resolves
+      # ONLY inside labnet (the alias above), which is where the runner and
+      # job containers clone from. The HOST does not resolve that name — the
+      # operator and the seed push use http://localhost:8929 via the published
+      # port (UI-displayed clone URLs need the hostname swapped for localhost,
+      # or an /etc/hosts entry). LAB_ROOT_PASSWORD comes from the generated
       # .lab-state/lab.env — disposable, never committed.
       GITLAB_OMNIBUS_CONFIG: |
         external_url 'http://gitlab.lab.local:8929'

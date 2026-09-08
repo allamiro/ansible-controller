@@ -19,6 +19,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/../../.."   # repository root
 LAB="mesh/labs/gitlab"
+# Runner registrations and volume mounts below reference resources by the
+# compose files' pinned project names (gitlab-lab, mesh-e2e); an inherited
+# COMPOSE_PROJECT_NAME would re-prefix everything and break those references.
+unset COMPOSE_PROJECT_NAME
 STATE="$LAB/.lab-state"
 CONTROLLER_IMAGE="${1:-ghcr.io/allamiro/ansible-controller:0.23.3}"   # image tags carry no v prefix
 GITLAB_URL_HOST="http://localhost:8929"          # operator/seed-push view
@@ -34,6 +38,9 @@ glab() { # method path [curl args...] — authenticated API call as root
 say "pre-flight"
 command -v docker >/dev/null || die "docker is required"
 docker compose version >/dev/null 2>&1 || die "docker compose v2 is required"
+for t in jq curl openssl git ss; do
+  command -v "$t" >/dev/null || die "'$t' is required on the host (bootstrap uses it)"
+done
 avail_mem=$(awk '/MemAvailable/{print int($2/1024/1024)}' /proc/meminfo)
 [ "$avail_mem" -ge 6 ] || die "need >=6 GiB available RAM for GitLab CE + mesh, have ${avail_mem} GiB"
 avail_disk=$(df -BG --output=avail /var/lib/docker 2>/dev/null | tail -1 | tr -dc 0-9 || echo 0)
@@ -63,11 +70,15 @@ docker compose --env-file "$STATE/lab.env" -f "$LAB/compose.gitlab.yml" up -d --
   || die "GitLab stack failed to become healthy — docker logs gitlab-lab-gitlab"
 
 say "root personal access token (rails console — first boot only)"
-if [ ! -f "$STATE/pat" ]; then
+pat_valid() { [ -f "$STATE/pat" ] && PAT=$(cat "$STATE/pat") && glab GET /user >/dev/null 2>&1; }
+if ! pat_valid; then
+  # No token yet, or a stale one from before a lab-down wiped the GitLab
+  # volumes — mint a fresh one either way.
+  rm -f "$STATE/pat"
   PAT="glpat-$(openssl rand -hex 16)"
   docker exec gitlab-lab-gitlab gitlab-rails runner "
     u = User.find_by_username('root')
-    t = u.personal_access_tokens.create!(scopes: ['api'], name: 'lab-bootstrap', expires_at: 30.days.from_now)
+    t = u.personal_access_tokens.create!(scopes: ['api'], name: 'lab-bootstrap-$(date +%s)', expires_at: 30.days.from_now)
     t.set_token('$PAT'); t.save!
   " || die "PAT creation failed"
   (umask 077 && echo "$PAT" > "$STATE/pat")

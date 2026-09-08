@@ -44,6 +44,10 @@ deploy:
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
       when: manual
+  # GitLab serializes jobs sharing a resource_group, closing the window in
+  # which two concurrently released deploys could both pass the unresolved-
+  # state scan before either records its own dispatch.
+  resource_group: mesh-lab
   environment:
     name: mesh-lab
   variables:
@@ -71,9 +75,13 @@ collect:
   image:
     name: ansible-orchestrator:e2e
     entrypoint: [""]
+  # recovery-only: it must never hold the pipeline out of the success state
+  # when no recovery is needed
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
       when: manual
+      allow_failure: true
+  resource_group: mesh-lab
   script:
     - scripts/mesh-collect.sh "$JOB_ID"
   artifacts:

@@ -48,7 +48,7 @@ flowchart LR
 | 2 | gitlab-runner | GitLab | HTTP `gitlab.lab.local:8929` | per-runner auth token | job polling, log/artifact upload |
 | 3 | job containers | GitLab | HTTP `gitlab.lab.local:8929` | per-job CI_JOB_TOKEN | `git clone` at the pipeline's commit |
 | 4 | deploy job → `mesh-run` | ingress A/B | **Unix socket** (`/run/receptor` volume) | socket write access = submission authority | signed work submission + result stream |
-| 5 | ingress ⇄ node | Receptor TCP 27199 (in-mesh) | mutual TLS, throwaway-CA certs, node-ID SAN binding | transport |
+| 5 | node → ingress A and B | Receptor TCP 27199 each (in-lab; production maps A/B to host ports 27199/27200) | mutual TLS, throwaway-CA certs, node-ID SAN binding | transport, dial-out to both for failover |
 | 6 | node → target | SSH 22 (isolated `targetnet`) | disposable ed25519 key, staged per job | playbook execution |
 
 GitLab initiates **nothing** toward the mesh. The runner initiates everything

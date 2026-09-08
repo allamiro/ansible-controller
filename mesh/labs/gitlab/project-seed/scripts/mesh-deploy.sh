@@ -18,12 +18,14 @@ set -euo pipefail
 # invocation; this guard extends that boundary across CI retries: while ANY
 # tracked job is non-final, dispatching is refused and the operator must run
 # the collect job (or inspect the mesh state) first.
+# (Cross-job atomicity comes from the CI resource_group serializing deploy
+# and collect jobs; this scan handles state left by PAST jobs.)
 unresolved=""
 for m in /var/lib/mesh/jobs/*/meta.json; do
   [ -f "$m" ] || continue
   s=$(sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$m" | tail -1)
   case "$s" in
-    submitting|running|submit-ambiguous|results-incomplete)
+    created|submitting|running|submit-ambiguous|results-incomplete)
       unresolved="$unresolved $(basename "$(dirname "$m")")($s)";;
   esac
 done
@@ -43,6 +45,7 @@ lab_pipeline: "${CI_PIPELINE_ID:-unknown}"
 EOF
 
 echo "Dispatching commit ${CI_COMMIT_SHA:-?} -> node ${MESH_NODE} (${PLAYBOOK}, wait ${MESH_WAIT}s)"
+touch /tmp/.dispatch-start   # sentinel: any job dir newer than this is OURS
 rc=0
 /usr/local/mesh/bin/mesh-run \
   --node "$MESH_NODE" \
@@ -54,12 +57,16 @@ rc=0
 # --- sanitized artifacts -----------------------------------------------------
 # meta.json + the runner rc + stdout ONLY. Never the private data dir's env/
 # (it can stage credentials) and never the SSH key.
-job=$(grep -o 'job=[0-9a-f-]*' mesh-run.log | head -1 | cut -d= -f2 || true)
-# a broken results stream can end the run before mesh-run prints its
-# completion line — fall back to the newest tracked job so the collect
-# handoff always has an id
+# only the DISPATCHER's own lines carry the authoritative id — ansible task
+# output could echo an unrelated job= token
+job=$(grep -E '^mesh-run: ' mesh-run.log | grep -o 'job=[0-9a-f-]*' | head -1 | cut -d= -f2 || true)
+[ -n "$job" ] || job=$(grep -oE '\(job=[0-9a-f-]+\)' mesh-run.log | head -1 | tr -d '()' | cut -d= -f2 || true)
+# a broken results stream can end the run before mesh-run prints any id —
+# fall back to the job dir created SINCE THIS INVOCATION's sentinel, never
+# an older pipeline's
 if [ -z "$job" ]; then
-  job=$(ls -1t /var/lib/mesh/jobs 2>/dev/null | head -1 || true)
+  job=$(basename "$(find /var/lib/mesh/jobs -mindepth 1 -maxdepth 1 -type d -newer /tmp/.dispatch-start 2>/dev/null | head -1)" 2>/dev/null || true)
+  [ "$job" = "jobs" ] && job=""
 fi
 mkdir -p mesh-artifacts
 {
@@ -71,8 +78,11 @@ mkdir -p mesh-artifacts
 cp mesh-run.log mesh-artifacts/ 2>/dev/null || true
 if [ -n "$job" ] && [ -d "/var/lib/mesh/jobs/$job" ]; then
   cp "/var/lib/mesh/jobs/$job/meta.json" mesh-artifacts/ 2>/dev/null || true
-  cp "/var/lib/mesh/jobs/$job/artifacts/rc" mesh-artifacts/ansible-rc 2>/dev/null || true
-  cp "/var/lib/mesh/jobs/$job/artifacts/stdout" mesh-artifacts/ansible-stdout 2>/dev/null || true
+  # mesh-run exports rc/stdout at the artifacts top level; find keeps this
+  # robust should a runner layout ever nest them one level down
+  rcf=$(find "/var/lib/mesh/jobs/$job/artifacts" -maxdepth 2 -name rc 2>/dev/null | head -1)
+  [ -n "$rcf" ] && { cp "$rcf" mesh-artifacts/ansible-rc 2>/dev/null || true
+    cp "$(dirname "$rcf")/stdout" mesh-artifacts/ansible-stdout 2>/dev/null || true; }
 fi
 
 echo "mesh job=${job:-none} rc=$rc"
