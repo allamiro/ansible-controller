@@ -276,6 +276,11 @@ openssl verify -CAfile /path/to/corp-chain.pem -purpose sslserver controller-a.c
 #  will reject. A cert with no EKU extension at all passes, correctly so:
 #  X.509 treats an absent EKU as valid for every purpose, and so does the
 #  mesh's TLS stack.
+diff <(openssl x509 -in controller-a.crt -noout -pubkey) \
+     <(openssl pkey -in controller-a.key -pubout)
+#  No output = the cert embeds THIS key. A stale certificate from an
+#  earlier CSR for the same identity passes every check above, but a
+#  crt/key mismatch makes receptor refuse to start.
 ```
 
 If the `othername` line is missing, your CA rewrote the SANs — go back to
@@ -380,6 +385,11 @@ openssl verify -CAfile /path/to/corp-chain.pem -purpose sslclient csr/exec-dmz-a
 #  chain-only check would say OK for a cert mTLS will reject. A cert with
 #  no EKU extension at all passes, correctly so: X.509 treats an absent
 #  EKU as valid for every purpose, and so does the mesh's TLS stack.
+diff <(openssl x509 -in csr/exec-dmz-a.crt -noout -pubkey) \
+     <(openssl pkey -in csr/exec-dmz-a.key -pubout)
+#  No output = the cert embeds THIS node's key. A stale certificate from
+#  an earlier CSR for the same node id passes every check above, but a
+#  crt/key mismatch makes receptor refuse to start.
 
 cp csr/exec-dmz-a.crt        issued/exec-dmz-a/tls.crt
 cp csr/exec-dmz-a.key        issued/exec-dmz-a/tls.key
