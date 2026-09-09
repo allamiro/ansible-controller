@@ -1,0 +1,49 @@
+stages: [validate, deploy]
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_TAG =~ /^v/'
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS'
+      when: never
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH'
+
+# Replace with your tested image, reachable by both runners. This placeholder
+# resolves nowhere on purpose: a forgotten replacement must fail at once rather
+# than run something unintended.
+default:
+  image:
+    name: registry.example.com/ansible-controller:REPLACE-ME
+    entrypoint: [""]
+
+validate:
+  stage: validate
+  tags: [mesh-validate]
+  script:
+    - ansible-playbook --syntax-check -i inventory/validation/hosts.ini playbooks/site.yml
+    - ansible-lint playbooks/site.yml
+    - python3 -m unittest discover -s tests
+
+deploy:
+  stage: deploy
+  tags: [mesh-deploy]
+  resource_group: automation-production
+  environment:
+    name: prod-direct
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_TAG =~ /^v/'
+      when: manual
+      allow_failure: false
+  before_script:
+    # Name the missing configuration instead of failing inside chmod or ssh.
+    - for v in CTL_SSH_KEY CTL_KNOWN_HOSTS CTL_HOST; do eval "test -n \"\${$v:-}\"" || { echo "$v is not set - add the protected variables from the README connection checklist"; exit 2; }; done
+    - chmod 600 "$CTL_SSH_KEY"
+    - CTL_COMMIT_SHA=$(/usr/bin/git --git-dir="$(pwd -P)/.git" rev-parse --verify HEAD)
+  script:
+    - bash scripts/deploy.sh --env prod-direct --project "$CI_PROJECT_PATH" --sha "$CTL_COMMIT_SHA" --playbook playbooks/site.yml --pipeline "$CI_PIPELINE_ID" --job "$CI_JOB_ID" --wait 120
+  artifacts:
+    when: always
+    access: maintainer
+    expire_in: 7 days
+    paths: [mesh-artifacts/, reports/]
+    reports:
+      junit: reports/deployment.xml

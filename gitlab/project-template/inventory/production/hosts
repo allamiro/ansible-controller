@@ -1,0 +1,9 @@
+# Replace this documentation address. The controller environment map selects
+# this file's DIRECTORY (inventory/production), so encrypted group_vars beside
+# it are staged with the inventory in mesh mode.
+#
+# The name is deliberately extensionless: a directory inventory source skips
+# files matching inventory_ignore_extensions, so a suffix can silently produce
+# an empty host list. Explicit single-file sources are never filtered that way.
+[deployment]
+app01 ansible_host=192.0.2.10 ansible_user=svc_ansible

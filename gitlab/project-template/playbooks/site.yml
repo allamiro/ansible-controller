@@ -1,0 +1,20 @@
+---
+- name: Confirm the inventory resolved before touching anything
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Refuse an empty deployment group
+      ansible.builtin.assert:
+        that: groups['deployment'] | default([]) | length > 0
+        fail_msg: >-
+          The inventory resolved no hosts in [deployment]. A play with no hosts
+          succeeds, so this would otherwise be reported as a green deployment.
+          Check the environment map's inventory selection; a directory source
+          skips files matching inventory_ignore_extensions.
+
+- name: Check automation target connectivity
+  hosts: deployment
+  gather_facts: false
+  tasks:
+    - name: Verify Ansible connectivity
+      ansible.builtin.ping:
