@@ -1,0 +1,20 @@
+sequenceDiagram
+    actor M as Maintainer
+    participant G as GitLab CE
+    participant R as Runner manager
+    participant J as Deployment job
+    participant C as Controller
+    participant T as Target
+    M->>G: Release manual job for reviewed commit
+    R->>G: Poll for ready jobs
+    G-->>R: Job assignment
+    R->>J: Start job container
+    J->>C: Pinned SSH request to ctl-run
+    C->>G: Fetch exact commit with deploy token
+    C->>C: Claim pipeline request before execution
+    C->>T: Run Ansible over SSH or WinRM
+    T-->>C: Playbook result
+    C-->>J: Execution exit code
+    J->>C: Retrieve result archive over SSH
+    C-->>J: Run record and available results
+    J->>G: Upload artifacts and job status

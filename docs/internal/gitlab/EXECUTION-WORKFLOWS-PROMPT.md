@@ -1,4 +1,8 @@
-# Execution-workflows design brief (prompt)
+# Internal execution-workflows design prompt
+
+Contributor reference only. This is not an installation guide or a statement of
+implemented features. Use [the CE operator guide](../../../gitlab/MAINTAINER-README.md)
+for normal operation.
 
 A reusable, repo-grounded prompt for designing the **execution workflows** of the
 GitLab-CE → controller → mesh integration across **every deployment topology**,
@@ -9,12 +13,12 @@ diagrams, matrices, and — only within the scope already granted — implementa
 and isolated tests. It does not authorize deploying a lab, publishing images, or
 rotating operational credentials.
 
-- **Design of record:** [ARCHITECTURE.md](ARCHITECTURE.md) — responsibilities,
+- **Design of record:** [ARCHITECTURE.md](../../../gitlab/ARCHITECTURE.md) — responsibilities,
   the 9-hop connection matrix, TLS modes A–E, failure/recovery, acceptance rows.
-- **Integration point:** [bin/ctl-run](bin/ctl-run) — the one controller-side
-  fetch-and-run command. **Env map:** [environments.example.yml](environments.example.yml).
-- **Mesh dispatch:** [../mesh/bin/mesh-run](../mesh/bin/mesh-run). **HA tiers:**
-  [../mesh/DESIGN.md](../mesh/DESIGN.md).
+- **Integration point:** [bin/ctl-run](../../../gitlab/bin/ctl-run) — the one controller-side
+  fetch-and-run command. **Env map:** [environments.example.yml](../../../gitlab/environments.example.yml).
+- **Mesh dispatch:** [../mesh/bin/mesh-run](../../../gitlab/../mesh/bin/mesh-run). **HA tiers:**
+  [../mesh/DESIGN.md](../../../gitlab/../mesh/DESIGN.md).
 
 ---
 
@@ -228,7 +232,7 @@ credentials beyond the authorization given.
 - **S5/S6 are genuinely new distributed-systems work.** Active/passive needs
   fencing and a decision on the in-flight jobs of the dead host; active/active
   needs durable cross-host admission and split-brain handling.
-  [../mesh/DESIGN.md](../mesh/DESIGN.md) already (correctly) defers these to
+  [../mesh/DESIGN.md](../../../gitlab/../mesh/DESIGN.md) already (correctly) defers these to
   Tier 2/3 and says Tier 3 = adopt AWX rather than build a database. Keep that
   honesty; do not build HA merely to complete the list.
 - **The TLS matrix is per-hop, not per-system.** The most common mistake is "we

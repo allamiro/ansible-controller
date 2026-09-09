@@ -14,9 +14,9 @@ controller image with `docker/mesh/Dockerfile`, targets `orchestrator` and
 `--build-arg ALLOW_MUTABLE_BASE=1`. Do not run the existing `e2e-up.sh` just to
 build these: it also manages a different lab.
 
-The Compose file pins GitLab CE 19.3.1 and Runner 19.3.1, the latest stable
-version verified on 2026-09-08. Recheck GitLab's official patch release list
-before later use; a floating `latest` tag would make evidence irreproducible.
+The Compose file pins GitLab CE 19.3.1 and Runner 19.3.1, used by the recorded
+verification runs. Check supported patch versions before a future deployment;
+retain explicit versions so test environments remain reproducible.
 Allow several GB of spare RAM and disk for a second GitLab instance.
 
 ## Run from repository root

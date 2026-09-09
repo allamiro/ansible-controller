@@ -1,285 +1,139 @@
-# GitLab-driven automation — architecture and evidence
+# GitLab Community Edition architecture
 
-**Current verification (2026-09-08):** read [VERIFICATION.md](VERIFICATION.md)
-for the isolated GitLab CE 19.3.1 test results, fixes and explicit coverage gaps.
-The older acceptance results below are historical. Full controller HA,
-autoscaling, durable request deduplication and live Windows coverage are still
-missing; the diagrams do not imply those capabilities are implemented.
-
-The design of record for the GitLab CE integration: responsibilities, trust
-boundaries, lifecycle, failure semantics, and the live evidence behind each
-claim. Deployment lives in [README.md](README.md); the disposable lab that
-exercises everything end to end lives in
-[mesh/labs/gitlab/](../mesh/labs/gitlab/README.md).
+GitLab stores automation projects and coordinates review and manual release.
+The controller fetches the reviewed commit and runs Ansible directly or through
+its Receptor mesh. Start with the [Maintainer guide](MAINTAINER-README.md) for
+login, project setup and everyday use. [Verification](VERIFICATION.md) lists
+what has been tested.
 
 ## Required boundary: GitLab is optional
 
-The original controller and mesh remain independently usable. GitLab adds an
-optional source/review/CI interface; it is not the mesh scheduler, a required
-runtime dependency, or a route to execution nodes.
+Native `make run`, `make mesh-run` and `make mesh-collect` remain available with
+local project files and runtime credentials. A GitLab outage prevents new
+repository fetches through `ctl-run`; it does not disable those native paths.
+There is no automatic fallback to an older checkout.
 
-- **Project content is pulled by the controller.** A deployment Runner job sends
-  a request over SSH containing the environment, project, commit SHA and
-  playbook name. It does not push the playbook payload to execution nodes.
-  `ctl-run` then fetches that SHA from GitLab using a controller-held credential.
-- **GitLab CE does not initiate controller or execution-node connections in
-  this design.** Runner manager polls GitLab; its deployment job connects only
-  to the controller. Deployment jobs need no node addresses, mesh sockets,
-  signing keys or target credentials. Enforce that boundary with network policy
-  as well as credential placement; Runner tags alone do not enforce it.
-- **The controller owns execution.** For standalone operation it runs Ansible
-  directly against SSH/WinRM targets. For mesh operation it submits signed work
-  through its local Receptor ingress; nodes initiate outbound mTLS connections
-  to the ingress and receive work over those established connections.
-- **Without GitLab**, operators use the existing `make run` / `ansible-playbook`
-  and `make mesh-run` / `mesh-run` paths with locally available project files,
-  inventories and runtime credentials. Mesh recovery remains available through
-  `make mesh-collect`. No GitLab token, Runner or `ctl-run` is needed for these
-  paths. Installing GitLab must not replace or gate them.
+![GitLab, Runner and controller responsibilities](diagrams/components.svg)
 
-When GitLab is unavailable, a new `ctl-run` request requiring a repository fetch
-will fail. That does not prevent native execution using already provisioned
-files. This is an explicit operator path, not an automatic fallback to an
-unreviewed or stale checkout. Core Compose definitions and mesh execution must
-continue to work without the optional GitLab override/network.
+GitLab Runner is the service that polls GitLab and starts CI job containers.
+`ansible-runner` is used inside mesh work to execute Ansible and collect results.
+They have different responsibilities.
 
-## Responsibilities
-
-| Component | Owns | Never does |
+| Component | Responsibility | Credential boundary |
 |---|---|---|
-| GitLab CE | source of truth, review (protected branches), pipeline initiation, results/artifacts presentation | contact the controller (initiates nothing outward) |
-| GitLab Runner (manager) | polls GitLab, spawns job containers (docker executor) | hold mesh/target credentials |
-| Validation jobs | syntax/lint on MRs and branches | touch secrets, sockets, or controllers |
-| Deploy jobs (protected refs only) | SSH to a controller and invoke `ctl-run` | fetch/hold repo tokens, choose credentials, reach targets |
-| `ctl-run` (controller-side command) | validate inputs, fetch the exact requested SHA (review is a CI governance assumption), stage in isolation, execute via existing engines, record audit linkage | be an API, accept caller-chosen URLs/credentials/modes, sandbox playbook content |
-| Standalone controller | `ansible-playbook` against directly-reachable SSH/WinRM targets | — |
-| Orchestrator + ingress A/B | mesh dispatch (`mesh-run`), work signing, result streaming | expose sockets beyond local permissions |
-| Execution nodes | run received payloads against their networks' SSH/WinRM targets | clone from GitLab, hold fetch tokens |
+| GitLab CE | Projects, merge requests, pipelines and artifact presentation | Stores protected, environment-scoped CI variables |
+| Runner manager | Poll GitLab and start job containers | Holds its runner token and Docker executor socket |
+| Validation job | Syntax-check and lint project content | Receives no deployment key or mesh mounts |
+| Deployment job | Invoke `ctl-run` over pinned SSH and retrieve results | Holds only the restricted controller-login key for deployment |
+| Controller | Fetch a commit, validate the environment mapping, track requests and execute | Holds repository fetch and target credentials |
+| Receptor ingress | Accept local submissions and deliver signed work | Holds mesh identity and work-signing material |
+| Execution node | Receive work and run Ansible against reachable targets | Holds its mesh identity and runtime target trust |
 
-**GitLab Runner ≠ ansible-runner**: the former executes pipeline scripts;
-the latter packages/streams Ansible work inside the mesh payload. They meet
-nowhere.
+The job's normal GitLab checkout uses `CI_JOB_TOKEN`. The controller fetches
+independently with a read-only deploy token. These credentials are separate.
+Deployment jobs receive no mesh TLS keys, signing keys, mesh sockets or target keys.
 
-## 1. Standalone execution (SSH + WinRM targets)
+## Standalone execution
 
-```mermaid
-sequenceDiagram
-    participant Dev as Developer
-    participant GL as GitLab CE
-    participant R as Runner job (protected ref)
-    participant C as Controller (ctl-run)
-    participant T as Targets
-    Dev->>GL: MR -> review -> merge to protected main
-    R->>GL: poll; job for merge commit SHA
-    R->>C: SSH (pinned host key, forced command)<br/>ctl-run --env prod-direct --sha SHA
-    C->>GL: fetch SHA (read-only deploy token)
-    C->>C: stage /var/lib/gitlab-runs/<env>/<sha>/<run>/
-    C->>T: ansible-playbook — SSH :22 / WinRM :5986(https)|:5985
-    T-->>C: task results
-    C-->>R: real rc (job status) + run record
-```
+![Standalone request, fetch, execution and artifact return](diagrams/standalone.svg)
 
-## 2. Mesh execution — connection initiation vs work delivery
+The controller uses its administrator-owned environment mapping to choose the
+inventory and credentials. It runs Ansible from the fetched project root.
+The restricted SSH command returns the exit code; the CI helper retrieves the
+run record for the GitLab artifact browser.
 
-```mermaid
-flowchart LR
-    subgraph ci["CI job (no mesh authority)"]
-        J["deploy job"]
-    end
-    subgraph ctl["Control host"]
-        CR["ctl-run"] --> MR2["mesh-run"]
-        MR2 -- "Unix socket<br/>(local permissions)" --> A["ingress A :27199"]
-        MR2 -.-> B["ingress B :27200"]
-    end
-    subgraph closed["Closed network"]
-        N["execution node"] -- "SSH :22 / WinRM :5985-6" --> T["targets"]
-    end
-    J -- "SSH (initiates)" --> CR
-    N == "node INITIATES outbound mTLS dial" ==> A
-    N -.-> B
-    A -- "signed work DELIVERED over the<br/>already-established connection" --> N
-```
+## Mesh execution
 
-Initiation and delivery run in opposite directions: nodes dial out once;
-work rides those established, mutually-authenticated connections inward.
+![Mesh connection initiation and work delivery](diagrams/mesh.svg)
 
-## 3. Multiple controllers and Runner placement
+Execution nodes initiate outbound mTLS connections to the ingress. Signed work
+travels back over those established connections. The CI job connects only to
+the controller, which submits through its local Unix socket.
 
-```mermaid
-flowchart TB
-    GL["GitLab CE"]
-    RM["Runner manager<br/>(one, central)"]
-    subgraph envs["environment-scoped variables pick the channel"]
-        V1["lab-*: CTL_HOST/KEY/KNOWN_HOSTS"]
-        V2["prod-*: CTL_HOST/KEY/KNOWN_HOSTS"]
-    end
-    C1["lab controller<br/>environments: lab-direct, lab-mesh"]
-    C2["prod controller<br/>environments: prod-direct, prod-mesh"]
-    RM --> GL
-    GL --- V1 & V2
-    V1 --> C1
-    V2 --> C2
-```
+The entire fetched project is staged for mesh execution, including root-level
+roles, collections and configuration. Repository paths referenced by Ansible
+configuration must still be valid in the executing runtime.
 
-One central Runner reaches every controller its jobs can SSH to; per-network
-Runners only when connectivity or trust demands it (a control-host Runner is
-the fully-local variant). **Tags schedule; they never authorize** —
-authorization is the protected-ref runner + each controller's own
-`environments.yml` allowlist + per-env credentials it alone holds.
-Live-proven: `lab-*` and `prod-*` scopes drive two controllers from one
-project (a variable collision between them was found and fixed by exactly
-this scoping).
+## Review and manual release in CE
 
-## 4. Project lifecycle
+![Community Edition review and deployment workflow](diagrams/workflow.svg)
 
-```mermaid
-flowchart LR
-    B["branch"] --> MRq["merge request"] --> V["validate (secretless)"]
-    V -->|red| B
-    V -->|green| Rev["review + optional CE approval"]
-    Rev --> M["Maintainer merges<br/>(protected main)"]
-    M --> P["main pipeline"]
-    P --> D["manual deploy-*<br/>(human releases)"]
-    P --> S["schedule / trigger+consent / tag"]
-    D & S --> X["ctl-run @ exact SHA"]
-    X --> Rec["target records commit"]
-```
+Bootstrap protects `main` with push disabled and merge allowed for Maintainers,
+requires a successful validation pipeline, and configures protected deployment
+runners and variables. A Maintainer releases the chosen manual deployment job.
+Schedules and API triggers also produce manual deployment candidates.
 
-CE tier honesty (verified against current docs): approvals exist but only
-Premium can *require* them. Enforced controls: protected branch
-(push=no one, merge=Maintainers — dev1's merge attempt returned HTTP 401),
-pipelines-must-succeed (red MR refused merge even for root, HTTP 405),
-ref-protected deploy runner (branch deploy jobs sit `runner=NONE`),
-protected+scoped variables, manual release buttons.
+CE records MR approvals, but a required reviewer count is not part of this
+workflow. Maintainers who can merge CI configuration or change project policy
+are trusted release operators. Runner tags select jobs; tags alone are not
+an authorization boundary.
 
-## 5. CA issuance and runtime verification
+## Retries, artifacts and recovery
 
-```mermaid
-flowchart LR
-    subgraph offline["Offline CA (never on the mesh)"]
-        CA["ca.key"] --> SIGN["sign CSR<br/>(identity checked)"]
-    end
-    subgraph nodeh["Node host"]
-        KEY["key born here,<br/>never leaves"] --> CSR["CSR"] --> SIGN
-        SIGN --> CRT["tls.crt + ca.crt bundle"]
-    end
-    subgraph runtime["Every connection"]
-        M1["chain to mesh CA"] --> M2["receptor node-ID SAN<br/>1.3.6.1.4.1.2312.19.1"] --> M3["hostname vs dialed name"] --> M4["work signature<br/>(ingress private key,<br/>node public key)"]
-    end
-    CRT --> runtime
-```
+![Decision flow for a repeated pipeline request](diagrams/retries.svg)
 
-Live evidence for M3: the single-box node initially failed with
-`certificate is valid for controller-a, receptor-controller, not
-host.docker.internal` — controller certs must carry the DNS name nodes
-dial, exactly as EXTERNAL-CA.md prescribes; re-issuing with that SAN fixed
-it. GitLab's own TLS mode (public CA / internal CA / pinned self-signed /
-reverse-proxy termination / lab HTTP) affects only the GitLab hops and
-never substitutes for any of this.
+The request identity combines environment, project, pipeline ID and playbook
+path, and binds them to a commit. The controller writes a durable claim before
+execution. A job Retry reuses that identity; a new pipeline creates a new request.
 
-## 6. Failure, cancellation, recovery
+- A completed request returns its original exit code without executing again.
+- A proven pre-submission refusal can attempt admission again.
+- An unresolved request requires collection or operator reconciliation.
+- `collect` retrieves the original mesh result; it does not dispatch a playbook.
 
-```mermaid
-flowchart TB
-    D["dispatch"] -->|pre-submit refusal| R0["nothing executed,<br/>no hold leaked"]
-    D -->|submitted| RUN["running"]
-    RUN -->|stream breaks| RI["results-incomplete<br/>(hold kept)"]
-    RUN -->|CI cancel/timeout| DET["caller disconnected —<br/>remote play CONTINUES"]
-    DET --> RI2["record running/incomplete/succeeded<br/>by timing"]
-    RI & RI2 --> COL["collect job / ctl-run --collect:<br/>real rc, no re-execution"]
-    D -->|reply lost| AMB["submit-ambiguous:<br/>human work-list procedure"]
-    NEW["any new dispatch"] -->|"guard: ANY non-final record"| REF["refused with recovery steps"]
-```
+CI cancellation can disconnect the caller while remote work continues. Check
+the original UUID before taking any further action. If submission was ambiguous
+and no unit identity is known, investigate the ingress and target state; absence
+from one work list is not proof that nothing ran.
 
-`ctl-run` adds a per-environment lock and inherits the lab-proven guard: a
-GitLab retry can never silently duplicate an operation whose outcome is
-unknown. A UUID is not exactly-once; reconciliation demands proof
-(staleness + slot-flock liveness + quiescence + unit-state probes) before
-any record transition.
+Artifact retrieval uses `ctl-run --artifacts` over the same restricted SSH key.
+It exports run records, available console logs and whitelisted mesh result files.
+It excludes staged repositories, credential directories and symlinked files.
+Downloads are restricted to Maintainers and expire after seven days by default.
+A failed export cannot turn a failed playbook into a successful CI job.
 
-## 7. Platform bootstrap and maintenance
-
-```mermaid
-flowchart LR
-    OP["operator shell<br/>(emergency path — never a pipeline)"] --> B1["GitLab compose up"]
-    OP --> B2["controller/mesh compose + PKI scripts"]
-    OP --> B3["setup.sh: tokens, keys,<br/>scoped variables, wiring"]
-    B1 & B2 & B3 --> DAY["daily work happens in GitLab"]
-    DAY -.->|"platform changes NEVER auto-run<br/>from automation-project merges"| B2
-```
-
-A stopped GitLab, Runner, or mesh cannot repair itself through its own
-pipelines; `setup.sh`/`lab-up.sh`/compose remain the operator-owned
-bootstrap and break-glass path. Playbook merges execute playbooks — they
-never recreate the controller or touch PKI.
+Preserve `/var/lib/gitlab-runs/requests/` and its corresponding records on
+persistent storage. Removing claims removes retry protection. This state belongs
+to one controller; it is not a distributed lease or an HA scheduler.
 
 ## Connection matrix
 
-| # | Source → Destination | Initiator | Protocol/port | Authentication | Verified by / trust store | Credential owner |
-|---|---|---|---|---|---|---|
-| 1 | browser/git → GitLab | client | HTTP(S) :8929* | password/PAT/session | client CA store (TLS modes A–D) | user |
-| 2 | Runner manager → GitLab | runner | HTTP(S) | runner token | runner config CA (`tls-ca-file`) | admin |
-| 3 | job container → GitLab | job | HTTP(S) | CI_JOB_TOKEN | job image trust | GitLab (ephemeral) |
-| 4 | deploy job → controller | job | SSH :22 (in-network) | ed25519 file variable (env-scoped, protected) | PINNED host key (CTL_KNOWN_HOSTS), forced command | admin via setup.sh |
-| 5 | ctl-run → GitLab | controller | HTTP(S) | read-only deploy token (`<user>:<token>`) | controller-side config | controller file, root-provisioned |
-| 6 | mesh-run → ingress | controller | Unix socket | filesystem permissions | local ownership = submission authority | platform |
-| 7 | node → ingress A/B | node | TCP 27199/27200 outbound | mesh mTLS both ways | mesh CA + node-ID SAN + dialed-name SAN; work signature on delivery | mesh PKI |
-| 8 | controller/node → SSH target | executing runtime | SSH :22 | per-env key from environments.yml | known_hosts where Ansible runs | admin |
-| 9 | controller/node → WinRM target | executing runtime | HTTPS :5986 (preferred) / HTTP :5985 | NTLM (Kerberos needs extra libs); creds via Vault vars | CA trust where Ansible runs; `ansible_winrm_server_cert_validation=validate` | admin/Vault |
+| Connection | Initiator | Transport | Authentication and trust |
+|---|---|---|---|
+| Browser or Git client → GitLab | User client | HTTP/S, lab port 8929 | User session or repository-scoped token; client CA trust for HTTPS |
+| Runner manager → GitLab | Runner | HTTP/S | Runner authentication token and runner CA trust |
+| Job checkout → GitLab | Job/helper | HTTP/S | Ephemeral `CI_JOB_TOKEN` and checkout-helper CA trust |
+| Deployment job → controller | Job | SSH 22 within the Docker network | Protected file key, pinned `CTL_KNOWN_HOSTS`, forced `ctl-shell` command |
+| Controller fetch → GitLab | Controller | HTTP/S | Read-only deploy token and controller CA trust |
+| Mesh dispatcher → ingress | Controller | Local Unix socket | Filesystem ownership grants submission authority |
+| Node → ingress A/B | Node | TCP, host ports 27199/27200 | Mesh CA, node identity and dialed-hostname validation |
+| Executing runtime → SSH target | Controller or node | SSH 22 | Target key and known-hosts verification at the runtime |
+| Executing runtime → Windows target | Controller or node | Prefer WinRM HTTPS 5986 | Windows credentials, collections, Vault material and target CA trust |
 
-\* GitLab TLS modes: **A** public CA (client stores already trust), **B**
-internal CA (install in Runner `tls-ca-file`, job images, controller — each
-hop separately), **C** pinned self-signed (same placement, explicit single
-cert, evaluation only), **D** reverse-proxy termination (backend hop may be
-plaintext — declare it), **E** plain HTTP (this lab: no transport
-encryption or server verification on GitLab hops — disposable, isolated
-use only; SSH hops (4, 8) stay encrypted regardless, and Git-over-SSH would
-not protect the Runner's HTTP API traffic either).
+## Certificate and credential placement
 
-## Alternatives considered
+GitLab HTTPS, controller SSH, target SSH/WinRM and mesh mTLS are separate trust
+relationships. Configure CA trust for the Runner manager, checkout helper and
+controller independently when using a private GitLab CA.
 
-| Alternative | Why not here |
-|---|---|
-| Controller HTTP API / webhook receiver (AWX/AAP shape — cf. the Red Hat AAP+GitLab pattern) | an always-on network submission surface duplicating what an SSH forced command does for one command; AAP is the commercial product when a full API platform is actually required |
-| Run ansible inside CI jobs (common IaC pattern) | right for secretless validation (our validate stage does exactly this); as the execution path it moves target credentials into CI, bypasses mesh signing/admission/never-run-twice, and loses central audit |
-| `ansible-pull` on targets | inverts the wrong edge: git+ansible on every target, every target reaching GitLab, no central results, no mesh signing; our controller-side fetch already captures pull's benefit at the trust point that has it |
-| One Runner per controller | unnecessary: one central manager + env-scoped channel variables reach any controller its jobs may SSH to |
+Ingress certificates must include the DNS name nodes actually dial. Nodes
+verify that name and the mesh identity; work signatures provide a separate
+check on submitted work. CA private keys remain with the certificate issuer.
 
-## Acceptance matrix (this integration's runs; the lab README carries the base lifecycle matrix)
+A `galaxy_dir` mapping stages collections such as `ansible.windows`. It does not
+provide a Vault password: provision Vault material to the executing controller
+or node separately. Live Windows execution remains outside current test coverage.
 
-| Case | Result | Evidence |
-|---|---|---|
-| Input rejection (env/sha/traversal/project/metachars) | PASS | five refusals, exact messages |
-| Forced command blocks shell/`bash`/`$(id)` | PASS | `ctl-shell` refusals |
-| Standalone run, real controller, exact SHA | PASS | target records `commit=297ed2ac…` |
-| Mesh run, real control plane + single-box node | PASS | `EXECUTED-ON=<node>`, rc=0, mesh job `e4b9888a…` |
-| Wrong-SAN controller cert refused by node | PASS (negative) | receptor TLS error naming the SANs |
-| Pipeline-level deploy via SSH channel | PASS | job 70: fetch `93746496…` → mesh rc=0 |
-| Env-scoped variables select the right controller | PASS | lab-*/prod-* coexisting; collision fixed |
-| Audit chain both directions | PASS | mesh meta `gitlab{…}` + run record `mesh_job` |
-| Real ansible rc across CI | PASS (lab matrix) | fail.yml → rc=2 → job failed |
-| Cancellation = disconnect only | PASS (lab matrix) | remote completion after cancel |
-| Guard vs CI retry; reconcile; ambiguous verdicts | PASS (lab matrix) | live forced cases |
-| WinRM execution | **UNTESTED** | no Windows host. Transport (pywinrm/NTLM) verified in both images; a real mesh run additionally needs `ansible.windows` staged via a `galaxy_dir` env and the Vault password provisioned to the EXECUTING runtime (node) — pattern documented, unexercised |
-| Submodules / LFS projects | REFUSED by design | explicit errors |
-| GitLab TLS modes B–D | See current verification | private CA + proxy termination exercised in gitlab-audit; self-signed leaf and end-to-end upstream TLS remain untested |
+## Controller placement and maintenance
 
-## Production gaps
+One Runner manager can serve jobs that reach multiple controllers, provided
+network routes, scoped CI variables and each controller's allowlists are
+configured independently. Separate controllers do not share request claims.
+Do not put them behind a load balancer and assume retries are deduplicated across
+hosts. Bootstrap's fixed runner names and local token files also require
+explicit administration when adding projects.
 
-Enforced multi-approver review (Premium or external gating), HTTPS GitLab
-(mode A/B) with per-hop trust installation, a real Windows target to execute the WinRM path (including ansible.windows
-staging via galaxy_dir and node-side Vault password provisioning), Vault-based target credentials end to end
-(pattern documented, not exercised), controller host-key rotation
-procedure for the pinned CI known_hosts, retention policy for
-`/var/lib/gitlab-runs` records beyond the keep-last-5 staging trim, and
-site decisions on which projects each environment allowlists.
-
-Two known limitations of the current mesh path:
-**mesh project-root staging** — `mesh-run` stages the playbook's *directory* as
-the project root (roles/templates/files that are siblings of the playbook travel;
-repo-root `roles/`, `collections/`, `group_vars/`, or a root `ansible.cfg` fetched
-at the SHA do **not**). Mesh projects must therefore keep a self-contained playbook
-layout, or a follow-up must teach `mesh-run` to stage an explicit project root
-distinct from the playbook. **Bootstrap PAT lifecycle** — the root `api` PAT is now
-self-revocable after wiring via `REVOKE_BOOTSTRAP=1 gitlab/setup.sh <url>`, but the
-operator must actually run it; it is not automatic on completion.
+Platform maintenance stays on the host: Compose, PKI scripts and `setup.sh`
+configure the services. Routine automation-project merges do not automatically
+upgrade GitLab, rotate keys or reconfigure the mesh. Reviewed playbooks still
+execute with real runtime privileges; `ctl-run` is not a sandbox for their content.

@@ -1,0 +1,7 @@
+flowchart TB
+    B["Developer creates a branch"] --> V["Syntax and lint validation"]
+    V --> R["Maintainer reviews the merge request"]
+    R --> M["Merge into protected main"]
+    M --> P["Maintainer manually releases deployment"]
+    P --> X["Controller executes the reviewed commit"]
+    X --> A["GitLab shows result and downloadable artifacts"]

@@ -4,27 +4,16 @@ Use GitLab to store Ansible automation, review changes, and request execution
 on this controller. Run host commands from the `ansible-controller` checkout
 unless a step explicitly switches to the automation project.
 
-## Issue #94 implementation
+## Community Edition workflow
 
-The reference workflow now includes manual release, result artifacts and durable
-pipeline-request deduplication for
-[issue #94](https://github.com/allamiro/ansible-controller/issues/94). Native protected
-environments require a licensed GitLab instance; CE retains its documented
-manual/protected-branch gate. See the [CI contract](README.md#ci-approval-retries-and-artifacts).
+No Premium subscription is needed. Developers propose Ansible changes;
+Maintainers review and merge into protected `main`, then manually release the
+chosen deployment job. GitLab displays the result and downloadable artifacts.
 
-| Requirement | Current implementation |
-|---|---|
-| Pipeline dispatch with the playbook's exit code | Implemented through SSH → `ctl-run` → `mesh-run` |
-| Human releases an ordinary deployment | Manual `deploy-mesh` / `deploy-direct` jobs after merge |
-| Protected environment and required deployment approvals | Optional setup provisioning with verified deployment/approval groups; Premium/Ultimate required |
-| Runner connection without mesh PKI in jobs | Implemented: restricted SSH key, pinned controller host key |
-| Recovery of incomplete results | Manual `collect` job for the original mesh UUID |
-| Never execute twice after pipeline retry | Same pipeline request replays its recorded result; unresolved requests refuse redispatch |
-| `logs/runner/<job-id>/` and `meta.json` uploaded to GitLab artifacts | Exported through restricted SSH and uploaded as Maintainer-only job artifacts |
+![Branch, validation, Maintainer merge and manual deployment](diagrams/workflow.svg)
 
-The current path is push → validation → review/merge → manual dispatch →
-console output, exit status and downloadable artifacts in GitLab. Durable
-request records remain on the controller to prevent execution on job Retry.
+Keep platform setup with the host administrator. Use a named Maintainer account
+for daily reviews and releases; use root only for initial administration.
 
 ## 1. Log in
 
@@ -73,7 +62,7 @@ See GitLab's [project membership documentation](https://docs.gitlab.com/user/pro
 The bootstrap needs Bash, Python 3, jq, curl, Git, Docker Compose, a working
 controller image, and an existing GitLab instance. Mesh deployment also needs
 the working orchestrator, ingresses, and execution node described in
-[README.md, test case B](README.md#test-case-b--gitlab--controller--one-mesh-node-on-this-box).
+[mesh setup guide](README.md#mesh-setup).
 Installing GitLab alone does not create a working mesh.
 
 Create a short-lived root personal access token with `api` scope using the
@@ -255,19 +244,10 @@ trigger tokens under **Settings → CI/CD → Pipeline trigger tokens**. Maintai
 who can change project policy or merge pipeline code remain trusted administrators
 of this flow. Older seeded projects must adopt the updated pipeline through review.
 
-For **Premium/Ultimate**, configure **Settings → CI/CD → Protected environments**
-for the exact pipeline names `prod-direct` and/or `prod-mesh`. Set **Allowed to
-deploy** to the release group and add required deployment approvers. Also set
-required MR approval rules if review must block merge. An eligible approver
-approves the deployment in GitLab's environment/deployment view; approval does
-not automatically start the job, so an allowed deployer then runs it.
-Set `PROTECTED_DEPLOY_GROUP_ID` and `PROTECTED_APPROVER_GROUP_ID` (and optionally
-`REQUIRED_DEPLOY_APPROVALS`) when running setup to provision and verify these
-gates. Share the project with both groups first. For existing wiring, run the
-[standalone policy command](README.md#ci-approval-retries-and-artifacts). It refuses
-policy drift and unavailable APIs. Native protected environments are unavailable in CE.
-See [protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
-and [deployment approvals](https://docs.gitlab.com/ci/environments/deployment_approvals/).
+CE records merge-request approvals but does not enforce reviewer counts.
+Protected branch permissions and manual job release provide this guide's gates.
+If your organization later adopts a licensed GitLab edition, see
+[optional approval policies](OPTIONAL-APPROVALS.md).
 
 ## 7. Results, recovery and future updates
 
