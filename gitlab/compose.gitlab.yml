@@ -21,7 +21,9 @@
 # BEFORE first startup, create the interpolation/state files (no circular
 # dependency on setup.sh — it needs the GitLab API and runs afterwards):
 #
-#   mkdir -p gitlab/.gitlab-state
+#   umask 077
+#   mkdir -p gitlab/.gitlab-state/ctl-secrets
+#   chmod 700 gitlab/.gitlab-state gitlab/.gitlab-state/ctl-secrets
 #   echo 0 > gitlab/.gitlab-state/fips0
 #   # ALPHANUMERIC ONLY: the value is embedded in Omnibus's Ruby config in
 #   # single quotes — a quote character would break GitLab's first boot.

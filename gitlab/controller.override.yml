@@ -38,7 +38,14 @@ services:
         read_only: true
         bind:
           create_host_path: false
-      - ./gitlab/.gitlab-state/ctl-secrets:/etc/ctl-run/secrets:ro
+      # Pre-create as the host operator; Docker must not create this as root
+      # before setup.sh writes the deploy tokens.
+      - type: bind
+        source: ./gitlab/.gitlab-state/ctl-secrets
+        target: /etc/ctl-run/secrets
+        read_only: true
+        bind:
+          create_host_path: false
       - gitlab-runs:/var/lib/gitlab-runs
 
 networks:

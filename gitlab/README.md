@@ -38,9 +38,11 @@ Site state (tokens, keys, your real `environments.yml`) lives in
 ```bash
 # 1. GitLab: reuse a running instance, or start one:
 #      docker compose --env-file gitlab/.gitlab-state/lab.env -f gitlab/compose.gitlab.yml up -d --wait
-# 2. create the environment map FIRST — the controller override binds it
-#    read-only and refuses to start if it is missing (setup.sh refreshes it):
-mkdir -p gitlab/.gitlab-state
+# 2. create the environment map and private token directory FIRST — the
+#    override refuses missing bind sources. setup.sh preserves an existing map;
+#    set allowed_projects to your chosen project if it differs from the example.
+mkdir -p gitlab/.gitlab-state/ctl-secrets
+chmod 700 gitlab/.gitlab-state gitlab/.gitlab-state/ctl-secrets
 cp -n gitlab/environments.example.yml gitlab/.gitlab-state/environments.yml
 # 3. wire the controller into the GitLab network with ctl-run aboard:
 docker compose -f docker-compose.yml -f gitlab/controller.override.yml up -d
@@ -78,8 +80,9 @@ sudo chown -R 1000:1000 mesh/secrets/receptor/issued/exec-local-a
 #    orchestrator.override.yml must point the ansible service at an
 #    orchestrator image (see mesh/README Step 2)
 make mesh-up
-# the env map must exist before the controller override binds it (see case A):
-mkdir -p gitlab/.gitlab-state
+# The env map and operator-owned token directory must exist first (see case A):
+mkdir -p gitlab/.gitlab-state/ctl-secrets
+chmod 700 gitlab/.gitlab-state gitlab/.gitlab-state/ctl-secrets
 cp -n gitlab/environments.example.yml gitlab/.gitlab-state/environments.yml
 docker compose -f docker-compose.yml -f gitlab/controller.override.yml -f mesh/compose.mesh.yml --profile mesh up -d
 
