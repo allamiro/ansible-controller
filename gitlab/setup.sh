@@ -85,6 +85,22 @@ if [ "$empty_repo" = true ]; then
   # will actually run under (else deploy jobs get no CTL_SSH_KEY by scope, or
   # ctl-run rejects an undefined environment)
   sed -i 's/\blab-direct\b/prod-direct/g; s/\blab-mesh\b/prod-mesh/g' "$seed/.gitlab-ci.yml"
+  # Job images override the runner default. Bake operator choices into the
+  # seed as literals so pipeline/trigger variables cannot select a new image.
+  python3 - "$seed/.gitlab-ci.yml" "${VALIDATE_IMAGE:-ansible-controller:e2e}" "${DEPLOY_IMAGE:-ansible-controller:e2e}" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+pipeline = path.read_text()
+for variable, image in zip(('VALIDATE_IMAGE', 'DEPLOY_IMAGE'), sys.argv[2:]):
+    original = f'    name: ansible-controller:e2e # bootstrap: {variable}'
+    if pipeline.count(original) != 1:
+        raise SystemExit(f'expected one seed image marker for {variable}')
+    pipeline = pipeline.replace(original, f'    name: {json.dumps(image)}')
+path.write_text(pipeline)
+PY
   git -C "$seed" init -q -b main
   git -C "$seed" -c user.name="Lab Operator" -c user.email="lab@lab.local" add -A
   git -C "$seed" -c user.name="Lab Operator" -c user.email="lab@lab.local" commit -qm "seed: mesh automation project"

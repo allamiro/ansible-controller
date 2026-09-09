@@ -35,7 +35,7 @@ validate:
   stage: validate
   tags: [mesh-validate]
   image:
-    name: ansible-controller:e2e
+    name: ansible-controller:e2e # bootstrap: VALIDATE_IMAGE
     entrypoint: [""]
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
@@ -50,7 +50,7 @@ validate:
 .ctl-ssh:
   tags: [mesh-deploy]                   # protected runner: protected refs only
   image:
-    name: ansible-controller:e2e
+    name: ansible-controller:e2e # bootstrap: DEPLOY_IMAGE
     entrypoint: [""]
   resource_group: mesh-lab
   before_script:

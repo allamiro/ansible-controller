@@ -103,15 +103,46 @@ print(json.dumps({'id': 1, 'empty_repo': bool(os.environ.get('EMPTY_REPO'))}))
         self.assertNotIn('DELETE ', self.calls.read_text())
         self.assertFalse((self.state / 'environments.yml').exists())
 
-    def test_existing_empty_project_is_seeded_without_recreating_it(self):
+    def seed_pipeline(self, **images):
         shutil.copytree(ROOT / 'mesh/labs/gitlab/project-seed', self.base / 'mesh/labs/gitlab/project-seed')
         git = self.bin / 'git'
-        git.write_text('#!/bin/sh\nif [ "$3" = push ]; then /usr/bin/git -C "$2" rev-parse --verify main > "$SEED_MARKER"; exit; fi\nexec /usr/bin/git "$@"\n')
+        git.write_text('''#!/bin/sh
+if [ "$3" = push ]; then
+    /usr/bin/git -C "$2" rev-parse --verify main > "$SEED_MARKER" || exit
+    /usr/bin/git -C "$2" show HEAD:.gitlab-ci.yml > "$SEED_PIPELINE"
+    exit
+fi
+exec /usr/bin/git "$@"
+''')
         git.chmod(0o755)
         marker = self.base / 'seeded-commit'
-        self.run_setup(REVOKE_BOOTSTRAP='0', EMPTY_REPO='1', SEED_MARKER=str(marker))
+        pipeline = self.base / 'seeded-pipeline.yml'
+        self.env.pop('VALIDATE_IMAGE', None)
+        self.env.pop('DEPLOY_IMAGE', None)
+        self.run_setup(REVOKE_BOOTSTRAP='0', EMPTY_REPO='1', SEED_MARKER=str(marker),
+                       SEED_PIPELINE=str(pipeline), **images)
         self.assertEqual(len(marker.read_text().strip()), 40)
         self.assertNotIn('POST http://fixture.invalid/api/v4/projects\n', self.calls.read_text())
+        return yaml.safe_load(pipeline.read_text())
+
+    def test_existing_empty_project_is_seeded_without_recreating_it(self):
+        pipeline = self.seed_pipeline()
+        for job in ('validate', '.ctl-ssh'):
+            self.assertEqual(pipeline[job]['image'],
+                             {'name': 'ansible-controller:e2e', 'entrypoint': ['']})
+
+    def test_seed_commits_distinct_operator_images(self):
+        validate = 'registry.example:5000/validation:release'
+        deploy = 'registry.example:5000/ssh@sha256:' + 'a' * 64
+        pipeline = self.seed_pipeline(VALIDATE_IMAGE=validate, DEPLOY_IMAGE=deploy)
+        self.assertEqual(pipeline['validate']['image'],
+                         {'name': validate, 'entrypoint': ['']})
+        self.assertEqual(pipeline['.ctl-ssh']['image'],
+                         {'name': deploy, 'entrypoint': ['']})
+        for name, job in pipeline.items():
+            if isinstance(job, dict) and job.get('extends') == '.ctl-ssh':
+                self.assertNotIn('image', job, name)
+        self.assertEqual(pipeline['deploy-mesh']['environment']['name'], 'prod-mesh')
 
     def test_failed_tag_protection_stops_setup(self):
         result = self.run_setup(REVOKE_BOOTSTRAP='0', TAG_FAILURE='1')
