@@ -27,6 +27,7 @@ jobs:
         run: |
           python3 -m venv "$RUNNER_TEMP/gitlab-tests"
           "$RUNNER_TEMP/gitlab-tests/bin/pip" install PyYAML
+          export PATH="$RUNNER_TEMP/gitlab-tests/bin:$PATH"
           "$RUNNER_TEMP/gitlab-tests/bin/python" -m unittest discover -s gitlab/tests -p 'test_*.py' -v
 
   lint:
