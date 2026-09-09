@@ -33,6 +33,15 @@ project files. See the [architecture boundary](ARCHITECTURE.md#required-boundary
 Site state (tokens, keys, your real `environments.yml`) lives in
 `gitlab/.gitlab-state/` — gitignored, per box.
 
+Set `VALIDATE_IMAGE` and `DEPLOY_IMAGE` when running `setup.sh` to choose the
+validation and SSH deployment job images (both default to
+`ansible-controller:e2e`). For an empty project, setup writes these choices
+as literal images into the seeded pipeline as well as the runner defaults.
+Validation images need Ansible and ansible-lint; deployment images need Git
+and an SSH client. Setup preserves populated repositories: update their
+`validate.image.name` and `.ctl-ssh.image.name` through a reviewed commit
+when changing images. Pipeline variables do not select these job images.
+
 ## Test case A — GitLab + controller, single (standalone) mode
 
 ```bash
