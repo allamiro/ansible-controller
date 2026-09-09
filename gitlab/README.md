@@ -146,3 +146,11 @@ trust separately, and configure WinRM trust at the executing runtime separately.
 Run staging is retained for investigation. Apply an operator-owned retention
 policy that preserves unresolved runs and required audit evidence, and monitor
 the `/var/lib/gitlab-runs` volume's disk use.
+
+Standalone execution restores `/configs/ansible.cfg` after the SSH/sudo boundary
+when that site file exists and `ANSIBLE_CONFIG` is unset. An explicit
+administrator-provided `ANSIBLE_CONFIG` takes precedence; without either,
+Ansible discovers the fetched project's configuration from its root directory.
+Mesh execution stages the full fetched repository with `mesh-run --project-dir`,
+preserving nested playbook paths and root-level roles, collections and config.
+Paths inside that config must still be valid on the execution node.

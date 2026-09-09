@@ -135,6 +135,21 @@ make execution of malicious playbooks safe: the deployment key grants powerful
 controller execution authority. CI YAML, playbooks, inventory plugins and project
 ansible.cfg require the same trusted-author review.
 
+## PR review follow-up — 2026-09-09
+
+The merge review added full fetched-project staging for mesh dispatch through
+`mesh-run --project-dir`, retaining the playbook's path relative to that root.
+Standalone execution restores the fixed `/configs/ansible.cfg` site path after
+sudo when no explicit `ANSIBLE_CONFIG` is present. Bootstrap now retains its PAT
+and fails if revocation fails, generates allowlists for the requested project,
+and writes/owns the controller SSH directory through the container's root user.
+
+Isolated command regressions cover the transmitted project tree and nested
+playbook path, the existing default staging behavior, an out-of-project refusal,
+failed/successful token revocation, and custom-project allowlists. These use
+transport/API stand-ins; they do not add live GitLab pipeline evidence to the
+historical audit above. CI runs the command tests on subsequent PRs and main.
+
 ## Remaining requirements and limits
 
 | Requirement | Status / next necessary work |
@@ -154,7 +169,7 @@ ansible.cfg require the same trusted-author review.
 | Ambiguous submit after lost response | Must stay UNKNOWN. Recovery of a known unit and ingress loss are narrower tests; they do not prove every submit/crash/network partition timing. |
 | Controller restart mid-job, data loss, disaster restore | NOT TESTED in this audit; requires durable idempotency/fencing design and restore fixtures. |
 | GitLab artifact presentation | PARTIAL: console output/status is visible; full controller artifacts are not exported by the seed workflow. Add a constrained read-only artifact retrieval contract, not mesh volumes in CI. |
-| Complete project tree in mesh execution | LIMITED: mesh packaging uses the playbook directory; sibling root roles/config/resources need explicit packaging. Standalone now uses project-root configuration. |
+| Complete project tree in mesh execution | Implemented in the PR review follow-up: ctl-run passes the fetched root to mesh-run. Local transport-stub regression verifies the staged tree and nested playbook argument; the historical live audit predates this change. |
 | Installer coverage | Isolated fixture bootstrap tested. Existing-environment migration, every installer parameter, certificate provisioning and bootstrap-token revocation failure paths are not fully exercised. |
 
 These are not resolved by more Docker containers alone. The next architectural

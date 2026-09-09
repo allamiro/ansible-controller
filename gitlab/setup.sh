@@ -47,9 +47,10 @@ glab GET /user >/dev/null || die "PAT does not authenticate against $GLURL"
 # api token does not linger. REVOKE_BOOTSTRAP=1 gitlab/setup.sh <url>
 if [ "${REVOKE_BOOTSTRAP:-}" = 1 ]; then
   say "revoking the bootstrap PAT (self) and removing the local copy"
-  glab DELETE /personal_access_tokens/self >/dev/null 2>&1 \
-    && echo "    PAT revoked in GitLab" \
-    || echo "    self-revoke unsupported on this CE build — revoke it in the UI (Settings > Access tokens)"
+  if ! glab DELETE /personal_access_tokens/self >/dev/null; then
+    die "PAT revocation failed; retained $PATF and curl credentials for retry or manual revocation"
+  fi
+  echo "    PAT revoked in GitLab"
   rm -f "$PATF" "$STATE/.curl-auth"
   exit 0
 fi
@@ -107,7 +108,18 @@ glab GET "/projects/$PID/protected_tags/v%2A" >/dev/null 2>&1 || \
     --data-urlencode "create_access_level=40" >/dev/null 2>&1 || true
 
 say "environment map"
-[ -s "$STATE/environments.yml" ] || cp gitlab/environments.example.yml "$STATE/environments.yml"
+if [ ! -s "$STATE/environments.yml" ]; then
+  python3 - "$PROJ" "$STATE/environments.yml" <<'PY'
+import sys
+import yaml
+with open('gitlab/environments.example.yml') as source:
+    config = yaml.safe_load(source)
+for environment in config['environments'].values():
+    environment['allowed_projects'] = [sys.argv[1]]
+with open(sys.argv[2], 'w') as target:
+    yaml.safe_dump(config, target, sort_keys=False)
+PY
+fi
 
 say "fetch credential (read-only deploy token, one file per env)"
 if ! grep -qs : "$STATE/ctl-secrets/prod-mesh.token"; then
@@ -149,10 +161,8 @@ if [ ! -f "$STATE/ci_ed25519" ]; then
 fi
 
 say "authorized key (restricted to ctl-shell) in ./ssh/authorized_keys"
-mkdir -p ssh && chmod 700 ssh
-line="restrict,command=\"/usr/local/lab-bin/ctl-shell\" $(cat "$STATE/ci_ed25519.pub")"
-grep -qsF "$(cat "$STATE/ci_ed25519.pub")" ssh/authorized_keys 2>/dev/null || echo "$line" >> ssh/authorized_keys
-chmod 600 ssh/authorized_keys
+# Write through the root container below: on reruns ssh/ is already owned by
+# the container UID, which may differ from the host operator's UID.
 
 say "controller->target key (./ssh/id_ed25519) + demo target's authorized_keys"
 # prod-direct reaches the demo target as /home/ansible/.ssh/id_ed25519 (the
@@ -168,14 +178,17 @@ timg=$(docker inspect --type container -f '{{.Config.Image}}' ansible-controller
 # sshd StrictModes requires its ~/.ssh + authorized_keys owned by uid 1000. The
 # CI authorized_keys (already written above) is re-owned to 1000 here too.
 docker run --rm -u 0 -v "$PWD/ssh":/ctl -v "$PWD/$STATE/target-ssh":/tgt \
+  -v "$PWD/$STATE/ci_ed25519.pub":/ci.pub:ro \
   --entrypoint bash "$timg" -euc '
     set -e
+    ci_pub=$(cat /ci.pub)
+    grep -qsF "$ci_pub" /ctl/authorized_keys 2>/dev/null || printf "restrict,command=\"/usr/local/lab-bin/ctl-shell\" %s\n" "$ci_pub" >> /ctl/authorized_keys
     [ -f /ctl/id_ed25519 ] || ssh-keygen -q -t ed25519 -N "" -C "controller->target" -f /ctl/id_ed25519
     pub=$(cat /ctl/id_ed25519.pub)
     grep -qsF "$pub" /tgt/authorized_keys 2>/dev/null || printf "%s\n" "$pub" >> /tgt/authorized_keys
-    chown 1000:1000 /ctl/id_ed25519 /ctl/id_ed25519.pub /tgt /tgt/authorized_keys
+    chown 1000:1000 /ctl /ctl/id_ed25519 /ctl/id_ed25519.pub /tgt /tgt/authorized_keys
     [ -f /ctl/authorized_keys ] && chown 1000:1000 /ctl/authorized_keys || true
-    chmod 600 /ctl/id_ed25519 /tgt/authorized_keys; chmod 700 /tgt'
+    chmod 600 /ctl/authorized_keys /ctl/id_ed25519 /tgt/authorized_keys; chmod 700 /ctl /tgt'
 
 
 say "controller wiring (compose override) — start/refresh it now"

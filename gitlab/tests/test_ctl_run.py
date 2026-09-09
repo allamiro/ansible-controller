@@ -34,11 +34,12 @@ class ControllerTests(unittest.TestCase):
         self.bin = self.base / "bin"
         self.bin.mkdir()
         fake = self.bin / "ansible-playbook"
-        fake.write_text('#!/bin/sh\nprintf "%s" "$PWD" > "$TEST_MARKER"\nexit "${TEST_RC:-0}"\n')
+        fake.write_text('#!/bin/sh\nprintf "%s" "$PWD" > "$TEST_MARKER"\nprintf "%s" "${ANSIBLE_CONFIG:-}" > "$TEST_CONFIG_MARKER"\nexit "${TEST_RC:-0}"\n')
         fake.chmod(0o755)
         self.env = dict(os.environ, CTL_RUN_ENVS=str(self.map),
                         CTL_RUN_SECRETS=str(self.secrets), CTL_RUN_DIR=str(self.base / "runs"),
                         TEST_MARKER=str(self.base / "executed"),
+                        TEST_CONFIG_MARKER=str(self.base / "config-path"),
                         PATH=str(self.bin) + os.pathsep + os.environ["PATH"])
 
     def git(self, *args):
@@ -83,6 +84,21 @@ class ControllerTests(unittest.TestCase):
     def test_real_failure_rc_preserved(self):
         self.env["TEST_RC"] = "7"
         self.assertEqual(self.run_ctl().returncode, 7)
+
+    @unittest.skipUnless(Path('/configs/ansible.cfg').is_file(), 'requires mounted site config')
+    def test_site_config_restored_when_environment_is_sanitized(self):
+        self.env.pop('ANSIBLE_CONFIG', None)
+        result = self.run_ctl()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.base / 'config-path').read_text(), '/configs/ansible.cfg')
+
+    def test_explicit_administrator_config_is_preserved(self):
+        config = self.base / 'admin.cfg'
+        config.write_text('[defaults]\n')
+        self.env['ANSIBLE_CONFIG'] = str(config)
+        result = self.run_ctl()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.base / 'config-path').read_text(), str(config))
 
     def test_nested_lfs_is_rejected(self):
         (self.repo / "playbooks/.gitattributes").write_text("*.dat filter=lfs diff=lfs\n")

@@ -229,8 +229,13 @@ if [ "$MODE" = standalone ]; then
   # explicitly overrides (e.g. a lab whose targets regenerate host keys) —
   # ctl-run never weakens a hardened configuration on its own
   [ -n "$HOSTKEY_CHECKING" ] && export ANSIBLE_HOST_KEY_CHECKING="$HOSTKEY_CHECKING"
-  # Resolve project ansible.cfg/relative paths from the fetched root. An
-  # administrator's explicit ANSIBLE_CONFIG continues to take precedence.
+  # sudo strips the entrypoint's ANSIBLE_CONFIG. Restore the fixed site path
+  # when no explicit administrator configuration was provided.
+  if [ -z "${ANSIBLE_CONFIG:-}" ] && [ -f /configs/ansible.cfg ]; then
+    export ANSIBLE_CONFIG=/configs/ansible.cfg
+  fi
+  # Resolve relative paths from the fetched root. Site configuration takes
+  # precedence; without it, Ansible discovers the fetched project's config.
   (cd "$STAGE" && ansible-playbook "${args[@]}" "$PB") || rc=$?
   echo "ctl-run: run=$RUN_ID standalone rc=$rc"
   record finished "$rc"
@@ -240,7 +245,7 @@ else
   [ -n "$POOL" ] && dest+=( --pool "$POOL" )
   [ -n "$ZONE" ] && dest+=( --zone "$ZONE" )
   [ "${#dest[@]}" = 2 ] || { record refused 2; die "environment '$ENVN' must define exactly one of node/pool/zone"; }
-  margs=( "${dest[@]}" --playbook "$PB" --inventory "$INV" --wait "$WAIT" )
+  margs=( "${dest[@]}" --project-dir "$STAGE" --playbook "$PB" --inventory "$INV" --wait "$WAIT" )
   [ -n "$SSH_KEY" ] && margs+=( --ssh-key "$SSH_KEY" )
   [ -n "$GALAXY" ]  && margs+=( --galaxy-dir "$GALAXY" )
   out=$("$MESH_RUN" "${margs[@]}" 2>&1 | tee /dev/stderr) || rc=${PIPESTATUS[0]}

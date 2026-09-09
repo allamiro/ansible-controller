@@ -21,6 +21,15 @@ Allow several GB of spare RAM and disk for a second GitLab instance.
 
 ## Run from repository root
 
+Run the isolated command regressions without Docker or a GitLab instance
+(Python 3, PyYAML, Git, Bash, jq, and standard Linux command-line tools):
+
+```bash
+python3 -m unittest discover -s gitlab/tests -p 'test_*.py' -v
+```
+
+The live integration sequence is:
+
 ```bash
 python3 gitlab/tests/prepare.py
 docker compose --env-file gitlab/tests/.state/lab.env -f gitlab/tests/compose.yml up -d --wait --wait-timeout 900
