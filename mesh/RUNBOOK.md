@@ -252,9 +252,12 @@ docker exec ansible-controller receptorctl --socket /run/receptor/receptor-b.soc
 Never skip step 2. Finalizing a record or clearing a hold without reading both
 work lists is exactly how an unnoticed running play gets duplicated.
 
-Cases (a) and (b) below record the operator's verdict with this atomic
-transition. It writes only the two statuses the rest of the platform can read
-back, refuses a record that is no longer `submit-ambiguous`, and refuses an
+Cases (a) and (b) below record the operator's verdict with this transition. It
+takes the job's own `.collect.lock` first — the same lock `mesh-run --collect`
+holds for a whole recovery — so a second administrator, or a collection already
+running, cannot interleave between its read and its write and overwrite the
+other's verdict. It writes only the two statuses the rest of the platform can
+read back, refuses a record that is no longer `submit-ambiguous`, and refuses an
 adoption with no unit id — a malformed status would leave the record
 permanently non-final and keep every later dispatch refused. Record a failure
 as `failed rc=<n>`, never a bare `failed`: the GitLab request journal
@@ -264,7 +267,7 @@ pipeline request reporting "outcome unresolved" for good.
 
 ```bash
 docker exec -i ansible-controller python3 - <job-id> "<failed rc=N|results-incomplete>" [unit-id] <<'PY'
-import datetime, json, os, re, sys, tempfile
+import datetime, fcntl, json, os, re, sys, tempfile
 job, new = sys.argv[1], sys.argv[2]
 unit = sys.argv[3] if len(sys.argv) > 3 else ""
 ID = r"(?!\.\.?$)[0-9A-Za-z._-]+"
@@ -276,19 +279,27 @@ if (new == "results-incomplete") != bool(unit):
     sys.exit("adopting a unit requires 'results-incomplete <unit-id>'; a failed verdict takes no unit")
 if unit and not re.fullmatch(ID, unit):
     sys.exit(f"invalid unit id {unit!r}")
-path = f"/var/lib/mesh/jobs/{job}/meta.json"
-record = json.load(open(path))
-if record.get("status") != "submit-ambiguous":
-    sys.exit(f"record is {record.get('status')!r}, not submit-ambiguous — not touching it")
-record["status"] = new
-if unit:
-    record["unit_id"] = unit
-record["updated"] = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
-record["note"] = "operator verdict after work-list correlation"
-fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path))
-with os.fdopen(fd, "w") as out:
-    json.dump(record, out)
-os.replace(tmp, path)
+d = f"/var/lib/mesh/jobs/{job}"
+# The lock mesh-run --collect holds for a whole recovery: hold it across the
+# read, the check and the replace, or a peer can decide the same record twice.
+with open(f"{d}/.collect.lock", "a") as lock:
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        sys.exit(f"another recovery or --collect is working job={job} — retry once it finishes")
+    path = f"{d}/meta.json"
+    record = json.load(open(path))
+    if record.get("status") != "submit-ambiguous":
+        sys.exit(f"record is {record.get('status')!r}, not submit-ambiguous — not touching it")
+    record["status"] = new
+    if unit:
+        record["unit_id"] = unit
+    record["updated"] = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+    record["note"] = "operator verdict after work-list correlation"
+    fd, tmp = tempfile.mkstemp(dir=d)
+    with os.fdopen(fd, "w") as out:
+        json.dump(record, out)
+    os.replace(tmp, path)
 PY
 ```
 
