@@ -150,6 +150,14 @@ failed/successful token revocation, and custom-project allowlists. These use
 transport/API stand-ins; they do not add live GitLab pipeline evidence to the
 historical audit above. CI runs the command tests on subsequent PRs and main.
 
+Further merge review fixes preserve matching main-branch protection on setup
+reruns and refuse policy drift without deleting protection. Seed deployment
+commands derive their SHA from the actual checkout, ignoring trigger overrides
+of predefined SHA/project-directory variables. Standalone execution restores the
+entrypoint's fixed Vault password-file path after sudo. Local regressions cover
+the policy-preservation and trigger-override cases; container regressions verify
+both the site-config and Vault-file fallbacks with their fixed paths mounted.
+
 ## Remaining requirements and limits
 
 | Requirement | Status / next necessary work |

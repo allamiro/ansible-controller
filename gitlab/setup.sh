@@ -90,17 +90,37 @@ if ! PID=$(glab GET "/projects/$ENC" 2>/dev/null | jq -r .id) || [ -z "$PID" ] |
   rm -rf "$seed"
 fi
 
-# governance for BOTH fresh and existing projects (idempotent): main protected
-# (no push; Maintainer merge) + merges require green pipelines. Applying this
-# outside the creation branch stops an existing project's deploy jobs from
-# stranding on the ref_protected runner, or a loose project bypassing the gate.
-# DELETE any existing protection first, then set the intended policy — a bare
-# POST 409s on an already-protected branch and || true would hide it, leaving an
-# existing project's looser levels in place. A just-seeded project has none yet.
-glab DELETE "/projects/$PID/protected_branches/main" >/dev/null 2>&1 || true
-glab POST "/projects/$PID/protected_branches" --data-urlencode "name=main" \
-  --data-urlencode "push_access_level=0" --data-urlencode "merge_access_level=40" \
-  --data-urlencode "allow_force_push=false" >/dev/null
+# Preserve a correct protection policy on reruns. Never delete protection:
+# drift requires an administrator to reconcile it without an unprotected gap.
+main_policy_matches() {
+  jq -e '(.push_access_levels | length == 1 and .[0].access_level == 0)
+    and (.merge_access_levels | length == 1 and .[0].access_level == 40)
+    and (.allow_force_push == false)
+    and ([.push_access_levels[], .merge_access_levels[]]
+         | all(.user_id == null and .group_id == null and .deploy_key_id == null))' >/dev/null
+}
+protection=$(curl -sS -K "$STATE/.curl-auth" -w '\n%{http_code}' \
+  "$GLURL/api/v4/projects/$PID/protected_branches/main") \
+  || die "could not inspect main protection; existing policy left unchanged"
+protection_code=$(tail -n 1 <<<"$protection")
+case "$protection_code" in
+  200)
+    sed '$d' <<<"$protection" | main_policy_matches \
+      || die "main protection differs from required policy; reconcile it in GitLab without removing protection, then rerun";;
+  404)
+    for attempt in 1 2 3; do
+      if glab POST "/projects/$PID/protected_branches" --data-urlencode "name=main" \
+        --data-urlencode "push_access_level=0" --data-urlencode "merge_access_level=40" \
+        --data-urlencode "allow_force_push=false" >/dev/null; then
+        break
+      fi
+      [ "$attempt" = 3 ] && die "failed to create main protection; protect main before using deployment jobs"
+      sleep 3
+    done;;
+  *) die "main protection lookup returned HTTP $protection_code; existing policy left unchanged";;
+esac
+glab GET "/projects/$PID/protected_branches/main" | main_policy_matches \
+  || die "main protection verification failed"
 glab PUT "/projects/$PID" --data-urlencode "only_allow_merge_if_pipeline_succeeds=true" >/dev/null
 # tag-deploy runs on the protected runner: releases need protected tags
 glab GET "/projects/$PID/protected_tags/v%2A" >/dev/null 2>&1 || \

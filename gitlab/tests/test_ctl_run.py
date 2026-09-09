@@ -34,12 +34,13 @@ class ControllerTests(unittest.TestCase):
         self.bin = self.base / "bin"
         self.bin.mkdir()
         fake = self.bin / "ansible-playbook"
-        fake.write_text('#!/bin/sh\nprintf "%s" "$PWD" > "$TEST_MARKER"\nprintf "%s" "${ANSIBLE_CONFIG:-}" > "$TEST_CONFIG_MARKER"\nexit "${TEST_RC:-0}"\n')
+        fake.write_text('#!/bin/sh\nprintf "%s" "$PWD" > "$TEST_MARKER"\nprintf "%s" "${ANSIBLE_CONFIG:-}" > "$TEST_CONFIG_MARKER"\nprintf "%s" "${ANSIBLE_VAULT_PASSWORD_FILE:-}" > "$TEST_VAULT_MARKER"\nexit "${TEST_RC:-0}"\n')
         fake.chmod(0o755)
         self.env = dict(os.environ, CTL_RUN_ENVS=str(self.map),
                         CTL_RUN_SECRETS=str(self.secrets), CTL_RUN_DIR=str(self.base / "runs"),
                         TEST_MARKER=str(self.base / "executed"),
                         TEST_CONFIG_MARKER=str(self.base / "config-path"),
+                        TEST_VAULT_MARKER=str(self.base / "vault-path"),
                         PATH=str(self.bin) + os.pathsep + os.environ["PATH"])
 
     def git(self, *args):
@@ -91,6 +92,13 @@ class ControllerTests(unittest.TestCase):
         result = self.run_ctl()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.base / 'config-path').read_text(), '/configs/ansible.cfg')
+
+    @unittest.skipUnless(Path('/home/ansible/.vault_pass').is_file(), 'requires mounted Vault file')
+    def test_vault_file_restored_when_environment_is_sanitized(self):
+        self.env.pop('ANSIBLE_VAULT_PASSWORD_FILE', None)
+        result = self.run_ctl()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.base / 'vault-path').read_text(), '/home/ansible/.vault_pass')
 
     def test_explicit_administrator_config_is_preserved(self):
         config = self.base / 'admin.cfg'

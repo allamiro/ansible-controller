@@ -234,6 +234,11 @@ if [ "$MODE" = standalone ]; then
   if [ -z "${ANSIBLE_CONFIG:-}" ] && [ -f /configs/ansible.cfg ]; then
     export ANSIBLE_CONFIG=/configs/ansible.cfg
   fi
+  # Both supported entrypoint Vault sources become this fixed private file.
+  # Restore its path after sudo without accepting a caller-selected secret.
+  if [ -z "${ANSIBLE_VAULT_PASSWORD_FILE:-}" ] && [ -f /home/ansible/.vault_pass ]; then
+    export ANSIBLE_VAULT_PASSWORD_FILE=/home/ansible/.vault_pass
+  fi
   # Resolve relative paths from the fetched root. Site configuration takes
   # precedence; without it, Ansible discovers the fetched project's config.
   (cd "$STAGE" && ansible-playbook "${args[@]}" "$PB") || rc=$?

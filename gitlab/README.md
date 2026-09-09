@@ -157,3 +157,14 @@ Ansible discovers the fetched project's configuration from its root directory.
 Mesh execution stages the full fetched repository with `mesh-run --project-dir`,
 preserving nested playbook paths and root-level roles, collections and config.
 Paths inside that config must still be valid on the execution node.
+
+Standalone execution also restores `/home/ansible/.vault_pass` as the Vault
+password file after sudo when no explicit `ANSIBLE_VAULT_PASSWORD_FILE` is set.
+The controller entrypoint creates that private file from either supported Vault
+source. Mesh nodes still need their own separately provisioned Vault material.
+
+Bootstrap leaves matching branch protection in place. If an existing policy
+differs, setup fails and asks the administrator to reconcile it in GitLab;
+it never removes protection as part of a rerun. Seed deployment jobs use the
+actual Runner checkout's commit, so overriding `CI_COMMIT_SHA` in trigger
+variables cannot select a different deployment commit.

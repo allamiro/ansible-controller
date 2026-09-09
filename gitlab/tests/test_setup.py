@@ -27,9 +27,21 @@ class SetupTests(unittest.TestCase):
         self.bin.mkdir()
         curl = self.bin / 'curl'
         curl.write_text('''#!/usr/bin/env python3
-import os, sys
+import json, os, sys
 args = sys.argv[1:]
 url = next(a for a in args if a.startswith('http'))
+method = args[args.index('-X') + 1] if '-X' in args else 'GET'
+with open(os.environ['API_CALLS'], 'a') as log:
+    log.write(method + ' ' + url + chr(10))
+if url.endswith('/protected_branches/main'):
+    policy = {'name': 'main', 'push_access_levels': [{'access_level': 0}],
+              'merge_access_levels': [{'access_level': 40}], 'allow_force_push': False}
+    if os.environ.get('POLICY_DRIFT'):
+        policy['allow_force_push'] = True
+    print(json.dumps(policy))
+    if '-w' in args:
+        print('200')
+    sys.exit(0)
 if url.endswith('/personal_access_tokens/self'):
     sys.exit(int(os.environ.get('DELETE_RC', '0')))
 if url.endswith('/deploy_tokens'):
@@ -41,7 +53,9 @@ print('{"id": 1}')
         docker = self.bin / 'docker'
         docker.write_text('#!/bin/sh\nexit 99\n')
         docker.chmod(0o755)
-        self.env = dict(os.environ, PATH=str(self.bin) + os.pathsep + os.environ['PATH'])
+        self.calls = self.base / 'api-calls'
+        self.env = dict(os.environ, PATH=str(self.bin) + os.pathsep + os.environ['PATH'],
+                        API_CALLS=str(self.calls))
 
     def run_setup(self, **env):
         return subprocess.run(['bash', str(self.base / 'gitlab/setup.sh'),
@@ -61,6 +75,20 @@ print('{"id": 1}')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(self.pat.exists())
         self.assertFalse((self.state / '.curl-auth').exists())
+
+    def test_matching_branch_protection_is_never_removed(self):
+        self.run_setup(REVOKE_BOOTSTRAP='0')
+        calls = self.calls.read_text().splitlines()
+        protection_calls = [call for call in calls if '/protected_branches' in call]
+        self.assertEqual(len(protection_calls), 2)
+        self.assertTrue(all(call.startswith('GET ') for call in protection_calls))
+
+    def test_drifted_branch_protection_is_preserved_and_setup_refuses(self):
+        result = self.run_setup(REVOKE_BOOTSTRAP='0', POLICY_DRIFT='1')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('main protection differs', result.stderr)
+        self.assertNotIn('DELETE ', self.calls.read_text())
+        self.assertFalse((self.state / 'environments.yml').exists())
 
     def test_custom_project_is_used_in_generated_allowlists(self):
         result = self.run_setup(REVOKE_BOOTSTRAP='0')
