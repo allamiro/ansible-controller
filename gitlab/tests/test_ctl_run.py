@@ -1,9 +1,12 @@
 """Local regressions using real Git checkouts and a harmless Ansible stand-in."""
 import json
+import fcntl
+import io
 import os
 from pathlib import Path
 import subprocess
 import tempfile
+import tarfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -115,6 +118,19 @@ class ControllerTests(unittest.TestCase):
         fresh = self.run_ctl('--pipeline', '11', '--job', '22', commit=False)
         self.assertEqual(fresh.returncode, 0, fresh.stderr)
         self.assertNotEqual(marker.read_text(), original)
+
+    def test_artifact_export_does_not_contend_with_another_dispatch(self):
+        self.assertEqual(self.run_ctl('--pipeline', '10').returncode, 0)
+        with (self.base / 'runs/locks/test').open('w') as held:
+            fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            result = subprocess.run(['bash', str(ROOT / 'gitlab/bin/ctl-run'),
+                '--artifacts', '--env', 'test', '--project', 'group/project',
+                '--sha', self.git('rev-parse', 'HEAD'), '--playbook', 'playbooks/site.yml',
+                '--pipeline', '10'], env=self.env, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with tarfile.open(fileobj=io.BytesIO(result.stdout)) as archive:
+            record = json.load(archive.extractfile('ctl-run.json'))
+            self.assertEqual(record['gitlab_pipeline'], '10')
 
     def test_pipeline_retry_preserves_failure(self):
         self.env['TEST_RC'] = '7'

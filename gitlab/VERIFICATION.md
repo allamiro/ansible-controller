@@ -181,10 +181,11 @@ The original successful mesh UUID was
 `2e8f1e5e-601c-4ae7-a4fc-5800ec0bbeb1`; private machine-readable evidence is
 retained in `gitlab/tests/.state/ci-acceptance.json`. Repeat with
 `python3 gitlab/tests/ci_acceptance.py` after fixture bootstrap.
-Local command tests: **38 passed, 3 container-only tests skipped**. These cover
+Local command tests: **39 passed, 3 container-only tests skipped**. These cover
 replayed success/failure, changed-commit refusal, interrupted request refusal,
 metadata reconciliation after collection, pre-submit retry, artifact allowlists
-and symlink rejection, export failure exit semantics, and approval-policy drift.
+and symlink rejection, export failure exit semantics, export while a different
+dispatch holds the environment lock, and approval-policy drift.
 Bash syntax, ShellCheck and whitespace checks passed.
 
 The Premium/Ultimate provisioning contract is checked against GitLab's API

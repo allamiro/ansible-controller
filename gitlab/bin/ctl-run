@@ -138,15 +138,17 @@ TOKEN_FILE="$SECRETS_DIR/$ENVN.token"
 
 # ---- per-environment serialization + CI-retry guard ---------------------------
 mkdir -p "$RUNS_DIR/locks" "$RUNS_DIR/records"
-exec 9>"$RUNS_DIR/locks/$ENVN"
-flock -n 9 || die "environment '$ENVN' is busy (another ctl-run holds its lock) — refusing to interleave"
 journal() {
   python3 "$(dirname "$0")/ctl_ci.py" "$1" "$RUNS_DIR" "$ENVN" "$PROJECT" "$PIPELINE" "$PLAYBOOK" "$SHA" "${@:2}"
 }
 if [ "$ARTIFACTS" = 1 ]; then
+  # Read a specific durable request without contending with another dispatch.
+  # Journal references and records are atomically replaced, never edited in place.
   journal export
   exit
 fi
+exec 9>"$RUNS_DIR/locks/$ENVN"
+flock -n 9 || die "environment '$ENVN' is busy (another ctl-run holds its lock) — refusing to interleave"
 if [ -n "$PIPELINE" ]; then
   previous=$(journal replay) || die "cannot safely resolve the original pipeline request"
   if [ -n "$previous" ]; then

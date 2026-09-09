@@ -1,6 +1,7 @@
 """Controller-owned request journal and narrowly scoped artifact export.
 
-Invoked by ctl-run under its environment lock; never installed as an SSH command.
+Journal mutations run under ctl-run's environment lock; exports are read-only.
+Never installed as an SSH command.
 Only the administrator chooses storage paths. The fetched project is never exported.
 """
 import hashlib
