@@ -678,6 +678,24 @@ docker exec -it ansible-controller sh -c 'cd /configs/playbooks && ansible-lint 
 
 Customize rules with a `.ansible-lint` file in the `playbooks/` directory — both commands run from there, which is where ansible-lint looks for its configuration.
 
+### The CI gate
+
+Every pull request runs this gate as part of [`docker-image.yml`](.github/workflows/docker-image.yml), inside the controller image built from that very commit — the Dockerfile resolves its Ansible tooling unpinned, so the runtime that will ship is the only one whose verdict counts. Every check lives in one script, [`.github/scripts/ansible-quality.sh`](.github/scripts/ansible-quality.sh): `yamllint` with the repository's [`.yamllint`](.yamllint), `ansible-lint` at the **production** profile with the root [`.ansible-lint`](.ansible-lint), `--syntax-check` for every shipped playbook against its own inventory, and the project template's unit tests. It covers this repository's `playbooks/`, the GitLab lab seed, and the copyable project template.
+
+The script reproduces the controller's own layout — `configs/` at `/configs`, `playbooks/` at `/configs/playbooks` — and points `ANSIBLE_CONFIG` at the controller's `ansible.cfg`. So the gate uses the ansible-core, ansible-lint and yamllint you run, resolves the Galaxy collections baked into the image, and honours the same `roles_path`/`collections_path`, rather than approximating them with a separate pinned install. Content declared in `configs/requirements.yml` is installed first, with the same commands and destinations [`docker/entrypoint.sh`](docker/entrypoint.sh) uses, so a declared collection resolves here exactly as it will on the controller.
+
+To reproduce CI exactly, build the image from your checkout and run the script in it — that is what the job does, and the script is the same file. The checkout is mounted read-only so the container, which runs as root, cannot leave root-owned cache directories in your tree:
+
+```bash
+docker build -f docker/Dockerfile -t ansible-controller:local .
+docker run --rm -v "$PWD":/repo:ro -w /repo -e PYTHONDONTWRITEBYTECODE=1 \
+  --entrypoint bash ansible-controller:local /repo/.github/scripts/ansible-quality.sh
+```
+
+Swapping in a released image (`ghcr.io/allamiro/ansible-controller:0.23.3`) skips the build and is usually enough while iterating on a playbook. Treat it as an approximation, not the gate: the Dockerfile tracks a mutable base and installs its Ansible tooling unpinned, so a released image can carry a different toolchain than the one your commit would build.
+
+Note the two configuration scopes: `make lint` above runs inside `/configs/playbooks` and reads a config from there, while this gate runs from the repository root and reads the root `.ansible-lint` and `.yamllint`.
+
 ---
 
 ## Faster runs with Mitogen

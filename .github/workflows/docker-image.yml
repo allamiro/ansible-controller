@@ -88,6 +88,21 @@ jobs:
           sleep 5
           docker exec ci-smoke ansible --version
           docker exec ci-smoke pgrep sshd
+      # Validate the shipped Ansible content against the image built from THIS
+      # commit, not a released tag: the Dockerfile resolves its Ansible tools
+      # unpinned, so the runtime that will ship is the only one whose verdict
+      # matters. Same script an operator runs locally.
+      - name: Ansible content gate
+        run: |
+          # Read-only checkout and no bytecode: the container runs as root, so a
+          # writable mount would leave root-owned .ansible/ and __pycache__/
+          # behind — in the workspace here, and in a developer's own tree when
+          # they run the same command from the README. ansible-lint falls back
+          # to a temporary cache directory on its own when the project is
+          # read-only.
+          docker run --rm -v "$PWD":/repo:ro -w /repo \
+            -e PYTHONDONTWRITEBYTECODE=1 --entrypoint bash \
+            ansible-controller:ci /repo/.github/scripts/ansible-quality.sh
           docker rm -f ci-smoke
 
       - uses: ./.github/actions/install-trivy
