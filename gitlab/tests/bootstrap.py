@@ -121,7 +121,7 @@ audit:
     image = "ansible-controller:e2e"
     network_mode = "gitlab-audit_control"
     pull_policy = "if-not-present"
-    volumes = [{json.dumps(str(STATE/'web-tls/ca.crt')+':/etc/gitlab-runner/certs/ca.crt:ro')}]
+    volumes = [{json.dumps(str(STATE/'web-tls/ca.crt')+':/etc/gitlab-runner/certs/ca.crt:ro')}, {json.dumps(str(STATE/'fips0')+':/proc/sys/crypto/fips_enabled:ro')}]
 '''
     docker('exec','-i','gitlab-audit-runner-1','sh','-c',
            'umask 077; cat > /etc/gitlab-runner/config.toml',input=config)

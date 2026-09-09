@@ -4,6 +4,8 @@
 #   ctl-run --env <name> --project <group/path> --sha <40-hex> \
 #           --playbook <relative.yml> [--pipeline N --job N] [--wait N]
 #   ctl-run --collect <mesh-job-uuid>            # pass-through recovery
+#   ctl-run --artifacts <same request arguments> # tar stream of result files
+#   ctl-run --collect <mesh-job-uuid> --artifacts # tar stream after recovery
 #
 # This is the ONE integration point between GitLab and the controller: a CI
 # job (or an operator) invokes it over authenticated SSH; it fetches the
@@ -39,6 +41,8 @@
 #     is non-final (the CI-retry guard), and holds a per-environment lock
 #     so two invocations cannot interleave fetch/dispatch.
 #   - real exit codes: the playbook's rc is this command's rc.
+#   - pipeline retries: a durable claim precedes execution; completed requests
+#     replay their result and uncertain requests refuse a second execution.
 #   - audit: /var/lib/gitlab-runs/records/<run-id>.json links project,
 #     sha, pipeline, job, env, mode, staging dir, mesh uuid and rc. This
 #     record is NEW metadata added by this integration (nothing in the
@@ -58,7 +62,7 @@ MESH_RUN=/usr/local/mesh/bin/mesh-run
 
 die() { echo "ctl-run: ERROR: $*" >&2; exit 2; }
 
-ENVN='' PROJECT='' SHA='' PLAYBOOK='' PIPELINE='' JOB='' WAIT=120 COLLECT=''
+ENVN='' PROJECT='' SHA='' PLAYBOOK='' PIPELINE='' JOB='' WAIT=120 COLLECT='' ARTIFACTS=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --env)      ENVN="${2:?}"; shift 2;;
@@ -69,6 +73,7 @@ while [ $# -gt 0 ]; do
     --job)      JOB="${2:?}"; shift 2;;
     --wait)     WAIT="${2:?}"; shift 2;;
     --collect)  COLLECT="${2:?}"; shift 2;;
+    --artifacts) ARTIFACTS=1; shift;;
     *) die "unknown argument: $1";;
   esac
 done
@@ -76,6 +81,9 @@ done
 # ---- recovery pass-through ---------------------------------------------------
 if [ -n "$COLLECT" ]; then
   case "$COLLECT" in *[!0-9a-fA-F-]*|'') die "--collect takes a mesh job uuid";; esac
+  if [ "$ARTIFACTS" = 1 ]; then
+    exec python3 "$(dirname "$0")/ctl_ci.py" collect-export "$RUNS_DIR" "$COLLECT"
+  fi
   exec "$MESH_RUN" --collect "$COLLECT"
 fi
 
@@ -130,8 +138,25 @@ TOKEN_FILE="$SECRETS_DIR/$ENVN.token"
 
 # ---- per-environment serialization + CI-retry guard ---------------------------
 mkdir -p "$RUNS_DIR/locks" "$RUNS_DIR/records"
+journal() {
+  python3 "$(dirname "$0")/ctl_ci.py" "$1" "$RUNS_DIR" "$ENVN" "$PROJECT" "$PIPELINE" "$PLAYBOOK" "$SHA" "${@:2}"
+}
+if [ "$ARTIFACTS" = 1 ]; then
+  # Read a specific durable request without contending with another dispatch.
+  # Journal references and records are atomically replaced, never edited in place.
+  journal export
+  exit
+fi
 exec 9>"$RUNS_DIR/locks/$ENVN"
 flock -n 9 || die "environment '$ENVN' is busy (another ctl-run holds its lock) — refusing to interleave"
+if [ -n "$PIPELINE" ]; then
+  previous=$(journal replay) || die "cannot safely resolve the original pipeline request"
+  if [ -n "$previous" ]; then
+    read -r prior_run prior_rc <<< "$previous"
+    echo "ctl-run: replay run=$prior_run rc=$prior_rc (no new execution)"
+    exit "$prior_rc"
+  fi
+fi
 if [ "$MODE" = mesh ]; then
   unresolved=""
   for m in /var/lib/mesh/jobs/*/meta.json; do
@@ -214,11 +239,20 @@ rec = {
   "stage_dir": "$STAGE", "status": "$1", "rc": "$2", "mesh_job": "${3:-}",
 }
 fd, tmp = tempfile.mkstemp(dir=os.path.dirname(sys.argv[1]))
-with os.fdopen(fd, "w") as f: json.dump(rec, f)
+with os.fdopen(fd, "w") as f:
+    json.dump(rec, f)
+    f.flush()
+    os.fsync(f.fileno())
 os.replace(tmp, sys.argv[1])
+d = os.open(os.path.dirname(sys.argv[1]), os.O_DIRECTORY)
+try: os.fsync(d)
+finally: os.close(d)
 PY
 }
 record started ""
+# Persist intent before either execution engine can submit work. A killed
+# dispatcher leaves a claim and retries fail closed instead of running twice.
+if [ -n "$PIPELINE" ]; then journal claim "$RUN_ID"; fi
 
 # ---- execute -------------------------------------------------------------------
 rc=0

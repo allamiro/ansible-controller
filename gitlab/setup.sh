@@ -173,6 +173,15 @@ Path(sys.argv[2]).write_text(example.replace(placeholder, json.dumps([sys.argv[1
 PY
 fi
 
+if [ -n "${PROTECTED_DEPLOY_GROUP_ID:-}${PROTECTED_APPROVER_GROUP_ID:-}" ]; then
+  say "protected environments (Premium/Ultimate; fail closed if unavailable)"
+  python3 gitlab/protect-environments.py "$GLURL" "$PROJ" --token-file "$PATF" \
+    --deploy-group "${PROTECTED_DEPLOY_GROUP_ID:?set both protection group IDs}" \
+    --approver-group "${PROTECTED_APPROVER_GROUP_ID:?set both protection group IDs}" \
+    --required-approvals "${REQUIRED_DEPLOY_APPROVALS:-1}" \
+    --environment prod-direct --environment prod-mesh
+fi
+
 say "fetch credential (read-only deploy token, one file per env)"
 if ! grep -qs : "$STATE/ctl-secrets/prod-mesh.token"; then
   resp=$(glab POST "/projects/$PID/deploy_tokens" \

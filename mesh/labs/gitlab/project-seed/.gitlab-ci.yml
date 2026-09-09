@@ -53,12 +53,17 @@ validate:
     name: ansible-controller:e2e # bootstrap: DEPLOY_IMAGE
     entrypoint: [""]
   resource_group: mesh-lab
+  artifacts:
+    when: always
+    access: maintainer
+    expire_in: 7 days
+    expose_as: Execution results
+    paths: [mesh-artifacts/]
   before_script:
     # Trigger variables can override CI_COMMIT_SHA and CI_PROJECT_DIR. Read the
     # actual Runner checkout from the working directory and use that identity.
     - CTL_COMMIT_SHA=$(/usr/bin/git --git-dir="$(pwd -P)/.git" rev-parse --verify HEAD)
     - chmod 600 "$CTL_SSH_KEY"
-    - CTL="ssh -i $CTL_SSH_KEY -o UserKnownHostsFile=$CTL_KNOWN_HOSTS -o StrictHostKeyChecking=yes -o BatchMode=yes ansible@${CTL_HOST:-ctl.lab.local}"
 
 # routine execution after review: merge to protected main, human releases
 deploy-mesh:
@@ -70,7 +75,7 @@ deploy-mesh:
   environment: { name: lab-mesh }
   variables: { PLAYBOOK: playbooks/site.yml }
   script:
-    - $CTL ctl-run --env lab-mesh --project "$CI_PROJECT_PATH" --sha "$CTL_COMMIT_SHA"
+    - bash scripts/ctl-ci.sh --env lab-mesh --project "$CI_PROJECT_PATH" --sha "$CTL_COMMIT_SHA"
         --playbook "$PLAYBOOK" --pipeline "$CI_PIPELINE_ID" --job "$CI_JOB_ID" --wait 120
 
 deploy-direct:
@@ -82,31 +87,33 @@ deploy-direct:
   environment: { name: lab-direct }
   variables: { PLAYBOOK: playbooks/site.yml }
   script:
-    - $CTL ctl-run --env lab-direct --project "$CI_PROJECT_PATH" --sha "$CTL_COMMIT_SHA"
+    - bash scripts/ctl-ci.sh --env lab-direct --project "$CI_PROJECT_PATH" --sha "$CTL_COMMIT_SHA"
         --playbook "$PLAYBOOK" --pipeline "$CI_PIPELINE_ID" --job "$CI_JOB_ID"
 
-# scheduled connectivity check (create the schedule in CI/CD > Schedules)
+# Scheduled connectivity candidate (a human must still release it).
 scheduled-check:
   extends: .ctl-ssh
   stage: deploy
   rules:
     - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: manual
   environment: { name: lab-mesh }
   script:
-    - $CTL ctl-run --env lab-mesh --project "$CI_PROJECT_PATH" --sha "$CTL_COMMIT_SHA"
+    - bash scripts/ctl-ci.sh --env lab-mesh --project "$CI_PROJECT_PATH" --sha "$CTL_COMMIT_SHA"
         --playbook playbooks/ping.yml --pipeline "$CI_PIPELINE_ID" --job "$CI_JOB_ID" --wait 90
 
-# API-triggered execution: needs the trigger token AND the explicit consent
-# variable — a trigger without DEPLOY_CONFIRM=yes creates no deploy job.
+# API-triggered candidate: needs the token and confirmation variable, then a
+# human release. Confirmation alone is not deployment approval.
 api-deploy:
   extends: .ctl-ssh
   stage: deploy
   rules:
     - if: $CI_PIPELINE_SOURCE == "trigger" && $DEPLOY_CONFIRM == "yes"
+      when: manual
   environment: { name: lab-mesh }
   variables: { PLAYBOOK: playbooks/site.yml }
   script:
-    - $CTL ctl-run --env lab-mesh --project "$CI_PROJECT_PATH" --sha "$CTL_COMMIT_SHA"
+    - bash scripts/ctl-ci.sh --env lab-mesh --project "$CI_PROJECT_PATH" --sha "$CTL_COMMIT_SHA"
         --playbook "$PLAYBOOK" --pipeline "$CI_PIPELINE_ID" --job "$CI_JOB_ID" --wait 120
 
 # protected-tag releases: same channel, released ref. Requires the tag
@@ -121,7 +128,7 @@ tag-deploy:
   environment: { name: lab-mesh }
   variables: { PLAYBOOK: playbooks/site.yml }
   script:
-    - $CTL ctl-run --env lab-mesh --project "$CI_PROJECT_PATH" --sha "$CTL_COMMIT_SHA"
+    - bash scripts/ctl-ci.sh --env lab-mesh --project "$CI_PROJECT_PATH" --sha "$CTL_COMMIT_SHA"
         --playbook "$PLAYBOOK" --pipeline "$CI_PIPELINE_ID" --job "$CI_JOB_ID" --wait 120
 
 # Recovery uses the same controller boundary as dispatch. Unknown-unit/stale
@@ -137,4 +144,4 @@ collect:
       allow_failure: true
   script:
     - test -n "$JOB_ID" || { echo "Set JOB_ID to the existing mesh UUID"; exit 2; }
-    - $CTL ctl-run --collect "$JOB_ID"
+    - bash scripts/ctl-ci.sh --collect "$JOB_ID"
