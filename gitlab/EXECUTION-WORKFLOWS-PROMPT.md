@@ -28,7 +28,7 @@ built, and the brief makes it a hard requirement:
 |---|---|---|
 | Runner requests pipeline jobs | Runner **authentication token** | a PAT |
 | In-job GitLab API calls | auto-issued **`CI_JOB_TOKEN`** (dies with the job) | a long-lived token |
-| `ctl-run` fetches the reviewed commit (controller-side, after the job) | read-only **deploy token** (`read_repository`) at `/etc/ctl-run/secrets/<env>.token` | `api` scope / a PAT / `CI_JOB_TOKEN` |
+| `ctl-run` fetches the requested commit (controller-side, during the job) | read-only **deploy token** (`read_repository`) at `/etc/ctl-run/secrets/<env>.token` | `api` scope / a PAT / `CI_JOB_TOKEN` |
 | External system starts a pipeline | **pipeline trigger token** (only if needed) | a deploy token |
 | GitLab administration/automation | least-scope **API access token** | root/admin PAT for routine runs |
 | CI → controller | **SSH key** (pinned host key, forced command) | password |
@@ -37,8 +37,8 @@ built, and the brief makes it a hard requirement:
 | Managed hosts | separate **SSH / WinRM / Vault** credentials | the controller-login key |
 
 Hard rules the brief enforces: deploy ≠ trigger ≠ runner ≠ CI_JOB tokens (not
-interchangeable); `ctl-run` fetches **after** the job so it must not rely on
-`CI_JOB_TOKEN`; token values never in URLs, logs, artifacts, or Git remote config;
+interchangeable); `ctl-run` fetches synchronously **during** the job; a controller-held deploy
+token keeps repository access separate from CI job credentials; token values never in URLs, logs, artifacts, or Git remote config;
 bootstrap admin credentials kept separate from runtime credentials and revoked
 when done. Tokens authenticate/authorize; TLS protects the channel; neither
 replaces the other, and GitLab's TLS mode never substitutes for Receptor mTLS +
@@ -67,8 +67,10 @@ autoscaling, or enforced approval without test evidence -- label anything
 unproven DOCUMENTED / SIMULATED / UNTESTED.
 
 -- 0. GROUND IN THE REAL SYSTEM (read before designing) --
-Load CLAUDE.local.md and the skills it names (gitlab-ce-automation,
-ansible-mesh-architect); announce which loaded. Read, and cite by path:
+If available, load CLAUDE.local.md and the skills it names (gitlab-ce-automation,
+ansible-mesh-architect); these developer-local resources are optional. Announce
+which loaded and continue with the tracked files below when they are absent.
+Read, and cite by path:
   gitlab/ARCHITECTURE.md, gitlab/README.md, gitlab/bin/ctl-run,
   gitlab/bin/ctl-shell, gitlab/environments.example.yml,
   gitlab/compose.gitlab.yml, gitlab/controller.override.yml, gitlab/setup.sh
@@ -170,8 +172,9 @@ Produce a matrix: owner . consumer . purpose . MINIMUM scope . storage . lifetim
   target SSH / WinRM / Vault creds ........... selected by environments.yml,
       never by the caller
 Hard rules: a deploy token is not API access; trigger != runner != deploy !=
-CI_JOB tokens are not interchangeable; since ctl-run fetches AFTER the job it must
-not rely on CI_JOB_TOKEN; keep token values out of URLs, logs, artifacts, and Git
+CI_JOB tokens are not interchangeable; ctl-run fetches synchronously DURING the
+job, but uses a controller-held deploy token to isolate repository credentials
+from CI; keep token values out of URLs, logs, artifacts, and Git
 remote config (use a credential helper / user:token file, not the query string);
 separate BOOTSTRAP admin creds from RUNTIME creds and revoke bootstrap when done.
 Verify token types + API endpoints against the installed GitLab CE version.
@@ -181,9 +184,9 @@ Both standalone and mesh must support SSH (verified host keys) and WinRM-HTTPS
 :5986 (cert + hostname validation); document WinRM-HTTP :5985 with message
 encryption separately (not HTTPS-equivalent; never Basic-over-HTTP). Note that
 --ssh-key cannot supply WinRM creds, that the node has no controller /configs
-mount, and that ansible.windows + the Vault password must be provisioned to the
-runtime that ACTUALLY runs ansible (the node) -- via a galaxy_dir env, per
-environments.example.yml. Test a real Windows host if available; else mark WinRM
+mount, and that ansible.windows must be provisioned via a galaxy_dir env, per
+environments.example.yml. Provision the Vault password separately at the runtime
+that ACTUALLY runs ansible (the node); galaxy_dir does not stage Vault passwords. Test a real Windows host if available; else mark WinRM
 UNTESTED (as the acceptance matrix already does).
 
 -- 6. FAILURE / RECOVERY HONESTY (per case) --
