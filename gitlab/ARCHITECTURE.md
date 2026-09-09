@@ -84,7 +84,9 @@ execution. A job Retry reuses that identity; a new pipeline creates a new reques
 CI cancellation can disconnect the caller while remote work continues. Check
 the original UUID before taking any further action. If submission was ambiguous
 and no unit identity is known, investigate the ingress and target state; absence
-from one work list is not proof that nothing ran.
+from one work list is not proof that nothing ran. The host operator's procedure
+for correlating and recording that verdict is
+[Resolve an ambiguous submission](../mesh/RUNBOOK.md#resolve-an-ambiguous-submission).
 
 Artifact retrieval uses `ctl-run --artifacts` over the same restricted SSH key.
 It exports run records, available console logs and whitelisted mesh result files.

@@ -165,7 +165,7 @@ if [ "$MODE" = mesh ]; then
     case "$s" in created|submitting|running|submit-ambiguous|results-incomplete)
       unresolved="$unresolved $(basename "$(dirname "$m")")($s)";; esac
   done
-  [ -z "$unresolved" ] || die "unresolved mesh job(s):$unresolved — recover first (ctl-run --collect <uuid>, or the lab README's ambiguous procedure); refusing to dispatch"
+  [ -z "$unresolved" ] || die "unresolved mesh job(s):$unresolved — recover first (ctl-run --collect <uuid>; for submit-ambiguous follow the operator procedure in mesh/RUNBOOK.md 'Resolve an ambiguous submission'); refusing to dispatch"
 fi
 
 # ---- fetch the exact requested commit ------------------------------------------

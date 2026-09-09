@@ -216,12 +216,110 @@ The places to look:
 | `logs/runner/<job-id>/` on the host | per-job stdout, `rc`, events, final `meta.json` |
 | `/var/lib/mesh/jobs/<job-id>/` in the orchestrator | the authoritative job record |
 | `/var/lib/mesh/slots/<node>/` in the orchestrator | concurrency state: `slot.N`, `.hold` markers (unknown-outcome jobs), the persisted `cap` |
-| `receptorctl work list` (either socket) | units the mesh still tracks — the first stop after an ambiguous submit |
+| `receptorctl work list` (both sockets) | units the mesh still tracks — the first stop after an ambiguous submit ([procedure](#resolve-an-ambiguous-submission)) |
 | `make mesh-collect JOB=<id>` | recover a `results-incomplete` job: re-attach to its still-tracked unit, record the real rc, export artifacts, release the unit, and clear its `.hold` — safe to re-run, never re-executes |
 
 The e2e suite doubles as a diagnostic vocabulary: every failure mode it
 proves is one the mesh is supposed to refuse — if production shows different
 behavior than the lab, compare configurations first.
+
+### Resolve an ambiguous submission
+
+`submit-ambiguous` records a submission that left this host without returning a
+unit id: the play may or may not have started, and no automation may guess. The
+dispatcher never resubmits, `--collect` refuses a record with no unit to
+re-attach to, and the GitLab integration's `ctl-run` refuses further mesh
+dispatches while any record is non-final. A human correlates the record with
+the ingress work lists and records the verdict. Work records are
+ingress-specific — a unit submitted through ingress B exists only on
+`receptor-b.sock` — so always inspect both. The commands below run on the
+control host against the orchestrator container (`ansible-controller` here;
+`gitlab-lab-ctl` in the [GitLab CE lab](labs/gitlab/README.md), which mounts
+the same mesh volumes).
+
+```bash
+# 1. The record: its node, its empty unit id, and the timestamps to correlate on
+docker exec ansible-controller cat /var/lib/mesh/jobs/<job-id>/meta.json
+# the slot marker that still reserves capacity for it names the job:
+docker exec ansible-controller sh -c 'grep -l "job=<job-id>" /var/lib/mesh/slots/*/slot.*.hold'
+
+# 2. What each ingress still tracks — look for a unit created at the failure
+#    time whose parameters match this dispatch, or one carrying an error Detail
+docker exec ansible-controller receptorctl --socket /run/receptor/receptor.sock   work list
+docker exec ansible-controller receptorctl --socket /run/receptor/receptor-b.sock work list
+```
+
+Never skip step 2. Finalizing a record or clearing a hold without reading both
+work lists is exactly how an unnoticed running play gets duplicated.
+
+Cases (a) and (b) below record the operator's verdict with this atomic
+transition. It writes only the two statuses the rest of the platform can read
+back, refuses a record that is no longer `submit-ambiguous`, and refuses an
+adoption with no unit id — a malformed status would leave the record
+permanently non-final and keep every later dispatch refused. Record a failure
+as `failed rc=<n>`, never a bare `failed`: the GitLab request journal
+(`gitlab/bin/ctl_ci.py`) replays only `succeeded`, `finished` and
+`failed rc=<n>` as a settled outcome, so a bare `failed` leaves the original
+pipeline request reporting "outcome unresolved" for good.
+
+```bash
+docker exec -i ansible-controller python3 - <job-id> "<failed rc=N|results-incomplete>" [unit-id] <<'PY'
+import datetime, json, os, re, sys, tempfile
+job, new = sys.argv[1], sys.argv[2]
+unit = sys.argv[3] if len(sys.argv) > 3 else ""
+ID = r"(?!\.\.?$)[0-9A-Za-z._-]+"
+if not re.fullmatch(ID, job):
+    sys.exit(f"invalid job id {job!r}")
+if new != "results-incomplete" and not re.fullmatch(r"failed rc=[1-9][0-9]*", new):
+    sys.exit("status must be 'results-incomplete' or 'failed rc=<n>' with a non-zero n")
+if (new == "results-incomplete") != bool(unit):
+    sys.exit("adopting a unit requires 'results-incomplete <unit-id>'; a failed verdict takes no unit")
+if unit and not re.fullmatch(ID, unit):
+    sys.exit(f"invalid unit id {unit!r}")
+path = f"/var/lib/mesh/jobs/{job}/meta.json"
+record = json.load(open(path))
+if record.get("status") != "submit-ambiguous":
+    sys.exit(f"record is {record.get('status')!r}, not submit-ambiguous — not touching it")
+record["status"] = new
+if unit:
+    record["unit_id"] = unit
+record["updated"] = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+record["note"] = "operator verdict after work-list correlation"
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path))
+with os.fdopen(fd, "w") as out:
+    json.dump(record, out)
+os.replace(tmp, path)
+PY
+```
+
+**(a) A matching unit exists and never ran** — it carries an error `Detail`
+(a refused work signature, for example) and never started. Nothing reached the
+target. Release it **through the socket that listed it**, record
+`failed rc=<n>`, then let collection clear the reservation:
+
+```bash
+docker exec ansible-controller receptorctl --socket <socket-that-listed-it> work release <unit-id>
+#   ... transition the record to "failed rc=1" (above) ...
+make mesh-collect JOB=<job-id>   # terminal record: ensures cleanup, clears the .hold, exits with that rc
+```
+
+`mesh-collect` on an already-terminal record re-runs nothing; it only finishes
+the cleanup. Delete `/var/lib/mesh/slots/<node>/slot.<n>.hold` by hand only if
+that command cannot run, and only after step 2 confirmed nothing executed.
+
+**(b) A matching unit exists and ran, or is still running** — adopt it.
+Transition the record to `results-incomplete <unit-id>`, then
+recover it the ordinary way: `make mesh-collect JOB=<job-id>`, or in GitLab the
+manual `collect` job with `JOB_ID` set to the same uuid. Collection streams the
+unit's real rc into the job's own record, releases the unit and clears the
+marker itself — never clear it by hand here.
+
+**(c) No plausible unit on either ingress** — the outcome remains unknown.
+Absence from a work list is not proof that nothing ran; an ingress can lose
+tracking state. Leave the record and its `.hold` in place and investigate node
+and target evidence (`docker logs <node container>`, the target's own state)
+before deciding anything. Needing the capacity back is never a reason to clear
+a hold.
 
 ## 8. Upgrade
 

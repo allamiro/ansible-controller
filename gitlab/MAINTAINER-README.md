@@ -265,8 +265,11 @@ UUID from its log and inspect the controller's lifecycle state before retrying.
 
 For recovery, open the manual **collect** job on `main`, set `JOB_ID` to the
 original mesh UUID in the manual job's variable form, and run it. This calls
-`ctl-run --collect` through the same restricted SSH connection. Unknown or
-ambiguous submission states need administrator reconciliation on the controller.
+`ctl-run --collect` through the same restricted SSH connection. A
+`submit-ambiguous` record has no unit to re-attach to: the host administrator
+resolves it on the controller with
+[Resolve an ambiguous submission](../mesh/RUNBOOK.md#resolve-an-ambiguous-submission)
+before any further deployment is accepted.
 
 CI displays console output. Controller audit records are under
 `/var/lib/gitlab-runs/records/` and streamed mesh logs under
