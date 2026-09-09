@@ -104,7 +104,9 @@ make mesh-ping NODE=exec-dmz-a   # round-trip to one node
 ```
 
 Ingress A listens on host port **27199** and ingress B on **27200** — the two ports your
-execution nodes dial out to. Omit `--profile mesh` and nothing mesh-related is created; the
+execution nodes dial out to. Allow inbound TCP on those ports on the control host from the
+node networks (host firewall, security group, or perimeter). Publishing them in compose does
+not open anything upstream. Omit `--profile mesh` and nothing mesh-related is created; the
 direct `make run` path is untouched either way.
 
 ### 3 — Dispatch a playbook
@@ -183,8 +185,9 @@ The controller's mounts (`/configs`, `/configs/playbooks`, `/home/ansible/.ssh`,
 ## Security posture
 
 - **mTLS in both directions, no exceptions.** Ingresses accept only certificates issued by
-  your own CA, whose key never joins the mesh. Nodes dial *out*; no inbound firewall change
-  is needed anywhere.
+  your own CA, whose key never joins the mesh. Nodes dial *out*, so the closed networks they
+  sit in need no inbound holes. The control host must accept inbound TCP on **27199** and
+  **27200** from those networks; compose publishing the listeners is not a firewall rule.
 - **Only the control plane can hand out work.** Every submission is signed with a key that
   exists only on the control host; nodes refuse unsigned work before executing anything.
   Joining the mesh and submitting work are separate authorities.
