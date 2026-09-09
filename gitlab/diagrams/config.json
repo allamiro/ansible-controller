@@ -2,6 +2,13 @@
   "theme": "neutral",
   "securityLevel": "strict",
   "fontFamily": "Arial, sans-serif",
-  "flowchart": {"htmlLabels": false, "curve": "linear"},
-  "sequence": {"useMaxWidth": true, "wrap": true}
+  "flowchart": {
+    "htmlLabels": false,
+    "curve": "linear",
+    "useMaxWidth": false
+  },
+  "sequence": {
+    "useMaxWidth": false,
+    "wrap": true
+  }
 }
