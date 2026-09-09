@@ -1,0 +1,34 @@
+# YAML style for the Ansible content this repository ships: its own playbooks,
+# the GitLab lab seed, and the copyable project template.
+#
+# Scope is deliberate. Compose files, Receptor configuration and GitHub
+# workflows are not linted here: their file modes are written as implicit octal
+# on purpose, and GitHub's `on:` key reads as a boolean, so policing them would
+# force churn on files this gate is not meant to protect.
+extends: default
+
+rules:
+  # Compact flow mappings ({ name: lab-mesh }) are used deliberately in the
+  # shipped CI files; spacing inside them is style, not correctness.
+  braces:
+    max-spaces-inside: 1
+    max-spaces-inside-empty: 0
+  brackets:
+    max-spaces-inside: 1
+  # CI script lines carry whole commands and do not wrap.
+  line-length:
+    max: 200
+    allow-non-breakable-words: true
+  # Ansible booleans are conventionally yes/no in inventories and vars.
+  truthy:
+    allowed-values: ["true", "false", "yes", "no"]
+  comments:
+    min-spaces-from-content: 1
+  comments-indentation: disable
+  document-start: disable
+  # ansible-lint requires both to be true and refuses to use a config that
+  # relaxes them; file modes belong in `mode:` as a quoted string, not as a
+  # YAML octal literal.
+  octal-values:
+    forbid-implicit-octal: true
+    forbid-explicit-octal: true

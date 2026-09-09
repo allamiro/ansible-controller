@@ -1,0 +1,10 @@
+# Ansible content quality gate. The shipped playbooks already satisfy the
+# production profile; this file pins that bar so a regression is caught in CI
+# rather than on a managed host.
+profile: production
+
+exclude_paths:
+  - .github/
+  - mesh/tests/          # disposable fixtures, not shipped automation
+  - mesh/labs/gitlab/.lab-state/
+  - logs/
