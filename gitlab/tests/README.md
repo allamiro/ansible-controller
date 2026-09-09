@@ -43,6 +43,11 @@ python3 gitlab/tests/governance.py
 python3 gitlab/tests/recovery.py
 ```
 
+Bootstrap is deliberately one-shot: `bootstrap.started` records the first
+attempt before API mutations. A partial attempt refuses automatic resume; inspect
+its evidence, then reset both the disposable stack and `.state` using the reset
+procedure below. A completed bootstrap (`bootstrap.done`) is a no-op on rerun.
+
 Run the integration scripts sequentially: some intentionally stop their own
 node/ingress or interrupt their own dispatcher. `lifecycle.py` and
 `governance.py` create named disposable GitLab resources and are one-shot

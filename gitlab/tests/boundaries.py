@@ -9,9 +9,13 @@ results=[]
 
 
 def check(name,args,expected):
-    p=subprocess.run(args,capture_output=True,text=True,timeout=30)
-    result={'case':name,'rc':p.returncode,'expected':expected,'pass':p.returncode==expected}
+    try:
+        p=subprocess.run(args,capture_output=True,text=True,timeout=30)
+        result={'case':name,'rc':p.returncode,'expected':expected,'pass':p.returncode==expected}
+    except (subprocess.TimeoutExpired, OSError) as error:
+        result={'case':name,'rc':None,'expected':expected,'pass':False,'error':type(error).__name__}
     print(json.dumps(result),flush=True); results.append(result)
+    (STATE/'boundary-results.json').write_text(json.dumps(results,indent=2))
 
 
 def main():

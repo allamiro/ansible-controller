@@ -21,5 +21,11 @@ if __name__=='__main__':
         v.run_case('mesh-node-unavailable','audit-mesh',expected='failed')
     finally:
         b.docker('start','gitlab-audit-node-1')
+    # A stopped-node case should be refused before submission. If routing lag
+    # allowed an ambiguous submission, preserve it and require recovery rather
+    # than treating the next dispatch as a clean availability test.
+    unresolved = json.loads(b.docker('exec','gitlab-audit-controller-1','python3','-c',
+        "import glob,json; print(json.dumps([p for p in glob.glob('/var/lib/mesh/jobs/*/meta.json') if json.load(open(p)).get('status') in ('created','submitting','running','submit-ambiguous','results-incomplete')]))"))
+    assert not unresolved, f'Recover these original jobs before continuing: {unresolved}'
     v.run_case('mesh-node-returned','audit-mesh')
-    raise SystemExit(0 if all(x['pass'] for x in v.RESULTS) else 1)
+    raise SystemExit(0 if all(x['pass'] for x in v.CURRENT_RESULTS) else 1)

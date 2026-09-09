@@ -62,7 +62,7 @@ test README, because the old bootstrap markers no longer match any database.
 | CA verification | Trusted private CA accepted; absent CA and wrong TLS hostname rejected |
 | SSH channel verification | Unknown host key rejected; forced command rejects `id` |
 | GitLab network isolation | GitLab cannot open controller TCP/22 using its actual control-network IP |
-| Local regression tests | Six tests pass: symlink escape, nested LFS, staging permissions, project working directory, real failure rc, malformed audit ID |
+| Local regressions during the 2026-09-08 live audit | Six tests passed at that time: symlink escape, nested LFS, staging permissions, project working directory, real failure rc, malformed audit ID |
 
 Pipeline/job numbers belong to the disposable instance, not the existing lab.
 Machine-readable sanitized results are in [tests/evidence.json](tests/evidence.json).

@@ -130,14 +130,16 @@ glab GET "/projects/$PID/protected_tags/v%2A" >/dev/null 2>&1 || \
 say "environment map"
 if [ ! -s "$STATE/environments.yml" ]; then
   python3 - "$PROJ" "$STATE/environments.yml" <<'PY'
+import json
 import sys
-import yaml
-with open('gitlab/environments.example.yml') as source:
-    config = yaml.safe_load(source)
-for environment in config['environments'].values():
-    environment['allowed_projects'] = [sys.argv[1]]
-with open(sys.argv[2], 'w') as target:
-    yaml.safe_dump(config, target, sort_keys=False)
+from pathlib import Path
+# JSON-quoted strings are valid in YAML flow lists. Preserve the documented
+# example and comments without requiring PyYAML on the bootstrap host.
+example = Path('gitlab/environments.example.yml').read_text()
+placeholder = '[root/mesh-automation]'
+if placeholder not in example:
+    sys.exit('environment template has no project placeholder')
+Path(sys.argv[2]).write_text(example.replace(placeholder, json.dumps([sys.argv[1]])))
 PY
 fi
 

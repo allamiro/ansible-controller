@@ -47,9 +47,15 @@ if url.endswith('/personal_access_tokens/self'):
 if url.endswith('/deploy_tokens'):
     # Stop after the generated map, before any runtime wiring or credentials.
     sys.exit(22)
+allowed = {('GET', '/api/v4/user'), ('GET', '/api/v4/projects/platform%2Fautomation'),
+           ('PUT', '/api/v4/projects/1'), ('GET', '/api/v4/projects/1/protected_tags/v%2A')}
+from urllib.parse import urlsplit
+if (method, urlsplit(url).path) not in allowed:
+    sys.exit('Unexpected API route: ' + method + ' ' + url)
 print('{"id": 1}')
 ''')
         curl.chmod(0o755)
+        # Tripwire: even a fixture regression must never invoke real Docker.
         docker = self.bin / 'docker'
         docker.write_text('#!/bin/sh\nexit 99\n')
         docker.chmod(0o755)

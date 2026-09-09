@@ -9,17 +9,26 @@ s=importlib.util.spec_from_file_location('audit_bootstrap', HERE/'bootstrap.py')
 b=importlib.util.module_from_spec(s); s.loader.exec_module(b)
 
 
-def wait_jobs(pid, pipeline):
+def wait_jobs(pid, pipeline, success_jobs=()):
     deadline=time.monotonic()+180
+    jobs=[]
+    completed=False
     while time.monotonic()<deadline:
         jobs=b.api('GET',f'/projects/{pid}/pipelines/{pipeline}/jobs')
         if jobs and all(j['status'] in ('success','failed','manual','skipped','canceled') for j in jobs):
+            completed=True
             break
         time.sleep(3)
     result={'pipeline':pipeline,'jobs':[{k:j[k] for k in ('id','name','status')} for j in jobs]}
     print(json.dumps(result),flush=True)
     with (b.STATE/'lifecycle-results.jsonl').open('a') as f:
         f.write(json.dumps(result)+'\n')
+    if not completed:
+        raise TimeoutError(f'Pipeline {pipeline} did not finish: {result}')
+    for name in success_jobs:
+        matched = [job for job in jobs if job['name'] == name]
+        if len(matched) != 1 or matched[0]['status'] != 'success':
+            raise AssertionError(f'{name} did not succeed: {result}')
     return jobs
 
 
@@ -93,15 +102,15 @@ def finish(pid,mr):
     jobs=wait_jobs(pid,pp['id'])
     job=next(j for j in jobs if j['name']=='deploy-mesh')
     b.api('POST',f"/projects/{pid}/jobs/{job['id']}/play")
-    wait_jobs(pid,pp['id'])
+    wait_jobs(pid,pp['id'], success_jobs=('deploy-mesh',))
     direct=next(j for j in jobs if j['name']=='deploy-direct')
     b.api('POST',f"/projects/{pid}/jobs/{direct['id']}/play")
-    wait_jobs(pid,pp['id'])
+    wait_jobs(pid,pp['id'], success_jobs=('deploy-direct',))
     schedule=b.api('POST',f'/projects/{pid}/pipeline_schedules',{'description':'audit mesh check','ref':'main','cron':'0 0 1 1 *','active':False})
     b.api('POST',f"/projects/{pid}/pipeline_schedules/{schedule['id']}/play")
     time.sleep(4)
     scheduled=b.api('GET',f'/projects/{pid}/pipelines?source=schedule')[0]
-    wait_jobs(pid,scheduled['id'])
+    wait_jobs(pid,scheduled['id'], success_jobs=('scheduled-check',))
     print('Lifecycle completed; inspect individual statuses in lifecycle-results.jsonl.',flush=True)
 
 

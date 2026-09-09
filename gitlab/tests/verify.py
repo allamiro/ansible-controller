@@ -11,6 +11,7 @@ b = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(b)
 RESULTS = json.loads((b.STATE/'results.json').read_text()) if (b.STATE/'results.json').exists() else []
 
+CURRENT_RESULTS = []
 
 def run_case(name, environment='audit-direct', playbook='playbooks/site.yml', expected='success', controller='controller'):
     p = b.api('POST', '/projects/1/pipeline', {'ref':'main','variables':[
@@ -29,6 +30,7 @@ def run_case(name, environment='audit-direct', playbook='playbooks/site.yml', ex
         f=b.STATE/f"job-{job['id']}.log"; f.write_text(trace); f.chmod(0o600)
     result={'case':name,'pipeline':p['id'],'jobs':[j['id'] for j in jobs], 'status':p['status'],'expected':expected,'pass':p['status']==expected}
     RESULTS.append(result)
+    CURRENT_RESULTS.append(result)
     (b.STATE/'results.json').write_text(json.dumps(RESULTS,indent=2))
     print(json.dumps(result),flush=True)
     return result
@@ -45,4 +47,4 @@ if __name__ == '__main__':
         run_case('mesh-ingress-a-down','audit-mesh')
     finally:
         b.docker('start','gitlab-audit-ingress-a-1')
-    raise SystemExit(0 if all(r['pass'] for r in RESULTS) else 1)
+    raise SystemExit(0 if all(r['pass'] for r in CURRENT_RESULTS) else 1)

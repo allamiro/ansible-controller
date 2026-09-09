@@ -106,8 +106,8 @@ grep -q "EXECUTED-ON=${orch_host} " <<<"$run_out" \
   || pass "and not on the orchestrator (${orch_host})"
 
 echo "== 11. artifacts returned to the controller side =="
-# mesh-run announces its identity before submission and again on completion.
-# This success-path check needs the completion record, not both occurrences.
+# Pre-submit identity starts "mesh-run: tracking job="; only the completion
+# record starts "mesh-run: job=". Select that record for this success check.
 job_id=$(sed -n 's/^mesh-run: job=\([0-9a-f-]*\) .*/\1/p' <<<"$run_out")
 [ -n "$job_id" ] || fail "no job id in mesh-run output"
 art=$(docker exec mesh-e2e-orchestrator bash -euc "

@@ -29,7 +29,10 @@ def main():
         assert e.code in (400,403),e.code
         print('Developer direct push rejected:',e.code,flush=True)
     finally:
-        b.api('DELETE',f"/personal_access_tokens/{token['id']}")
+        try:
+            b.api('DELETE',f"/personal_access_tokens/{token['id']}")
+        finally:
+            b.api('DELETE',f"/users/{u['id']}")
     trigger=b.api('POST',f'/projects/{pid}/triggers',{'description':'audit API trigger'})
     for confirm in ('no','yes'):
         req=urllib.request.Request(b.URL+f'/projects/{pid}/trigger/pipeline',method='POST',headers={'Content-Type':'application/json'},data=json.dumps({'token':trigger['token'],'ref':'main','variables':{'DEPLOY_CONFIRM':confirm}}).encode())

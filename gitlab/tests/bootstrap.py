@@ -28,6 +28,13 @@ def docker(*args, **kwargs):
 
 
 def main():
+    if (STATE/'bootstrap.done').exists():
+        print('Project already bootstrapped; use verify.py.')
+        return
+    if (STATE/'bootstrap.started').exists() or (STATE/'project.json').exists():
+        raise SystemExit('Partial bootstrap detected; inspect evidence and reset the disposable stack and .state before retrying.')
+    # Exclusive marker covers crashes before any resource ID can be recorded.
+    (STATE/'bootstrap.started').touch(exist_ok=False)
     if not (STATE/'pat').exists():
         token = 'glpat-' + secrets.token_hex(20)
         script = "u=User.find_by_username('root'); t=u.personal_access_tokens.create!(name:'isolated-audit',scopes:['api'],expires_at:2.days.from_now); t.set_token("+json.dumps(token)+"); t.save!\n"
@@ -42,11 +49,7 @@ def main():
         known.append(host+' '+' '.join(hk[:2]))
     # This file is owned by the target UID after prepare; write through Docker.
     docker('run','--rm','-i','-v',str(STATE)+':/state','--entrypoint','sh','ansible-controller:e2e','-c','cat > /state/target-key/known_hosts',input='\n'.join(known)+'\n')
-    if (STATE/'bootstrap.done').exists():
-        print('Project already bootstrapped; use verify.py.')
-        return
-    existing = (STATE/'project.json').exists()
-    project = api('GET', '/projects/'+str(json.loads((STATE/'project.json').read_text())['id'])) if existing else api('POST', '/projects', {'name':'audit-automation', 'visibility':'private', 'initialize_with_readme':True, 'default_branch':'main'})
+    project = api('POST', '/projects', {'name':'audit-automation', 'visibility':'private', 'initialize_with_readme':True, 'default_branch':'main'})
     pid = project['id']
     pipeline = '''stages: [test]
 audit:
@@ -80,7 +83,7 @@ audit:
         'playbooks/ansible.cfg':'[defaults]\nhost_key_checking=True\n[ssh_connection]\nssh_args=-o UserKnownHostsFile=/known_hosts -o StrictHostKeyChecking=yes\n'}
     commit = api('POST', f'/projects/{pid}/repository/commits', {'branch':'main',
        'commit_message':'Seed isolated verification project',
-       'actions':[{'action':'update' if existing else 'create','file_path':p,'content':c} for p,c in files.items()]})
+       'actions':[{'action':'create','file_path':p,'content':c} for p,c in files.items()]})
     (STATE/'project.json').write_text(json.dumps({'id':pid, 'path':project['path_with_namespace'], 'sha':commit['id']}))
     deploy = api('POST', f'/projects/{pid}/deploy_tokens', {'name':'audit-fetch','scopes':['read_repository']})
     envs = {}
