@@ -41,7 +41,17 @@ python3 gitlab/tests/extended.py
 python3 gitlab/tests/lifecycle.py
 python3 gitlab/tests/governance.py
 python3 gitlab/tests/recovery.py
+python3 gitlab/tests/ci_acceptance.py
 ```
+
+`ci_acceptance.py` installs the current reference pipeline into the dedicated
+audit project. It verifies manual release, successful and failed mesh artifact
+downloads, replay of both results on GitLab job Retry, Developer denial,
+Maintainer release/download access, and collection of the original UUID.
+It changes that fixture's playbooks and pipeline, so run it last. Evidence is
+saved privately as `.state/ci-acceptance.json`. Runner job containers use the
+fixture's read-only `fips0` mount for the same disposable FIPS-host workaround
+as GitLab; this fixture makes no FIPS compliance claim.
 
 Bootstrap is deliberately one-shot: `bootstrap.started` records the first
 attempt before API mutations. A partial attempt refuses automatic resume; inspect

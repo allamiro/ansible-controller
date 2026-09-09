@@ -2,7 +2,8 @@
 
 Start with the [operator and Maintainer walkthrough](MAINTAINER-README.md)
 for login, project creation, controller connections, review, deployment approval,
-updates and recovery. It also tracks the remaining requirements of issue #94.
+updates and recovery. The CI contract below implements the reference workflow
+for [issue #94](https://github.com/allamiro/ansible-controller/issues/94).
 
 Current test results and known limits: [VERIFICATION.md](VERIFICATION.md).
 The isolated audit suite is in [tests/README.md](tests/README.md).
@@ -129,6 +130,83 @@ are Premium). The enforced controls are protected branches
 (merge=Maintainers, push=no one), pipelines-must-succeed, protected
 runners/variables, and manual jobs. Do not represent the manual button as
 multi-person approval enforcement.
+
+## CI approval, retries and artifacts
+
+The reference is [project-seed/.gitlab-ci.yml](../mesh/labs/gitlab/project-seed/.gitlab-ci.yml)
+and its [scripts/ctl-ci.sh](../mesh/labs/gitlab/project-seed/scripts/ctl-ci.sh).
+Every dispatch route, including schedules and API triggers, requires a manual
+release. CE uses protected `main`/`v*`, a protected runner and protected file
+variables. For the issue's **native protected-environment** gate, use GitLab
+Premium/Ultimate and provision the policy before releasing a deployment:
+
+```bash
+# Group IDs from your GitLab; share the project with both groups first.
+PROTECTED_DEPLOY_GROUP_ID=123 PROTECTED_APPROVER_GROUP_ID=456 \
+REQUIRED_DEPLOY_APPROVALS=2 \
+  gitlab/setup.sh https://gitlab.example.com platform/automation
+```
+
+For an already-wired project, run only the policy step with a short-lived
+administrator token in the private token file:
+
+```bash
+python3 gitlab/protect-environments.py https://gitlab.example.com platform/automation \
+  --deploy-group 123 --approver-group 456 --required-approvals 2 \
+  --environment prod-mesh --environment prod-direct
+```
+
+The script preserves matching policies, refuses drift, and fails on unavailable
+or unauthorized APIs. It never silently substitutes CE controls. Group
+membership and reviewer independence are site policy; use separate reviewers
+and deployers when separation of duties is required. See GitLab's
+[protected environments API](https://docs.gitlab.com/api/protected_environments/).
+For remote HTTPS installs configure the runner separately as described in the
+walkthrough; the bootstrap's bundled runner URL is for the local HTTP stack.
+
+`ctl-run --pipeline N` identifies one logical request by controller environment,
+project, pipeline ID and playbook path, and binds that request to its commit.
+Changing the GitLab job ID on Retry does not change the request. Under the
+environment lock, the controller durably claims it **before** execution:
+
+| Retry state | Behavior |
+|---|---|
+| Completed success or failure | Return the recorded playbook exit code without executing again |
+| Recorded pre-submission refusal | Allow another admission attempt; no work had been submitted |
+| Started, interrupted or ambiguous | Refuse another execution; collect/reconcile the original mesh UUID |
+| Original mesh job subsequently collected | Read authoritative mesh metadata and return its recovered exit code |
+| Same request with a different commit | Refuse the conflicting request |
+
+This is host-local request deduplication, not distributed exactly-once execution.
+Keep `/var/lib/gitlab-runs/requests/` and corresponding records on persistent
+storage; deleting claims removes retry protection. Do not prune unresolved
+requests. A **new pipeline** is a new deliberate execution; rerunning a schedule
+is also a new pipeline. Callers omitting `--pipeline` retain native per-invocation
+behavior. Changing environment/project/playbook creates a different request.
+For an interrupted standalone run, inspect the controller/target and reconcile
+manually; there is no mesh collection command for standalone execution.
+
+`scripts/ctl-ci.sh` exports through `ctl-run --artifacts` over the same pinned,
+forced-command SSH connection. GitLab uploads `mesh-artifacts/` with `when:
+always`, seven-day expiry, and Maintainer download access. Open a deployment
+job's **Browse artifacts** to inspect `ctl-run.json`, `console.log` when present,
+and `logs/runner/<uuid>/meta.json`, stdout, rc/status and JSON job events when
+available. The exporter whitelists result files; it does not expose the fetched
+tree, private keys, mesh environment or arbitrary paths. Results can still
+contain playbook output: use Ansible `no_log` for sensitive tasks and keep the
+project private. See [GitLab job artifacts](https://docs.gitlab.com/ci/jobs/job_artifacts/).
+
+Failed playbook exit codes survive export failures. If execution succeeds but
+required export fails, the CI job exits 2 and reports the export error; Retry
+replays the original execution result and attempts export again. A hard job
+cancellation may prevent artifact upload: retry the same job or use `collect`
+with `JOB_ID` for an incomplete mesh result. `collect` also exports artifacts
+and never dispatches a new playbook. The runner still holds no mesh TLS keys.
+
+Existing GitLab repositories are not overwritten by setup. Upgrade both their
+pipeline and `scripts/ctl-ci.sh` through review (retaining your `prod-*` names),
+and deploy the complete `gitlab/bin/` directory on the controller. Old requests
+from before this journal existed cannot be deduplicated retroactively.
 
 ## Trust boundaries (summary)
 

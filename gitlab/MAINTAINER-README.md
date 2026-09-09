@@ -4,25 +4,27 @@ Use GitLab to store Ansible automation, review changes, and request execution
 on this controller. Run host commands from the `ansible-controller` checkout
 unless a step explicitly switches to the automation project.
 
-## Is issue #94 finished?
+## Issue #94 implementation
 
-**No.** The merged integration provides the controller connection and ordinary
-manual deployment workflow, but it does not meet every acceptance condition in
-[issue #94](https://github.com/allamiro/ansible-controller/issues/94).
+The reference workflow now includes manual release, result artifacts and durable
+pipeline-request deduplication for
+[issue #94](https://github.com/allamiro/ansible-controller/issues/94). Native protected
+environments require a licensed GitLab instance; CE retains its documented
+manual/protected-branch gate. See the [CI contract](README.md#ci-approval-retries-and-artifacts).
 
 | Requirement | Current implementation |
 |---|---|
 | Pipeline dispatch with the playbook's exit code | Implemented through SSH → `ctl-run` → `mesh-run` |
 | Human releases an ordinary deployment | Manual `deploy-mesh` / `deploy-direct` jobs after merge |
-| Protected environment and required deployment approvals | Not provisioned by setup; paid GitLab configuration is described below |
+| Protected environment and required deployment approvals | Optional setup provisioning with verified deployment/approval groups; Premium/Ultimate required |
 | Runner connection without mesh PKI in jobs | Implemented: restricted SSH key, pinned controller host key |
 | Recovery of incomplete results | Manual `collect` job for the original mesh UUID |
-| Never execute twice after pipeline retry | Partial: unresolved mesh jobs block dispatch; completed runs are not deduplicated |
-| `logs/runner/<job-id>/` and `meta.json` uploaded to GitLab artifacts | Not implemented in the seed pipeline |
+| Never execute twice after pipeline retry | Same pipeline request replays its recorded result; unresolved requests refuse redispatch |
+| `logs/runner/<job-id>/` and `meta.json` uploaded to GitLab artifacts | Exported through restricted SSH and uploaded as Maintainer-only job artifacts |
 
 The current path is push → validation → review/merge → manual dispatch →
-console output and exit status in GitLab. Controller-side records remain on
-the controller. This guide does not close the remaining implementation gaps.
+console output, exit status and downloadable artifacts in GitLab. Durable
+request records remain on the controller to prevent execution on job Retry.
 
 ## 1. Log in
 
@@ -246,13 +248,12 @@ can leave the overall pipeline blocked even when the deployment you selected
 succeeded. Do not run the other environment just to turn the pipeline green.
 For a project using one mode, remove the unused deployment job through review.
 
-**Approval bypass surface:** `scheduled-check` runs automatically for schedules;
-`api-deploy` runs for trigger pipelines with `DEPLOY_CONFIRM=yes`. That variable
-is not independent human approval. For an always-manual policy, disable those
-jobs through review, remove unused schedules, and revoke unused trigger tokens
-under **Settings → CI/CD → Pipeline trigger tokens**. `tag-deploy` is manual
-but must be reviewed as another release route. Maintainers who can change
-project policy or merge pipeline code remain trusted administrators of this flow.
+**Approval surface:** `scheduled-check`, `api-deploy`, and `tag-deploy` are
+manual too. `DEPLOY_CONFIRM=yes` only creates an API deployment candidate; an
+allowed human still releases it. Remove unused schedules and revoke unused
+trigger tokens under **Settings → CI/CD → Pipeline trigger tokens**. Maintainers
+who can change project policy or merge pipeline code remain trusted administrators
+of this flow. Older seeded projects must adopt the updated pipeline through review.
 
 For **Premium/Ultimate**, configure **Settings → CI/CD → Protected environments**
 for the exact pipeline names `prod-direct` and/or `prod-mesh`. Set **Allowed to
@@ -260,7 +261,11 @@ deploy** to the release group and add required deployment approvers. Also set
 required MR approval rules if review must block merge. An eligible approver
 approves the deployment in GitLab's environment/deployment view; approval does
 not automatically start the job, so an allowed deployer then runs it.
-These settings are not created by `setup.sh` and are not available in CE.
+Set `PROTECTED_DEPLOY_GROUP_ID` and `PROTECTED_APPROVER_GROUP_ID` (and optionally
+`REQUIRED_DEPLOY_APPROVALS`) when running setup to provision and verify these
+gates. Share the project with both groups first. For existing wiring, run the
+[standalone policy command](README.md#ci-approval-retries-and-artifacts). It refuses
+policy drift and unavailable APIs. Native protected environments are unavailable in CE.
 See [protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
 and [deployment approvals](https://docs.gitlab.com/ci/environments/deployment_approvals/).
 
@@ -276,7 +281,7 @@ UUID from its log and inspect the controller's lifecycle state before retrying.
 | Admission refuses a slot | Verify no submission occurred, then retry when capacity is available |
 | Wait deadline / `results-incomplete` | Collect the original job; do not submit another execution |
 | Completed playbook fails | Inspect its output and target changes; review a correction before another deployment |
-| Completed job is retried | It can execute again today; do not treat GitLab Retry as deduplication |
+| Completed job is retried | Same pipeline/environment/project/playbook returns the original result and exports it again; no execution |
 
 For recovery, open the manual **collect** job on `main`, set `JOB_ID` to the
 original mesh UUID in the manual job's variable form, and run it. This calls
@@ -288,8 +293,16 @@ CI displays console output. Controller audit records are under
 `/var/lib/gitlab-runs/logs/`. Mesh lifecycle metadata lives under
 `/var/lib/mesh/jobs/<uuid>/meta.json`; mesh runner artifacts default to
 `/var/log/ansible/runner/<uuid>/` inside the controller, exposed as
-`logs/runner/<uuid>/` in the host checkout by the standard log mount. The seed does **not**
-upload these directories to GitLab's artifact browser yet.
+`logs/runner/<uuid>/` in the host checkout by the standard log mount. Open the
+deployment job's **Browse artifacts** and look under `mesh-artifacts/`. Results
+include `ctl-run.json`, available console output, and the mesh UUID's `meta.json`,
+stdout, rc/status and JSON events. Artifact download is restricted to Maintainers
+and expires after seven days. Staging trees and credentials are not exported.
+
+Request claims in `/var/lib/gitlab-runs/requests/` must persist alongside their
+records: pruning them removes retry protection. Retry the original pipeline job
+to recover a transfer failure; starting a new pipeline intentionally creates a
+new execution request. Old runs predating this journal are not protected retroactively.
 
 For the next automation update, repeat branch → validation → MR → merge →
 manual deployment. A rollback is also a reviewed change: revert the relevant
@@ -317,6 +330,6 @@ in Git; its password must be provisioned to the executing runtime separately.
 | SSH host verification fails | `CTL_HOST` and verified pinned key; do not bypass checking |
 | Project not allowed / fetch denied | Controller map's project path, GitLab URL, deploy-token authorization and CA trust |
 | Mesh node unavailable | Node enrollment, correct node name, ingress connectivity on 27199/27200 |
-| No artifacts button | Expected current limitation of issue #94; inspect controller records |
+| No artifacts button | Check job trace for export/upload failure, Maintainer access and seven-day expiry; retain controller evidence |
 
 For tested behavior and limits, see [VERIFICATION.md](VERIFICATION.md).

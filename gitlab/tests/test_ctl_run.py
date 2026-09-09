@@ -46,9 +46,10 @@ class ControllerTests(unittest.TestCase):
     def git(self, *args):
         return subprocess.check_output(["git", "-C", str(self.repo), *args], text=True).strip()
 
-    def run_ctl(self, *extra):
-        self.git("add", "-A")
-        self.git("commit", "-qm", "fixture", "--allow-empty")
+    def run_ctl(self, *extra, commit=True):
+        if commit:
+            self.git("add", "-A")
+            self.git("commit", "-qm", "fixture", "--allow-empty")
         return subprocess.run(["bash", str(ROOT / "gitlab/bin/ctl-run"),
                                "--env", "test", "--project", "group/project",
                                "--sha", self.git("rev-parse", "HEAD"),
@@ -100,6 +101,48 @@ class ControllerTests(unittest.TestCase):
     def test_real_failure_rc_preserved(self):
         self.env["TEST_RC"] = "7"
         self.assertEqual(self.run_ctl().returncode, 7)
+
+    def test_pipeline_retry_replays_success_without_execution(self):
+        first = self.run_ctl('--pipeline', '10', '--job', '20')
+        self.assertEqual(first.returncode, 0, first.stderr)
+        marker = self.base / 'executed'
+        original = marker.read_text()
+        marker.unlink()
+        retry = self.run_ctl('--pipeline', '10', '--job', '21', commit=False)
+        self.assertEqual(retry.returncode, 0, retry.stderr)
+        self.assertIn('no new execution', retry.stdout)
+        self.assertFalse(marker.exists())
+        fresh = self.run_ctl('--pipeline', '11', '--job', '22', commit=False)
+        self.assertEqual(fresh.returncode, 0, fresh.stderr)
+        self.assertNotEqual(marker.read_text(), original)
+
+    def test_pipeline_retry_preserves_failure(self):
+        self.env['TEST_RC'] = '7'
+        self.assertEqual(self.run_ctl('--pipeline', '10').returncode, 7)
+        (self.base / 'executed').unlink()
+        self.env['TEST_RC'] = '0'
+        self.assertEqual(self.run_ctl('--pipeline', '10', commit=False).returncode, 7)
+        self.assertFalse((self.base / 'executed').exists())
+
+    def test_pipeline_identity_cannot_change_commit(self):
+        self.assertEqual(self.run_ctl('--pipeline', '10').returncode, 0)
+        (self.base / 'executed').unlink()
+        retry = self.run_ctl('--pipeline', '10')
+        self.assertNotEqual(retry.returncode, 0)
+        self.assertIn('different commit', retry.stderr)
+        self.assertFalse((self.base / 'executed').exists())
+
+    def test_unresolved_request_refuses_second_execution(self):
+        self.assertEqual(self.run_ctl('--pipeline', '10').returncode, 0)
+        record = next((self.base / 'runs/records').glob('*.json'))
+        data = json.loads(record.read_text())
+        data.update(status='started', rc='')
+        record.write_text(json.dumps(data))
+        (self.base / 'executed').unlink()
+        retry = self.run_ctl('--pipeline', '10', commit=False)
+        self.assertEqual(retry.returncode, 2)
+        self.assertIn('outcome unresolved', retry.stderr)
+        self.assertFalse((self.base / 'executed').exists())
 
     @unittest.skipUnless(Path('/configs/ansible.cfg').is_file(), 'requires mounted site config')
     def test_site_config_restored_when_environment_is_sanitized(self):

@@ -158,6 +158,41 @@ entrypoint's fixed Vault password-file path after sudo. Local regressions cover
 the policy-preservation and trigger-override cases; container regressions verify
 both the site-config and Vault-file fallbacks with their fixed paths mounted.
 
+## Issue #94 completion verification (2026-09-09)
+
+The updated reference pipeline was exercised against a fresh, dedicated
+`gitlab-audit` GitLab CE 19.3.1 / Runner 19.3.1 instance. Its HTTPS/private-CA
+controller path dispatched through the fixture's real mesh and SSH target.
+This supersedes the earlier artifact/deduplication gaps; the historical audit
+above describes the earlier pipeline's automatic schedule/trigger behavior.
+
+| Check | Evidence |
+|---|---|
+| Push → validation → manual release → mesh execution | Pipeline 5, job 12; target execution marker increased exactly once |
+| GitLab artifact download | Job 12 archive contains run record, mesh metadata, stdout and JSON events |
+| Successful job Retry | Job 14 has the same run ID and mesh UUID; target marker count unchanged |
+| Failed playbook and Retry | Pipeline 6, jobs 16/18 both failed with the same execution record; both exported artifacts |
+| Developer cannot release or download artifacts | Both requests rejected by GitLab |
+| Named Maintainer can release and download | Job 20 succeeded after the same test account was promoted |
+| Collect original UUID through CI | Job 13 exported the original successful mesh job without dispatch |
+| Native protected-environment request on CE | API rejected it; provisioning failed without an unprotected fallback |
+
+The original successful mesh UUID was
+`2e8f1e5e-601c-4ae7-a4fc-5800ec0bbeb1`; private machine-readable evidence is
+retained in `gitlab/tests/.state/ci-acceptance.json`. Repeat with
+`python3 gitlab/tests/ci_acceptance.py` after fixture bootstrap.
+Local command tests: **38 passed, 3 container-only tests skipped**. These cover
+replayed success/failure, changed-commit refusal, interrupted request refusal,
+metadata reconciliation after collection, pre-submit retry, artifact allowlists
+and symlink rejection, export failure exit semantics, and approval-policy drift.
+Bash syntax, ShellCheck and whitespace checks passed.
+
+The Premium/Ultimate provisioning contract is checked against GitLab's API
+documentation and API stand-ins, including read-back verification and refusal
+of policy drift. A licensed GitLab instance was not available for a live
+multi-approver test. CE manual release is not represented as paid approval
+enforcement. Operators must provision the licensed gate when that is required.
+
 ## Remaining requirements and limits
 
 | Requirement | Status / next necessary work |
@@ -166,7 +201,7 @@ both the site-config and Vault-file fallbacks with their fixed paths mounted.
 | Active-active controller mesh scheduler | NOT IMPLEMENTED. Host-local flock and records are not distributed leases. Do not put identical schedulers behind a load balancer and claim exactly-once execution. |
 | Automatic execution-node scaling | NOT IMPLEMENTED. Enrollment and pool selection exist; dialing an ingress does not provision, authorize, add capacity policy, drain or delete nodes. |
 | Multi-node pool/zone capacity matrix | Existing mesh mechanisms; this GitLab audit exercised one execution node, not every pool/zone/capacity permutation. |
-| Durable logical-request deduplication | NOT IMPLEMENTED. The per-environment lock and global unresolved-mesh-job guard are coarse. A completed or standalone deployment can execute again on CI retry. Need an immutable logical request ID and persisted claim/result before dispatch. |
+| Durable logical-request deduplication | Implemented for one controller: persisted pre-dispatch claims keyed by environment/project/pipeline/playbook, bound to commit; completed retries replay and uncertain requests refuse redispatch. This is not distributed HA ownership. |
 | Concurrent unrelated deployments | LIMITED. One unresolved mesh job blocks other mesh environments on that controller; fix together with request ownership, not by deleting the guard. |
 | Proving SHA was approved | LIMITED. Exact requested SHA is fetched, but ctl-run does not query GitLab to establish protected-ref/review membership. Caller-supplied pipeline/job IDs are audit hints, not independently verified authorization. |
 | Mandatory multi-approver approval | NOT native CE enforcement. [GitLab Free approvals are optional](https://docs.gitlab.com/user/project/merge_requests/approvals/). Protected refs and restricted merge rights are the tested gate; stronger approval requirements need a separate enforceable control or another edition. |
@@ -176,13 +211,13 @@ both the site-config and Vault-file fallbacks with their fixed paths mounted.
 | “No SSL” mesh | Intentionally unsupported: HTTP GitLab does not disable mesh mTLS, SSH host verification or work signatures. |
 | Ambiguous submit after lost response | Must stay UNKNOWN. Recovery of a known unit and ingress loss are narrower tests; they do not prove every submit/crash/network partition timing. |
 | Controller restart mid-job, data loss, disaster restore | NOT TESTED in this audit; requires durable idempotency/fencing design and restore fixtures. |
-| GitLab artifact presentation | PARTIAL: console output/status is visible; full controller artifacts are not exported by the seed workflow. Add a constrained read-only artifact retrieval contract, not mesh volumes in CI. |
+| GitLab artifact presentation | Implemented: restricted SSH exports run records, mesh metadata and whitelisted result files; the reference uploads them as Maintainer-only artifacts even for failed playbooks. |
 | Complete project tree in mesh execution | Implemented in the PR review follow-up: ctl-run passes the fetched root to mesh-run. Local transport-stub regression verifies the staged tree and nested playbook argument; the historical live audit predates this change. |
 | Installer coverage | Isolated fixture bootstrap tested. Existing-environment migration, every installer parameter, certificate provisioning and bootstrap-token revocation failure paths are not fully exercised. |
 
 These are not resolved by more Docker containers alone. The next architectural
-change should implement logical request identity and durable ownership, then
-exercise independent-controller and real HA failure matrices. A Windows test
+change for HA should extend host-local request identity to durable distributed
+ownership, then exercise independent-controller and real HA failure matrices. A Windows test
 host and certificate fixtures are required to complete the remaining transport
 matrix. Existing lab “PASS” claims in other documents are historical evidence,
 not substitutes for these explicit coverage limits.
