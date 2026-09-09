@@ -184,9 +184,11 @@ Both standalone and mesh must support SSH (verified host keys) and WinRM-HTTPS
 :5986 (cert + hostname validation); document WinRM-HTTP :5985 with message
 encryption separately (not HTTPS-equivalent; never Basic-over-HTTP). Note that
 --ssh-key cannot supply WinRM creds, that the node has no controller /configs
-mount, and that ansible.windows must be provisioned via a galaxy_dir env, per
-environments.example.yml. Provision the Vault password separately at the runtime
-that ACTUALLY runs ansible (the node); galaxy_dir does not stage Vault passwords. Test a real Windows host if available; else mark WinRM
+mount. Install ansible.windows at the executing runtime; in mesh mode, use
+galaxy_dir to stage the collection for the node, per environments.example.yml.
+Provision the Vault password separately on the controller in standalone mode
+and on the node in mesh mode; galaxy_dir does not stage Vault passwords.
+Test a real Windows host if available; else mark WinRM
 UNTESTED (as the acceptance matrix already does).
 
 -- 6. FAILURE / RECOVERY HONESTY (per case) --
@@ -201,8 +203,9 @@ Return the real Ansible rc when known; distinguish it from transport/collection
 errors. Reverting code does not undo target changes.
 
 -- 7. DELIVERABLES --
-Separate readable Mermaid diagrams (not one mega-diagram): S1; S3; S4; S5 and S6
-clearly labeled PROPOSED; outbound Runner-poll + returned-job delivery;
+Separate readable Mermaid diagrams (not one mega-diagram): S1; S2 (one ingress,
+REDUCED-RESILIENCE); S3; S4; S5 and S6 clearly labeled PROPOSED; H (multiple
+Runners, with assigned-job recovery limits); outbound Runner-poll + returned-job delivery;
 node-dials-out vs signed-work-delivered-inward; project lifecycle; credential/CA
 distribution; retry/cancel/recovery. Plus: the scenario support matrix; the
 connection (TLS) matrix; the credential matrix; the concurrency-fix design with
