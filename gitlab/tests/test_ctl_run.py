@@ -95,7 +95,7 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(logs[0].stat().st_mode & 0o077, 0)
         record = json.loads(next((self.base / 'runs/records').glob('*.json')).read_text())
         self.assertEqual(record['mesh_job'], '00000000-0000-0000-0000-000000000001')
-        self.assertEqual(record['rc'], 7)
+        self.assertEqual(record['rc'], '7')
 
     def test_real_failure_rc_preserved(self):
         self.env["TEST_RC"] = "7"
