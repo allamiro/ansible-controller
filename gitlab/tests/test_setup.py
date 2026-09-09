@@ -44,6 +44,13 @@ if url.endswith('/protected_branches/main'):
     sys.exit(0)
 if url.endswith('/personal_access_tokens/self'):
     sys.exit(int(os.environ.get('DELETE_RC', '0')))
+if url.endswith('/protected_tags/v%2A'):
+    if os.environ.get('TAG_FAILURE'):
+        sys.exit(22)
+    print('{"name": "v*", "create_access_levels": [{"access_level": 40}]}')
+    sys.exit(0)
+if url.endswith('/protected_tags'):
+    sys.exit(22)
 if url.endswith('/deploy_tokens'):
     # Stop after the generated map, before any runtime wiring or credentials.
     sys.exit(22)
@@ -52,7 +59,7 @@ allowed = {('GET', '/api/v4/user'), ('GET', '/api/v4/projects/platform%2Fautomat
 from urllib.parse import urlsplit
 if (method, urlsplit(url).path) not in allowed:
     sys.exit('Unexpected API route: ' + method + ' ' + url)
-print('{"id": 1}')
+print(json.dumps({'id': 1, 'empty_repo': bool(os.environ.get('EMPTY_REPO'))}))
 ''')
         curl.chmod(0o755)
         # Tripwire: even a fixture regression must never invoke real Docker.
@@ -94,6 +101,22 @@ print('{"id": 1}')
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('main protection differs', result.stderr)
         self.assertNotIn('DELETE ', self.calls.read_text())
+        self.assertFalse((self.state / 'environments.yml').exists())
+
+    def test_existing_empty_project_is_seeded_without_recreating_it(self):
+        shutil.copytree(ROOT / 'mesh/labs/gitlab/project-seed', self.base / 'mesh/labs/gitlab/project-seed')
+        git = self.bin / 'git'
+        git.write_text('#!/bin/sh\nif [ "$3" = push ]; then /usr/bin/git -C "$2" rev-parse --verify main > "$SEED_MARKER"; exit; fi\nexec /usr/bin/git "$@"\n')
+        git.chmod(0o755)
+        marker = self.base / 'seeded-commit'
+        self.run_setup(REVOKE_BOOTSTRAP='0', EMPTY_REPO='1', SEED_MARKER=str(marker))
+        self.assertEqual(len(marker.read_text().strip()), 40)
+        self.assertNotIn('POST http://fixture.invalid/api/v4/projects\n', self.calls.read_text())
+
+    def test_failed_tag_protection_stops_setup(self):
+        result = self.run_setup(REVOKE_BOOTSTRAP='0', TAG_FAILURE='1')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('protected release tag provisioning failed', result.stderr)
         self.assertFalse((self.state / 'environments.yml').exists())
 
     def test_custom_project_is_used_in_generated_allowlists(self):

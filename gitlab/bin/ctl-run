@@ -253,8 +253,18 @@ else
   margs=( "${dest[@]}" --project-dir "$STAGE" --playbook "$PB" --inventory "$INV" --wait "$WAIT" )
   [ -n "$SSH_KEY" ] && margs+=( --ssh-key "$SSH_KEY" )
   [ -n "$GALAXY" ]  && margs+=( --galaxy-dir "$GALAXY" )
-  out=$("$MESH_RUN" "${margs[@]}" 2>&1 | tee /dev/stderr) || rc=${PIPESTATUS[0]}
-  mesh_job=$(grep -E '^mesh-run: ' <<<"$out" | grep -o 'job=[0-9a-f-]*' | head -1 | cut -d= -f2 || true)
+  # Logs live outside the fetched tree, so a project symlink cannot redirect
+  # this write. Stream output without retaining the whole run in Bash memory.
+  mkdir -p "$RUNS_DIR/logs"
+  mesh_log="$RUNS_DIR/logs/$RUN_ID.log"
+  if "$MESH_RUN" "${margs[@]}" 2>&1 | tee "$mesh_log"; then
+    :
+  else
+    pipe_rc=("${PIPESTATUS[@]}")
+    rc=${pipe_rc[0]}
+    [ "$rc" -ne 0 ] || rc=${pipe_rc[1]}
+  fi
+  mesh_job=$(awk '/^mesh-run: / && match($0, /job=[0-9a-f-]+/) { print substr($0, RSTART+4, RLENGTH-4); exit }' "$mesh_log" 2>/dev/null || true)
   # Missing output is not an identity. Never adopt another dispatch merely
   # because its playbook basename and creation time happen to match.
   echo "ctl-run: run=$RUN_ID mesh rc=$rc mesh_job=${mesh_job:-unknown}"

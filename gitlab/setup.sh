@@ -56,7 +56,7 @@ if [ "${REVOKE_BOOTSTRAP:-}" = 1 ]; then
 fi
 ENC=$(printf %s "$PROJ" | sed 's|/|%2F|g')
 if ! PID=$(glab GET "/projects/$ENC" 2>/dev/null | jq -r .id) || [ -z "$PID" ] || [ "$PID" = null ]; then
-  say "project $PROJ absent — creating and seeding it (fresh-GitLab path)"
+  say "project $PROJ absent — creating it (fresh-GitLab path)"
   # resolve the requested namespace so a nested path (e.g. platform/mesh-auto)
   # is created THERE, not silently under root (basename-only would do the latter,
   # then the group/path lookup below would never find it)
@@ -70,6 +70,14 @@ if ! PID=$(glab GET "/projects/$ENC" 2>/dev/null | jq -r .id) || [ -z "$PID" ] |
     --data-urlencode "visibility=private" --data-urlencode "initialize_with_readme=false" >/dev/null
   PID=$(glab GET "/projects/$ENC" | jq -r .id)
   [ -n "$PID" ] && [ "$PID" != null ] || die "project creation failed"
+fi
+# A prior attempt can create the project and fail before pushing the seed.
+# Check GitLab's repository state independently of project creation.
+project_state=$(glab GET "/projects/$ENC") || die "cannot inspect project repository state"
+empty_repo=$(jq -r '.empty_repo' <<<"$project_state")
+case "$empty_repo" in true|false) ;; *) die "GitLab returned no repository emptiness state";; esac
+if [ "$empty_repo" = true ]; then
+  say "seeding empty project $PROJ"
   seed=$(mktemp -d); cp -r mesh/labs/gitlab/project-seed/. "$seed/"
   # the seed pipeline ships lab-* environment names (the disposable lab runs
   # under them); this fresh path provisions prod-* CI variables, deploy tokens,
@@ -123,9 +131,15 @@ glab GET "/projects/$PID/protected_branches/main" | main_policy_matches \
   || die "main protection verification failed"
 glab PUT "/projects/$PID" --data-urlencode "only_allow_merge_if_pipeline_succeeds=true" >/dev/null
 # tag-deploy runs on the protected runner: releases need protected tags
-glab GET "/projects/$PID/protected_tags/v%2A" >/dev/null 2>&1 || \
+if ! glab GET "/projects/$PID/protected_tags/v%2A" >/dev/null; then
   glab POST "/projects/$PID/protected_tags" --data-urlencode "name=v*" \
-    --data-urlencode "create_access_level=40" >/dev/null 2>&1 || true
+    --data-urlencode "create_access_level=40" >/dev/null \
+    || die "protected release tag provisioning failed"
+fi
+glab GET "/projects/$PID/protected_tags/v%2A" | jq -e \
+  '(.name == "v*") and (.create_access_levels | length == 1 and .[0].access_level == 40)
+   and (.create_access_levels | all(.user_id == null and .group_id == null))' >/dev/null \
+  || die "protected release tag policy verification failed"
 
 say "environment map"
 if [ ! -s "$STATE/environments.yml" ]; then
@@ -273,9 +287,31 @@ if docker inspect --type container "$RUNNER_CONTAINER" >/dev/null 2>&1; then
           END { exit bad }
         ' /etc/gitlab-runner/config.toml || ok=0
       fi
+      local rid detail runner_code
+      rid=$(docker exec "$RUNNER_CONTAINER" awk -v want="$n" '
+        /\[\[runners\]\]/ { selected=0 }
+        /^[[:space:]]*name[[:space:]]*=/ { gsub(/"/, ""); selected=($3 == want) }
+        selected && /^[[:space:]]*id[[:space:]]*=/ { print $3; exit }
+      ' /etc/gitlab-runner/config.toml)
+      case "$rid" in *[!0-9]*|'') ok=0;;
+        *)
+          detail=$(curl -sS -K "$STATE/.curl-auth" -w '\n%{http_code}' "$GLURL/api/v4/runners/$rid") \
+            || die "cannot verify existing runner $n; registration left unchanged"
+          runner_code=$(tail -n 1 <<<"$detail")
+          case "$runner_code" in
+            404) ok=0;;
+            200)
+              sed '$d' <<<"$detail" | jq -e --arg access "$a" --arg tag "$t" --argjson pid "$PID" \
+                '.paused == false and .access_level == $access and .locked == true
+                 and .run_untagged == false and (.tag_list | index($tag) != null)
+                 and (.projects | any(.id == $pid))' >/dev/null || ok=0;;
+            *) die "runner lookup returned HTTP $runner_code; registration left unchanged";;
+          esac;;
+      esac
       [ "$ok" = 1 ] && return 0
-      echo "    $n has legacy mesh mounts — re-registering without them"
-      docker exec "$RUNNER_CONTAINER" gitlab-runner unregister --name "$n" >/dev/null 2>&1 || true
+      echo "    $n has stale policy or legacy mesh mounts — re-registering"
+      docker exec "$RUNNER_CONTAINER" gitlab-runner unregister --name "$n" >/dev/null 2>&1 \
+        || die "cannot remove stale registration $n; reconcile its local runner config before retrying (no duplicate registered)"
     fi
     local tok
     tok=$(glab POST /user/runners --data-urlencode "runner_type=project_type" \

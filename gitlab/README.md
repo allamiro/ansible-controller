@@ -168,3 +168,12 @@ differs, setup fails and asks the administrator to reconcile it in GitLab;
 it never removes protection as part of a rerun. Seed deployment jobs use the
 actual Runner checkout's commit, so overriding `CI_COMMIT_SHA` in trigger
 variables cannot select a different deployment commit.
+
+Mesh console logs are streamed to private files under
+`/var/lib/gitlab-runs/logs/`; include them in the operator's retention policy.
+Bootstrap seeds an existing empty repository after an interrupted initial
+attempt, verifies release-tag protection, and checks runner registrations
+against GitLab before accepting them. If a stale registration cannot be removed,
+setup fails with a reconciliation instruction instead of registering duplicates.
+These checks use GitLab's [project repository state](https://docs.gitlab.com/api/projects/)
+and [runner details API](https://docs.gitlab.com/api/runners/).

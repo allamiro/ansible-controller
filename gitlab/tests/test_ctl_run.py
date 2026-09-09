@@ -82,6 +82,21 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual((self.base / "executed").read_text(),
                          json.loads(records[0].read_text())["stage_dir"])
 
+    @unittest.skipUnless(os.environ.get('CTL_RUN_TEST_MESH_STUB') == '1', 'requires isolated mesh transport stand-in')
+    def test_mesh_output_streams_to_private_log_and_preserves_exit_code(self):
+        config = json.loads(self.map.read_text())
+        config['environments']['test'].update(mode='mesh', node='fixture-node')
+        self.map.write_text(json.dumps(config))
+        result = self.run_ctl()
+        self.assertEqual(result.returncode, 7)
+        logs = list((self.base / 'runs/logs').glob('*.log'))
+        self.assertEqual(len(logs), 1)
+        self.assertGreater(logs[0].stat().st_size, 1024 * 1024)
+        self.assertEqual(logs[0].stat().st_mode & 0o077, 0)
+        record = json.loads(next((self.base / 'runs/records').glob('*.json')).read_text())
+        self.assertEqual(record['mesh_job'], '00000000-0000-0000-0000-000000000001')
+        self.assertEqual(record['rc'], 7)
+
     def test_real_failure_rc_preserved(self):
         self.env["TEST_RC"] = "7"
         self.assertEqual(self.run_ctl().returncode, 7)

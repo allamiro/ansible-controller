@@ -12,15 +12,16 @@ b=v.b
 
 def poll(probe, description, timeout=120):
     deadline=time.monotonic()+timeout
+    last_error=None
     while time.monotonic()<deadline:
         try:
             value=probe()
             if value:
                 return value
-        except (subprocess.SubprocessError, OSError, json.JSONDecodeError):
-            pass
+        except (subprocess.SubprocessError, OSError, json.JSONDecodeError) as error:
+            last_error=type(error).__name__
         time.sleep(1)
-    raise TimeoutError(description)
+    raise TimeoutError(f"{description}; last probe error: {last_error or 'none'}")
 
 
 def running_jobs():
