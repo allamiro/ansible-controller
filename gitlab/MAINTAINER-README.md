@@ -1,0 +1,322 @@
+# GitLab operator and Maintainer walkthrough
+
+Use GitLab to store Ansible automation, review changes, and request execution
+on this controller. Run host commands from the `ansible-controller` checkout
+unless a step explicitly switches to the automation project.
+
+## Is issue #94 finished?
+
+**No.** The merged integration provides the controller connection and ordinary
+manual deployment workflow, but it does not meet every acceptance condition in
+[issue #94](https://github.com/allamiro/ansible-controller/issues/94).
+
+| Requirement | Current implementation |
+|---|---|
+| Pipeline dispatch with the playbook's exit code | Implemented through SSH → `ctl-run` → `mesh-run` |
+| Human releases an ordinary deployment | Manual `deploy-mesh` / `deploy-direct` jobs after merge |
+| Protected environment and required deployment approvals | Not provisioned by setup; paid GitLab configuration is described below |
+| Runner connection without mesh PKI in jobs | Implemented: restricted SSH key, pinned controller host key |
+| Recovery of incomplete results | Manual `collect` job for the original mesh UUID |
+| Never execute twice after pipeline retry | Partial: unresolved mesh jobs block dispatch; completed runs are not deduplicated |
+| `logs/runner/<job-id>/` and `meta.json` uploaded to GitLab artifacts | Not implemented in the seed pipeline |
+
+The current path is push → validation → review/merge → manual dispatch →
+console output and exit status in GitLab. Controller-side records remain on
+the controller. This guide does not close the remaining implementation gaps.
+
+## 1. Log in
+
+For the running disposable lab, open <http://localhost:8929/users/sign_in>
+from the Docker host. From another workstation, use the host's reachable name
+or address on port 8929. The configured name `gitlab.lab.local` must resolve
+to that host in your browser if GitLab redirects there. `localhost` inside a
+container refers to that container, not the Docker host.
+
+Use your named GitLab account for daily work. For initial administration, the
+lab uses username `root`; the initial password is the `LAB_ROOT_PASSWORD`
+value in `mesh/labs/gitlab/.lab-state/lab.env`. A fresh stack from `gitlab/`
+uses `gitlab/.gitlab-state/lab.env` instead. Read that private file locally;
+do not paste it into an issue or commit it. A password changed in GitLab
+supersedes the initial value in the file.
+
+If GitLab is not installed yet, follow the prerequisite image and first-start
+commands at the top of [compose.gitlab.yml](compose.gitlab.yml), then return
+here. Do not start a second GitLab on the running lab's port. The provided
+HTTP configuration is for the lab; use your site's HTTPS URL and trusted CA
+for a shared installation.
+
+## 2. Create an automation project and assign roles
+
+Example project path throughout this guide: `platform/automation`.
+
+1. Ask a group Owner to create the `platform` group, or use an existing group
+   where project creation is permitted. Project Maintainer access does not
+   automatically grant permission to create projects in every group.
+2. Select **New project → Create blank project**. Choose `platform` as the
+   namespace, `automation` as the project slug, and **Private** visibility.
+3. Leave **Initialize repository with a README** unchecked. Bootstrap seeds
+   only empty repositories. If you already have files, use the existing-project
+   instructions below.
+4. Under **Manage → Members → Invite members**, add the reviewer/release
+   operator as **Maintainer**, and playbook authors as **Developer**.
+5. Sign out of root and use the named account for reviewing and releasing work.
+
+The host administrator performs the next section using the bootstrap account.
+Maintainers subsequently manage the project's reviewed code and releases;
+they do not need the bootstrap root token.
+See GitLab's [project membership documentation](https://docs.gitlab.com/user/project/members/).
+
+## 3. Connect the project to this controller (host administrator)
+
+The bootstrap needs Bash, Python 3, jq, curl, Git, Docker Compose, a working
+controller image, and an existing GitLab instance. Mesh deployment also needs
+the working orchestrator, ingresses, and execution node described in
+[README.md, test case B](README.md#test-case-b--gitlab--controller--one-mesh-node-on-this-box).
+Installing GitLab alone does not create a working mesh.
+
+Create a short-lived root personal access token with `api` scope using the
+root account's profile/access-token page. Store it with this Bash prompt so
+the value is not embedded in command history:
+
+```bash
+umask 077
+mkdir -p gitlab/.gitlab-state/ctl-secrets
+chmod 700 gitlab/.gitlab-state gitlab/.gitlab-state/ctl-secrets
+read -r -s -p 'Bootstrap GitLab PAT: ' gitlab_bootstrap_pat
+printf '\n'
+printf '%s\n' "$gitlab_bootstrap_pat" > gitlab/.gitlab-state/pat
+unset gitlab_bootstrap_pat
+```
+
+For the **already-running disposable lab**, set the actual network and runner
+names before bootstrap (the controller being wired is `ansible-controller`):
+
+```bash
+export GITLAB_NETWORK=gitlab-lab_labnet
+export DIRECT_NETWORK=gitlab-lab-ctl_directnet
+export RUNNER_CONTAINER=gitlab-lab-runner
+export GITLAB_HOST=gitlab.lab.local GITLAB_PORT=8929
+export CTL_HOST=ctl.prod.local
+```
+
+For the **fresh `gitlab/compose.gitlab.yml` stack**, use its names instead:
+
+```bash
+export GITLAB_NETWORK=gitlab-prod_labnet
+export DIRECT_NETWORK=gitlab-prod_directnet
+export RUNNER_CONTAINER=gitlab-prod-runner
+export GITLAB_HOST=gitlab.lab.local GITLAB_PORT=8929
+export CTL_HOST=ctl.prod.local
+```
+
+Use one of those configurations, then run:
+
+```bash
+gitlab/setup.sh http://localhost:8929 platform/automation
+```
+
+The URL argument is how the **host** reaches GitLab's API. `GITLAB_HOST` and
+`GITLAB_PORT` configure the runner's internal HTTP URL; the environment map's
+`gitlab_url` is how the **controller** fetches the repository. `CTL_HOST` is
+how CI job containers reach the controller. These addresses must resolve from
+their respective networks.
+
+Setup seeds the project, protects `main` and `v*`, requires successful
+pipelines for merge, creates fetch credentials and a restricted CI SSH key,
+wires the controller, and registers the validation/deployment runner pair.
+It also creates an API trigger token; see the approval caveat below.
+
+Before releasing a job, inspect `gitlab/.gitlab-state/environments.yml`:
+
+- `allowed_projects` must include `platform/automation` in each intended environment.
+- `gitlab_url` must be reachable from the controller.
+- `inventory` is a path within the fetched automation project.
+- `ssh_key` is a path in the executing runtime, not a GitLab variable value.
+- For `prod-mesh`, `node` must match your enrolled mesh node.
+
+Setup preserves an existing map. An earlier `root/mesh-automation` map will
+not automatically become a `platform/automation` map. It also reuses local
+token files and fixed runner names: this bootstrap is **not a multi-project
+onboarding loop**. For additional projects, provision project-authorized fetch
+tokens, runner assignments, scoped CI variables and controller allowlists
+deliberately; do not rerun it against a different project and assume access
+was transferred.
+
+The defaults use `ansible-controller:e2e` for job images. To choose different
+images, set `VALIDATE_IMAGE` and `DEPLOY_IMAGE` before initial bootstrap.
+Validation needs Ansible and ansible-lint; deployment needs Git and SSH.
+Empty-project seeding writes these choices into the pipeline. Updating a
+populated project requires a reviewed change to its image literals.
+
+For an existing remote/HTTPS GitLab, this bundled Docker wiring needs site
+adaptation: configure runner registration and checkout trust for that URL,
+the controller's `gitlab_url` and CA mount, and a network route from jobs to
+`CTL_HOST:22`. The current bootstrap runner registration constructs an HTTP
+URL; changing only the first setup argument does not configure HTTPS runners.
+See [private-CA fetch guidance](README.md#private-ca-project-fetch).
+
+After successful connection verification, revoke the bootstrap PAT:
+
+```bash
+REVOKE_BOOTSTRAP=1 gitlab/setup.sh http://localhost:8929 platform/automation
+```
+
+This is a separate revocation-only invocation. Keep the generated deployment
+credentials available to their runtimes; do not revoke them with the PAT.
+GitLab documents [personal access tokens](https://docs.gitlab.com/user/profile/personal_access_tokens/).
+
+## 4. Verify the project before its first deployment
+
+In **Settings → Repository → Branch rules** (or **Protected branches**):
+`main` must allow merge by Maintainers, allow push by no one, and disallow
+force push. The `v*` tag rule should allow creation by Maintainers.
+In **Settings → Merge requests**, verify **Pipelines must succeed**.
+Setup fails on mismatched existing protection; reconcile the intended policy
+instead of deleting protection to get past the error.
+
+In **Settings → CI/CD → Runners**, verify the `mesh-validate` runner is online
+and the `mesh-deploy` runner is online and protected. Both are project-locked
+and reject untagged jobs. In **Variables**, verify these entries:
+
+| Variable | Type / scope | Purpose |
+|---|---|---|
+| `CTL_SSH_KEY` | Protected File, `prod-*` by default | CI-to-controller restricted private key |
+| `CTL_KNOWN_HOSTS` | Protected File, same scope | Pinned controller SSH host key |
+| `CTL_HOST` | Protected variable, same scope | Controller network name |
+
+File variables give jobs temporary file paths. Do not echo their contents or
+enable shell tracing around credentials. Multiline keys are not made safe by
+assuming GitLab masking will hide them. No mesh TLS/work-signing keys or
+Vault passwords belong in these variables. The runner manager holds the Docker
+socket; job containers receive neither that socket nor mesh submission mounts.
+
+For a populated repository, add the files needed from
+[`project-seed`](../mesh/labs/gitlab/project-seed/) on a feature branch,
+preserving your existing automation. Change **all** `lab-direct` / `lab-mesh`
+references in its `.gitlab-ci.yml` to `prod-direct` / `prod-mesh`, including
+environment names and `ctl-run --env` arguments. Set the two image names,
+inventory paths and playbooks for your project, validate the merged CI YAML
+in GitLab's pipeline editor, and review the change before merging.
+
+## 5. Change Ansible automation and request review
+
+Clone the seeded automation project into a separate directory. Use the HTTP/S
+clone URL shown by GitLab; the bundled compose file does not publish GitLab
+SSH, and host port 2222 belongs to the Ansible controller. If prompted for a
+Git password, use your named account's repository-scoped token; do not put it
+in the clone URL.
+
+```bash
+git clone http://localhost:8929/platform/automation.git
+cd automation
+git switch -c change/site-message
+# Edit playbooks/site.yml, roles, inventory, or group_vars as needed.
+git add playbooks/site.yml
+git commit -m 'Update the site automation'
+git push -u origin change/site-message
+```
+
+Create a merge request targeting `main` and assign a Maintainer as reviewer.
+State the intended hosts, change, expected result, and recovery plan. The
+validation job runs syntax checks and ansible-lint. Extend its playbook list
+when adding new entry points. Review inventory, roles, collections and CI
+changes together: reviewed playbooks execute with real target privileges.
+
+As reviewer, open **Merge requests**, inspect the diff and validation result,
+request corrections or select **Approve**, then **Merge** when ready.
+Push corrections to the same feature branch; GitLab updates the MR and runs
+validation again. In CE, approval is recorded but is not a required approval
+rule. Maintainer-only merge and successful pipelines are the enforced merge
+controls. See [GitLab approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/).
+
+## 6. Release the reviewed commit
+
+1. Open **Build → Pipelines**, then the pipeline for the merged `main` commit.
+2. Confirm its commit SHA and validation result.
+3. Open the desired manual job: **deploy-direct** for standalone execution or
+   **deploy-mesh** for mesh execution. Select **Run/Play** for that job only.
+4. Watch its job log. The job sends the actual checked-out commit SHA to
+   `ctl-run`; the controller fetches that commit and uses its own environment
+   map to select inventory, execution mode and credentials.
+5. Check the job result and target state. The seed's `site.yml` writes commit
+   provenance to `/home/ansible/lab-deployed.txt` on the demo target.
+
+Both deployment jobs are offered on `main`; an unplayed blocking manual job
+can leave the overall pipeline blocked even when the deployment you selected
+succeeded. Do not run the other environment just to turn the pipeline green.
+For a project using one mode, remove the unused deployment job through review.
+
+**Approval bypass surface:** `scheduled-check` runs automatically for schedules;
+`api-deploy` runs for trigger pipelines with `DEPLOY_CONFIRM=yes`. That variable
+is not independent human approval. For an always-manual policy, disable those
+jobs through review, remove unused schedules, and revoke unused trigger tokens
+under **Settings → CI/CD → Pipeline trigger tokens**. `tag-deploy` is manual
+but must be reviewed as another release route. Maintainers who can change
+project policy or merge pipeline code remain trusted administrators of this flow.
+
+For **Premium/Ultimate**, configure **Settings → CI/CD → Protected environments**
+for the exact pipeline names `prod-direct` and/or `prod-mesh`. Set **Allowed to
+deploy** to the release group and add required deployment approvers. Also set
+required MR approval rules if review must block merge. An eligible approver
+approves the deployment in GitLab's environment/deployment view; approval does
+not automatically start the job, so an allowed deployer then runs it.
+These settings are not created by `setup.sh` and are not available in CE.
+See [protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
+and [deployment approvals](https://docs.gitlab.com/ci/environments/deployment_approvals/).
+
+## 7. Results, recovery and future updates
+
+A completed playbook's exit code becomes the deployment job result. A failed
+or timed-out job alone does not prove the playbook never ran. Keep the mesh
+UUID from its log and inspect the controller's lifecycle state before retrying.
+
+| Observed result | Next action |
+|---|---|
+| Validation fails | Correct the branch and rerun validation; no deployment was authorized by that validation job |
+| Admission refuses a slot | Verify no submission occurred, then retry when capacity is available |
+| Wait deadline / `results-incomplete` | Collect the original job; do not submit another execution |
+| Completed playbook fails | Inspect its output and target changes; review a correction before another deployment |
+| Completed job is retried | It can execute again today; do not treat GitLab Retry as deduplication |
+
+For recovery, open the manual **collect** job on `main`, set `JOB_ID` to the
+original mesh UUID in the manual job's variable form, and run it. This calls
+`ctl-run --collect` through the same restricted SSH connection. Unknown or
+ambiguous submission states need administrator reconciliation on the controller.
+
+CI displays console output. Controller audit records are under
+`/var/lib/gitlab-runs/records/` and streamed mesh logs under
+`/var/lib/gitlab-runs/logs/`. Mesh lifecycle metadata lives under
+`/var/lib/mesh/jobs/<uuid>/meta.json`; mesh runner artifacts default to
+`/var/log/ansible/runner/<uuid>/` inside the controller, exposed as
+`logs/runner/<uuid>/` in the host checkout by the standard log mount. The seed does **not**
+upload these directories to GitLab's artifact browser yet.
+
+For the next automation update, repeat branch → validation → MR → merge →
+manual deployment. A rollback is also a reviewed change: revert the relevant
+commit on a branch, validate it, merge it and deliberately deploy it. Reverting
+code does not necessarily undo target changes, so review the recovery playbook.
+
+Connection changes have a separate operator step: update the environment map
+and runtime trust/credentials for new targets or a new GitLab URL, then verify
+connectivity before release. Rotate the CI SSH key and its authorized-key entry
+together, pin a changed controller host key only after verifying it through the
+host, and update protected file variables. Never disable host-key checking to
+make a failed connection succeed.
+
+Do not commit `.gitlab-state/`, `.lab-state/`, private keys, tokens or Vault
+passwords into the automation repository. Encrypted Vault data can be reviewed
+in Git; its password must be provisioned to the executing runtime separately.
+
+## Troubleshooting
+
+| Symptom | Check |
+|---|---|
+| Browser cannot connect | GitLab container health, port 8929, host firewall and browser DNS |
+| Job stays pending | Runner online, matching tag, protected-ref status, job image availability |
+| Missing SSH key variable | Job environment matches `prod-*` and ref is protected |
+| SSH host verification fails | `CTL_HOST` and verified pinned key; do not bypass checking |
+| Project not allowed / fetch denied | Controller map's project path, GitLab URL, deploy-token authorization and CA trust |
+| Mesh node unavailable | Node enrollment, correct node name, ingress connectivity on 27199/27200 |
+| No artifacts button | Expected current limitation of issue #94; inspect controller records |
+
+For tested behavior and limits, see [VERIFICATION.md](VERIFICATION.md).
