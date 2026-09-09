@@ -1,5 +1,9 @@
 # GitLab CE alongside the Ansible controller
 
+Start with the [operator and Maintainer walkthrough](MAINTAINER-README.md)
+for login, project creation, controller connections, review, deployment approval,
+updates and recovery. It also tracks the remaining requirements of issue #94.
+
 Current test results and known limits: [VERIFICATION.md](VERIFICATION.md).
 The isolated audit suite is in [tests/README.md](tests/README.md).
 
