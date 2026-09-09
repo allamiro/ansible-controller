@@ -106,7 +106,9 @@ grep -q "EXECUTED-ON=${orch_host} " <<<"$run_out" \
   || pass "and not on the orchestrator (${orch_host})"
 
 echo "== 11. artifacts returned to the controller side =="
-job_id=$(grep -o "job=[0-9a-f-]*" <<<"$run_out" | cut -d= -f2)
+# mesh-run announces its identity before submission and again on completion.
+# This success-path check needs the completion record, not both occurrences.
+job_id=$(sed -n 's/^mesh-run: job=\([0-9a-f-]*\) .*/\1/p' <<<"$run_out")
 [ -n "$job_id" ] || fail "no job id in mesh-run output"
 art=$(docker exec mesh-e2e-orchestrator bash -euc "
   pdd=/var/lib/mesh/jobs/$job_id
@@ -394,7 +396,7 @@ pool_out=$(docker exec mesh-e2e-orchestrator /usr/local/mesh/bin/mesh-run \
 grep -q "node=exec-e2e-a " <<<"$pool_out" \
   && pass "zone 'lab' classified to pool 'e2e'; ghost skipped pre-submit; ran on exec-e2e-a" \
   || fail "pool dispatch did not select exec-e2e-a: $(grep -o 'node=[^ ]*' <<<"$pool_out" | head -1)"
-pool_job=$(grep -o "job=[0-9a-f-]*" <<<"$pool_out" | cut -d= -f2)
+pool_job=$(sed -n 's/^mesh-run: job=\([0-9a-f-]*\) .*/\1/p' <<<"$pool_out")
 pool_meta=$(docker exec mesh-e2e-orchestrator python3 -c "
 import json
 d = json.load(open('/var/lib/mesh/jobs/$pool_job/meta.json'))
