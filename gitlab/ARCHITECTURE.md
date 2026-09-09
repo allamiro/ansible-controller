@@ -1,10 +1,47 @@
 # GitLab-driven automation — architecture and evidence
 
+**Current verification (2026-09-08):** read [VERIFICATION.md](VERIFICATION.md)
+for the isolated GitLab CE 19.3.1 test results, fixes and explicit coverage gaps.
+The older acceptance results below are historical. Full controller HA,
+autoscaling, durable request deduplication and live Windows coverage are still
+missing; the diagrams do not imply those capabilities are implemented.
+
 The design of record for the GitLab CE integration: responsibilities, trust
 boundaries, lifecycle, failure semantics, and the live evidence behind each
 claim. Deployment lives in [README.md](README.md); the disposable lab that
 exercises everything end to end lives in
 [mesh/labs/gitlab/](../mesh/labs/gitlab/README.md).
+
+## Required boundary: GitLab is optional
+
+The original controller and mesh remain independently usable. GitLab adds an
+optional source/review/CI interface; it is not the mesh scheduler, a required
+runtime dependency, or a route to execution nodes.
+
+- **Project content is pulled by the controller.** A deployment Runner job sends
+  a request over SSH containing the environment, project, commit SHA and
+  playbook name. It does not push the playbook payload to execution nodes.
+  `ctl-run` then fetches that SHA from GitLab using a controller-held credential.
+- **GitLab CE does not initiate controller or execution-node connections in
+  this design.** Runner manager polls GitLab; its deployment job connects only
+  to the controller. Deployment jobs need no node addresses, mesh sockets,
+  signing keys or target credentials. Enforce that boundary with network policy
+  as well as credential placement; Runner tags alone do not enforce it.
+- **The controller owns execution.** For standalone operation it runs Ansible
+  directly against SSH/WinRM targets. For mesh operation it submits signed work
+  through its local Receptor ingress; nodes initiate outbound mTLS connections
+  to the ingress and receive work over those established connections.
+- **Without GitLab**, operators use the existing `make run` / `ansible-playbook`
+  and `make mesh-run` / `mesh-run` paths with locally available project files,
+  inventories and runtime credentials. Mesh recovery remains available through
+  `make mesh-collect`. No GitLab token, Runner or `ctl-run` is needed for these
+  paths. Installing GitLab must not replace or gate them.
+
+When GitLab is unavailable, a new `ctl-run` request requiring a repository fetch
+will fail. That does not prevent native execution using already provisioned
+files. This is an explicit operator path, not an automatic fallback to an
+unreviewed or stale checkout. Core Compose definitions and mesh execution must
+continue to work without the optional GitLab override/network.
 
 ## Responsibilities
 
@@ -14,7 +51,7 @@ exercises everything end to end lives in
 | GitLab Runner (manager) | polls GitLab, spawns job containers (docker executor) | hold mesh/target credentials |
 | Validation jobs | syntax/lint on MRs and branches | touch secrets, sockets, or controllers |
 | Deploy jobs (protected refs only) | SSH to a controller and invoke `ctl-run` | fetch/hold repo tokens, choose credentials, reach targets |
-| `ctl-run` (controller-side command) | validate inputs, fetch the exact reviewed SHA, stage in isolation, execute via existing engines, record audit linkage | be an API, accept caller-chosen URLs/credentials/modes, sandbox playbook content |
+| `ctl-run` (controller-side command) | validate inputs, fetch the exact requested SHA (review is a CI governance assumption), stage in isolation, execute via existing engines, record audit linkage | be an API, accept caller-chosen URLs/credentials/modes, sandbox playbook content |
 | Standalone controller | `ansible-playbook` against directly-reachable SSH/WinRM targets | — |
 | Orchestrator + ingress A/B | mesh dispatch (`mesh-run`), work signing, result streaming | expose sockets beyond local permissions |
 | Execution nodes | run received payloads against their networks' SSH/WinRM targets | clone from GitLab, hold fetch tokens |
@@ -225,7 +262,7 @@ not protect the Runner's HTTP API traffic either).
 | Guard vs CI retry; reconcile; ambiguous verdicts | PASS (lab matrix) | live forced cases |
 | WinRM execution | **UNTESTED** | no Windows host. Transport (pywinrm/NTLM) verified in both images; a real mesh run additionally needs `ansible.windows` staged via a `galaxy_dir` env and the Vault password provisioned to the EXECUTING runtime (node) — pattern documented, unexercised |
 | Submodules / LFS projects | REFUSED by design | explicit errors |
-| GitLab TLS modes B–D | DOCUMENTED, not exercised | lab runs mode E |
+| GitLab TLS modes B–D | See current verification | private CA + proxy termination exercised in gitlab-audit; self-signed leaf and end-to-end upstream TLS remain untested |
 
 ## Production gaps
 

@@ -1,0 +1,140 @@
+# Dedicated verification stack; never shares existing controller/lab volumes.
+name: gitlab-audit
+services:
+  gitlab:
+    image: gitlab/gitlab-ce:19.3.1-ce.0
+    hostname: gitlab.audit.local
+    shm_size: 256m
+    networks: [gitnet]
+    ports: ["127.0.0.1:18929:8929"]
+    environment:
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url 'http://gitlab.audit.local:8929'
+        gitlab_rails['initial_root_password'] = '${AUDIT_ROOT_PASSWORD:?Run prepare.py first}'
+        prometheus_monitoring['enable'] = false
+        puma['worker_processes'] = 2
+        sidekiq['max_concurrency'] = 5
+    volumes:
+      - git-config:/etc/gitlab
+      - git-data:/var/opt/gitlab
+      - git-logs:/var/log/gitlab
+      # Disposable lab only, not a FIPS-compliance configuration.
+      - ./.state/fips0:/proc/sys/crypto/fips_enabled:ro
+    healthcheck:
+      test: [CMD, curl, -sf, "http://localhost:8929/-/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 60
+      start_period: 300s
+  gateway:
+    image: nginx:1.31.4-alpine
+    networks:
+      gitnet: {}
+      control:
+        aliases: [gitlab.audit.local]
+    volumes:
+      - ./.state/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./.state/web-tls/server.crt:/tls/server.crt:ro
+      - ./.state/web-tls/server.key:/tls/server.key:ro
+    ports: ["127.0.0.1:18443:443"]
+    depends_on: [gitlab]
+  runner:
+    image: gitlab/gitlab-runner:v19.3.1
+    networks: [control]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - runner-config:/etc/gitlab-runner
+      - ./.state/web-tls/ca.crt:/etc/gitlab-runner/certs/ca.crt:ro
+  controller: &controller
+    image: ansible-orchestrator:e2e
+    networks: [control, directnet]
+    volumes:
+      - ../bin:/usr/local/lab-bin:ro
+      - ../../mesh/bin:/usr/local/mesh/bin:ro
+      - ./.state/environments.yml:/etc/ctl-run/environments.yml:ro
+      - ./.state/fetch-secrets:/etc/ctl-run/secrets:ro
+      - ./.state/ci-authorized:/home/ansible/.ssh:ro
+      - ./.state/target-key:/target-key:ro
+      - ./.state/web-tls/ca.crt:/etc/audit-ca.crt:ro
+      - runtime:/run/receptor
+      - mesh-state:/var/lib/mesh
+      - ctl-state:/var/lib/gitlab-runs
+      - ctl-hostkeys:/etc/ssh/host_keys
+    environment:
+      GIT_SSL_CAINFO: /etc/audit-ca.crt
+  controller2:
+    <<: *controller
+    volumes:
+      - ../bin:/usr/local/lab-bin:ro
+      - ./.state/environments.yml:/etc/ctl-run/environments.yml:ro
+      - ./.state/fetch-secrets:/etc/ctl-run/secrets:ro
+      - ./.state/ci-authorized:/home/ansible/.ssh:ro
+      - ./.state/target-key:/target-key:ro
+      - ./.state/web-tls/ca.crt:/etc/audit-ca.crt:ro
+      - ctl-state2:/var/lib/gitlab-runs
+      - ctl-hostkeys2:/etc/ssh/host_keys
+  direct-target:
+    image: ansible-controller:e2e
+    networks: [directnet]
+    volumes:
+      - ./.state/target-authorized:/home/ansible/.ssh:ro
+      - direct-hostkeys:/etc/ssh/host_keys
+  mesh-target:
+    image: ansible-controller:e2e
+    networks: [targetnet]
+    volumes:
+      - ./.state/target-authorized:/home/ansible/.ssh:ro
+      - mesh-hostkeys:/etc/ssh/host_keys
+  ingress-a:
+    image: quay.io/ansible/receptor:v1.6.7@sha256:6296f6cd3b0301cc7c9376e48ae15a42fc7b606235d08e94543fe77661cea4d2
+    networks: [control]
+    user: "0:0"
+    entrypoint: [receptor, -c, /etc/receptor/receptor.conf]
+    volumes:
+      - ../../mesh/config/receptor/controller-a.yml:/etc/receptor/receptor.conf:ro
+      - ./.state/pki/issued/controller-a:/etc/receptor/tls:ro
+      - ./.state/pki/work-signing:/etc/receptor/signing:ro
+      - runtime:/run/receptor
+  ingress-b:
+    image: quay.io/ansible/receptor:v1.6.7@sha256:6296f6cd3b0301cc7c9376e48ae15a42fc7b606235d08e94543fe77661cea4d2
+    networks: [control]
+    user: "0:0"
+    entrypoint: [receptor, -c, /etc/receptor/receptor.conf]
+    volumes:
+      - ../../mesh/config/receptor/controller-b.yml:/etc/receptor/receptor.conf:ro
+      - ./.state/pki/issued/controller-b:/etc/receptor/tls:ro
+      - ./.state/pki/work-signing:/etc/receptor/signing:ro
+      - runtime:/run/receptor
+  node:
+    image: ansible-execution-node:e2e
+    networks: [control, targetnet]
+    environment:
+      RECEPTOR_NODE_ID: exec-audit-a
+      RECEPTOR_PEERS: ingress-a:27199,ingress-b:27199
+      RECEPTOR_TLS_CERT: /tls/tls.crt
+      RECEPTOR_TLS_KEY: /tls/tls.key
+      RECEPTOR_TLS_CA: /tls/ca.crt
+      RECEPTOR_WORK_PUBKEY: /signing/work-public.pem
+    tmpfs: ["/run/receptor:uid=1000,gid=1000,mode=0750"]
+    volumes:
+      - ./.state/pki/issued/exec-audit-a:/tls:ro
+      - ./.state/pki/work-signing/work-public.pem:/signing/work-public.pem:ro
+      - ./.state/target-key/known_hosts:/known_hosts:ro
+networks:
+  gitnet: {}
+  control: {}
+  directnet: {internal: true}
+  targetnet: {internal: true}
+volumes:
+  git-config: {}
+  git-data: {}
+  git-logs: {}
+  runner-config: {}
+  runtime: {}
+  mesh-state: {}
+  ctl-state: {}
+  ctl-hostkeys: {}
+  direct-hostkeys: {}
+  mesh-hostkeys: {}
+  ctl-state2: {}
+  ctl-hostkeys2: {}

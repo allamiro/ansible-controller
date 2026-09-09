@@ -7,7 +7,7 @@
 #
 # This is the ONE integration point between GitLab and the controller: a CI
 # job (or an operator) invokes it over authenticated SSH; it fetches the
-# EXACT reviewed commit from GitLab into an isolated per-run directory and
+# EXACT requested commit from GitLab into an isolated per-run directory and
 # executes it through the existing engines — ansible-playbook (standalone)
 # or /usr/local/mesh/bin/mesh-run (mesh). It adds NO service, NO API, and
 # NO new execution path.
@@ -24,16 +24,17 @@
 #     /etc/ctl-run/secrets/<env>.token on the CONTROLLER — CI never sees
 #     them and cannot choose which one is used.
 #   - Being able to run this command at all IS the deployment authority:
-#     it executes as the controller's ansible user, whose broad local
-#     privileges (mesh sockets = submission authority, passwordless sudo
-#     on the controller) are the repository's documented reality. The
+#     the SSH entrypoint escalates to root through sudo; the ansible
+#     account also has broad local privileges (mesh sockets = submission
+#     authority and passwordless sudo). These are documented platform
+#     privileges. The
 #     enforced boundary is WHO CAN LOG IN — the protected deploy runner's
 #     key — not this wrapper. This wrapper validates inputs and stages
 #     safely; it is not a sandbox for malicious playbooks. Trusted-author
 #     review (protected branches) is the control for playbook content.
 #
 # EXECUTION SEMANTICS preserved from the platform:
-#   - never-run-twice: mesh dispatch inherits mesh-run's guarantees; this
+#   - dispatch ambiguity: mesh-run does not automatically resubmit unknown work; this
 #     wrapper additionally refuses to dispatch while any tracked mesh job
 #     is non-final (the CI-retry guard), and holds a per-environment lock
 #     so two invocations cannot interleave fetch/dispatch.
@@ -47,6 +48,8 @@
 # content; project paths, envs, SHAs or playbook paths outside the strict
 # grammars below; URLs or credential names supplied by the caller.
 set -euo pipefail
+# Private from creation: a fetched tree can contain vaulted/private inventory.
+umask 077
 
 ENVS_FILE="${CTL_RUN_ENVS:-/etc/ctl-run/environments.yml}"
 SECRETS_DIR="${CTL_RUN_SECRETS:-/etc/ctl-run/secrets}"
@@ -55,7 +58,7 @@ MESH_RUN=/usr/local/mesh/bin/mesh-run
 
 die() { echo "ctl-run: ERROR: $*" >&2; exit 2; }
 
-ENVN= PROJECT= SHA= PLAYBOOK= PIPELINE= JOB= WAIT=120 COLLECT=
+ENVN='' PROJECT='' SHA='' PLAYBOOK='' PIPELINE='' JOB='' WAIT=120 COLLECT=''
 while [ $# -gt 0 ]; do
   case "$1" in
     --env)      ENVN="${2:?}"; shift 2;;
@@ -86,7 +89,7 @@ case "$SHA"      in *[!0-9a-f]*|'') die "sha must be 40 lowercase hex";; esac
 case "$PLAYBOOK" in *[!A-Za-z0-9._/-]*|''|/*|*..*) die "playbook '$PLAYBOOK' invalid (relative, no ..)";; esac
 case "$PLAYBOOK" in *.yml|*.yaml) ;; *) die "playbook must be a .yml/.yaml path";; esac
 case "$WAIT"     in *[!0-9]*|'') die "--wait must be a number";; esac
-for n in $PIPELINE $JOB; do case "$n" in *[!0-9]*) die "--pipeline/--job must be numeric";; esac; done
+for n in "$PIPELINE" "$JOB"; do case "$n" in *[!0-9]*) die "--pipeline/--job must be numeric";; esac; done
 
 # ---- environment map (admin-owned; python for real YAML parsing) --------------
 [ -f "$ENVS_FILE" ] || die "no environment map at $ENVS_FILE"
@@ -112,6 +115,11 @@ sys.exit(0 if sys.argv[2] in (e.get('allowed_projects') or []) else 1)" "$envjso
 MODE=$(efield mode); GITLAB_URL=$(efield gitlab_url); INV_REL=$(efield inventory)
 SSH_KEY=$(efield ssh_key); NODE=$(efield node); POOL=$(efield pool); ZONE=$(efield zone)
 GALAXY=$(efield galaxy_dir); HOSTKEY_CHECKING=$(efield hostkey_checking)
+GIT_CA=$(efield git_ca_file)
+if [ -n "$GIT_CA" ]; then
+  [ -r "$GIT_CA" ] || die "environment Git CA file is unreadable"
+  export GIT_SSL_CAINFO="$GIT_CA"
+fi
 case "$MODE" in standalone|mesh) ;; *) die "environment '$ENVN' has invalid mode '$MODE'";; esac
 [ -n "$GITLAB_URL" ] || die "environment '$ENVN' defines no gitlab_url"
 [ -n "$INV_REL" ] || die "environment '$ENVN' defines no inventory"
@@ -135,7 +143,7 @@ if [ "$MODE" = mesh ]; then
   [ -z "$unresolved" ] || die "unresolved mesh job(s):$unresolved — recover first (ctl-run --collect <uuid>, or the lab README's ambiguous procedure); refusing to dispatch"
 fi
 
-# ---- fetch the exact reviewed commit ------------------------------------------
+# ---- fetch the exact requested commit ------------------------------------------
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 STAGE="$RUNS_DIR/$ENVN/$SHA/$RUN_ID"
 mkdir -p "$STAGE"
@@ -161,10 +169,27 @@ unset CTL_GIT_TOKEN CTL_GIT_USER
 git -C "$STAGE" -c advice.detachedHead=false checkout -q "$SHA"
 [ "$(git -C "$STAGE" rev-parse HEAD)" = "$SHA" ] || { cleanup_stage_on_refusal; die "checkout does not match the requested SHA"; }
 # explicit refusals: content this integration does not stage
-[ ! -f "$STAGE/.gitmodules" ] || { cleanup_stage_on_refusal; die "project uses git submodules — unsupported by this integration (documented refusal)"; }
-if grep -qs 'filter=lfs' "$STAGE/.gitattributes" 2>/dev/null; then
-  cleanup_stage_on_refusal; die "project uses Git LFS — unsupported by this integration (documented refusal)"
-fi
+# Validate BEFORE writing provenance or reading project files. A tracked
+# symlink at playbooks/vars/commit.yml previously overwrote a controller file.
+# Internal links remain supported; dangling/external/cyclic links fail closed.
+python3 - "$STAGE" <<'PY' || { cleanup_stage_on_refusal; die "unsafe or unsupported project tree"; }
+from pathlib import Path
+import sys
+root = Path(sys.argv[1]).resolve()
+for path in root.rglob('*'):
+    if '.git' in path.relative_to(root).parts:
+        continue
+    if path.is_symlink():
+        try:
+            path.resolve(strict=True).relative_to(root)
+        except (ValueError, OSError, RuntimeError):
+            sys.exit(f"project symlink escapes tree or is unresolved: {path.relative_to(root)}")
+    if path.name == '.gitmodules':
+        sys.exit('project uses git submodules — unsupported')
+    if path.name == '.gitattributes' and path.is_file():
+        if 'filter=lfs' in path.read_text():
+            sys.exit('project uses Git LFS — unsupported')
+PY
 rm -rf "$STAGE/.git"   # execution works from an immutable tree, not a repo
 
 # provenance convention: a project carrying playbooks/vars/commit.yml gets
@@ -204,7 +229,9 @@ if [ "$MODE" = standalone ]; then
   # explicitly overrides (e.g. a lab whose targets regenerate host keys) —
   # ctl-run never weakens a hardened configuration on its own
   [ -n "$HOSTKEY_CHECKING" ] && export ANSIBLE_HOST_KEY_CHECKING="$HOSTKEY_CHECKING"
-  ansible-playbook "${args[@]}" "$PB" || rc=$?
+  # Resolve project ansible.cfg/relative paths from the fetched root. An
+  # administrator's explicit ANSIBLE_CONFIG continues to take precedence.
+  (cd "$STAGE" && ansible-playbook "${args[@]}" "$PB") || rc=$?
   echo "ctl-run: run=$RUN_ID standalone rc=$rc"
   record finished "$rc"
 else
@@ -216,21 +243,18 @@ else
   margs=( "${dest[@]}" --playbook "$PB" --inventory "$INV" --wait "$WAIT" )
   [ -n "$SSH_KEY" ] && margs+=( --ssh-key "$SSH_KEY" )
   [ -n "$GALAXY" ]  && margs+=( --galaxy-dir "$GALAXY" )
-  touch "$STAGE/.dispatch-sentinel"
   out=$("$MESH_RUN" "${margs[@]}" 2>&1 | tee /dev/stderr) || rc=${PIPESTATUS[0]}
   mesh_job=$(grep -E '^mesh-run: ' <<<"$out" | grep -o 'job=[0-9a-f-]*' | head -1 | cut -d= -f2 || true)
-  if [ -z "$mesh_job" ]; then
-    # a broken stream can end the run before mesh-run prints an id — adopt
-    # only a record CREATED SINCE the sentinel that matches THIS dispatch
-    pbb=$(basename "$PB")
-    for d in $(find /var/lib/mesh/jobs -mindepth 1 -maxdepth 1 -type d -newer "$STAGE/.dispatch-sentinel" 2>/dev/null); do
-      grep -qs "\"playbook\": \"$pbb\"" "$d/meta.json" || continue
-      if [ -n "$mesh_job" ]; then mesh_job=""; break; fi   # two matches: refuse to guess
-      mesh_job=$(basename "$d")
-    done
-  fi
+  # Missing output is not an identity. Never adopt another dispatch merely
+  # because its playbook basename and creation time happen to match.
   echo "ctl-run: run=$RUN_ID mesh rc=$rc mesh_job=${mesh_job:-unknown}"
-  record finished "$rc" "${mesh_job:-}"
+  # A transport rc is not proof the remote play finished. Keep the wrapper
+  # record consistent with the authoritative mesh state for recovery.
+  outcome=unknown
+  if [ -n "$mesh_job" ] && [ -f "/var/lib/mesh/jobs/$mesh_job/meta.json" ]; then
+    outcome=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status", "unknown"))' "/var/lib/mesh/jobs/$mesh_job/meta.json") || outcome=unknown
+  fi
+  record "$outcome" "$rc" "${mesh_job:-}"
   if [ -n "$mesh_job" ] && [ -f "/var/lib/mesh/jobs/$mesh_job/meta.json" ]; then
     # extend the mesh record with the GitLab linkage (new metadata, additive)
     python3 - "/var/lib/mesh/jobs/$mesh_job/meta.json" <<PY || true
@@ -247,6 +271,6 @@ PY
   fi
 fi
 
-# staged trees are kept for the audit trail of the LAST few runs only
-ls -1dt "$RUNS_DIR/$ENVN"/*/* 2>/dev/null | tail -n +6 | xargs -r rm -rf
+# Retain staging until an operator applies an explicit retention policy.
+# A later successful run must not delete evidence from an earlier UNKNOWN run.
 exit "$rc"

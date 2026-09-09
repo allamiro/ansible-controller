@@ -146,6 +146,16 @@ runner_registered() { # name expected-access-level required-tag
   # matching by description server-side could validate a different (e.g.
   # stale duplicate) registration than the one this runner actually runs.
   local rid det
+  if [ "$1" = lab-deploy ]; then
+    # Old registrations gave deploy jobs direct mesh authority. Re-register
+    # them instead of treating the old name as evidence of safe wiring.
+    docker exec gitlab-lab-runner awk '
+      /\[\[runners\]\]/ { selected=0 }
+      /name = "lab-deploy"/ { selected=1 }
+      selected && /volumes.*(receptor-runtime|mesh-state|e2e-ssh)/ { bad=1 }
+      END { exit bad }
+    ' /etc/gitlab-runner/config.toml || return 1
+  fi
   rid=$(docker exec gitlab-lab-runner awk -v want="$1" '
     /\[\[runners\]\]/ { name=""; id="" }
     /^[[:space:]]*name[[:space:]]*=/ { gsub(/"/,""); name=$3 }
@@ -166,13 +176,9 @@ if ! runner_registered lab-validate not_protected mesh-validate; then
 fi
 if ! runner_registered lab-deploy ref_protected mesh-deploy; then
   drop_runner lab-deploy
-  # deploy: ref_protected; job containers get ONLY the three mesh volumes.
-  # /run/receptor = submission authority; /var/lib/mesh = job state (so the
-  # no-resubmission guard and collect work); /e2e-ssh = the disposable key.
-  make_runner lab-deploy mesh-deploy ref_protected ansible-orchestrator:e2e \
-    --docker-volumes mesh-e2e_receptor-runtime:/run/receptor \
-    --docker-volumes mesh-e2e_mesh-state:/var/lib/mesh \
-    --docker-volumes mesh-e2e_e2e-ssh:/e2e-ssh:ro
+  # Dispatch and recovery both use the controller SSH entrypoint.
+  make_runner lab-deploy mesh-deploy ref_protected ansible-controller:e2e
+
 fi
 
 say "seed repository -> main (before protection is tightened)"

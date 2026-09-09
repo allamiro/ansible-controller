@@ -749,7 +749,7 @@ PDD="$JOBS_DIR/$JOB_ID"
 # but must never replace the playbook's exit code — the same
 # never-corrupt-the-result rule the artifact export follows.
 finalize() {
-  local st=$?
+  local st=$? current_state
   # If the dispatcher is exiting (a trapped TERM/INT, or any error) while the
   # result stream is still running, terminate its WHOLE process group. setsid
   # detached that pipeline into its own group precisely so the watchdog could
@@ -770,6 +770,16 @@ finalize() {
   # by the marker having been written BEFORE submission).
   if [ "${DISPATCH_STATE:-}" = in-flight ]; then
     persist_slot_hold || true
+    # Catchable interruption must relinquish the streaming state so collect
+    # can attach to the SAME unit. Keep the hold; this proves no remote result.
+    # meta() is defined before submission, when in-flight first becomes true.
+    current_state=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status", ""))' "$PDD/meta.json" 2>/dev/null) || current_state=""
+    case "$current_state" in
+      running)
+        meta results-incomplete "dispatcher exited before collecting a complete result; collect the original unit" || true;;
+      submitting)
+        meta submit-ambiguous "dispatcher exited during submission; remote outcome unknown" || true;;
+    esac
   fi
   if [ -n "$SSH_KEY" ] && [ -f "$PDD/env/ssh_key" ]; then
     shred -u "$PDD/env/ssh_key" 2>/dev/null \
@@ -914,6 +924,8 @@ PYEOF
   mv "$PDD/meta.json.tmp" "$PDD/meta.json"
 }
 meta created
+# Publish the authoritative identity before any remote side effect.
+echo "mesh-run: tracking job=$JOB_ID" >&2
 
 # DEFINITIVELY-pre-submit gate (plan §2.4): the selection above already looked
 # for the node on EVERY live ingress (exact first-column match — grep -w would

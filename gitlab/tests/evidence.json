@@ -1,0 +1,521 @@
+{
+  "date": "2026-09-08",
+  "compose_project": "gitlab-audit",
+  "gitlab_version": "19.3.1",
+  "pipelines": [
+    {
+      "case": "standalone-private-ca",
+      "pipeline": 3,
+      "jobs": [
+        3
+      ],
+      "status": "success",
+      "expected": "success",
+      "pass": true
+    },
+    {
+      "case": "standalone-http-lab",
+      "pipeline": 4,
+      "jobs": [
+        4
+      ],
+      "status": "success",
+      "expected": "success",
+      "pass": true
+    },
+    {
+      "case": "standalone-playbook-failure",
+      "pipeline": 5,
+      "jobs": [
+        5
+      ],
+      "status": "failed",
+      "expected": "failed",
+      "pass": true
+    },
+    {
+      "case": "mesh-private-ca",
+      "pipeline": 6,
+      "jobs": [
+        6
+      ],
+      "status": "success",
+      "expected": "success",
+      "pass": true
+    },
+    {
+      "case": "mesh-playbook-failure",
+      "pipeline": 7,
+      "jobs": [
+        7
+      ],
+      "status": "failed",
+      "expected": "failed",
+      "pass": true
+    },
+    {
+      "case": "mesh-ingress-a-down",
+      "pipeline": 8,
+      "jobs": [
+        8
+      ],
+      "status": "success",
+      "expected": "success",
+      "pass": true
+    },
+    {
+      "case": "second-independent-controller",
+      "pipeline": 16,
+      "jobs": [
+        26
+      ],
+      "status": "success",
+      "expected": "success",
+      "pass": true
+    },
+    {
+      "case": "unknown-environment",
+      "pipeline": 17,
+      "jobs": [
+        27
+      ],
+      "status": "failed",
+      "expected": "failed",
+      "pass": true
+    },
+    {
+      "case": "invalid-fetch-credential",
+      "pipeline": 18,
+      "jobs": [
+        28
+      ],
+      "status": "failed",
+      "expected": "failed",
+      "pass": true
+    },
+    {
+      "case": "mesh-node-unavailable",
+      "pipeline": 19,
+      "jobs": [
+        29
+      ],
+      "status": "failed",
+      "expected": "failed",
+      "pass": true
+    },
+    {
+      "case": "mesh-node-returned",
+      "pipeline": 20,
+      "jobs": [
+        30
+      ],
+      "status": "success",
+      "expected": "success",
+      "pass": true
+    },
+    {
+      "case": "interrupted-mesh-stream",
+      "pipeline": 24,
+      "jobs": [
+        42
+      ],
+      "status": "failed",
+      "expected": "failed",
+      "pass": true
+    },
+    {
+      "case": "interrupted-mesh-stream",
+      "pipeline": 25,
+      "jobs": [
+        43
+      ],
+      "status": "failed",
+      "expected": "failed",
+      "pass": true
+    },
+    {
+      "case": "mesh-after-recovery-fix",
+      "pipeline": 26,
+      "jobs": [
+        44
+      ],
+      "status": "success",
+      "expected": "success",
+      "pass": true
+    }
+  ],
+  "trust_boundaries": [
+    {
+      "case": "private-ca-trusted",
+      "rc": 0,
+      "expected": 0,
+      "pass": true
+    },
+    {
+      "case": "private-ca-not-trusted",
+      "rc": 60,
+      "expected": 60,
+      "pass": true
+    },
+    {
+      "case": "tls-wrong-hostname",
+      "rc": 60,
+      "expected": 60,
+      "pass": true
+    },
+    {
+      "case": "gitlab-cannot-dial-controller",
+      "rc": 0,
+      "expected": 0,
+      "pass": true
+    },
+    {
+      "case": "forced-command-refuses-shell",
+      "rc": 2,
+      "expected": 2,
+      "pass": true
+    },
+    {
+      "case": "ssh-untrusted-hostkey",
+      "rc": 255,
+      "expected": 255,
+      "pass": true
+    }
+  ],
+  "lifecycle": [
+    {
+      "pipeline": 9,
+      "jobs": [
+        {
+          "id": 12,
+          "name": "collect",
+          "status": "manual"
+        },
+        {
+          "id": 11,
+          "name": "deploy-direct",
+          "status": "manual"
+        },
+        {
+          "id": 10,
+          "name": "deploy-mesh",
+          "status": "manual"
+        },
+        {
+          "id": 9,
+          "name": "validate",
+          "status": "success"
+        }
+      ]
+    },
+    {
+      "pipeline": 12,
+      "jobs": [
+        {
+          "id": 15,
+          "name": "validate",
+          "status": "success"
+        }
+      ]
+    },
+    {
+      "pipeline": 13,
+      "jobs": [
+        {
+          "id": 19,
+          "name": "collect",
+          "status": "manual"
+        },
+        {
+          "id": 18,
+          "name": "deploy-direct",
+          "status": "manual"
+        },
+        {
+          "id": 17,
+          "name": "deploy-mesh",
+          "status": "manual"
+        },
+        {
+          "id": 16,
+          "name": "validate",
+          "status": "success"
+        }
+      ]
+    },
+    {
+      "pipeline": 13,
+      "jobs": [
+        {
+          "id": 19,
+          "name": "collect",
+          "status": "manual"
+        },
+        {
+          "id": 18,
+          "name": "deploy-direct",
+          "status": "manual"
+        },
+        {
+          "id": 17,
+          "name": "deploy-mesh",
+          "status": "success"
+        },
+        {
+          "id": 16,
+          "name": "validate",
+          "status": "success"
+        }
+      ]
+    },
+    {
+      "pipeline": 14,
+      "jobs": [
+        {
+          "id": 24,
+          "name": "collect",
+          "status": "manual"
+        },
+        {
+          "id": 23,
+          "name": "scheduled-check",
+          "status": "success"
+        },
+        {
+          "id": 22,
+          "name": "deploy-direct",
+          "status": "manual"
+        },
+        {
+          "id": 21,
+          "name": "deploy-mesh",
+          "status": "manual"
+        },
+        {
+          "id": 20,
+          "name": "validate",
+          "status": "success"
+        }
+      ]
+    },
+    {
+      "pipeline": 21,
+      "jobs": [
+        {
+          "id": 34,
+          "name": "collect",
+          "status": "manual"
+        },
+        {
+          "id": 33,
+          "name": "deploy-direct",
+          "status": "manual"
+        },
+        {
+          "id": 32,
+          "name": "deploy-mesh",
+          "status": "manual"
+        },
+        {
+          "id": 31,
+          "name": "validate",
+          "status": "success"
+        }
+      ]
+    },
+    {
+      "pipeline": 22,
+      "jobs": [
+        {
+          "id": 39,
+          "name": "collect",
+          "status": "manual"
+        },
+        {
+          "id": 38,
+          "name": "api-deploy",
+          "status": "success"
+        },
+        {
+          "id": 37,
+          "name": "deploy-direct",
+          "status": "manual"
+        },
+        {
+          "id": 36,
+          "name": "deploy-mesh",
+          "status": "manual"
+        },
+        {
+          "id": 35,
+          "name": "validate",
+          "status": "success"
+        }
+      ]
+    },
+    {
+      "pipeline": 23,
+      "jobs": [
+        {
+          "id": 41,
+          "name": "tag-deploy",
+          "status": "manual"
+        },
+        {
+          "id": 40,
+          "name": "validate",
+          "status": "success"
+        }
+      ]
+    },
+    {
+      "pipeline": 23,
+      "jobs": [
+        {
+          "id": 41,
+          "name": "tag-deploy",
+          "status": "success"
+        },
+        {
+          "id": 40,
+          "name": "validate",
+          "status": "success"
+        }
+      ]
+    },
+    {
+      "pipeline": 22,
+      "jobs": [
+        {
+          "id": 39,
+          "name": "collect",
+          "status": "success"
+        },
+        {
+          "id": 38,
+          "name": "api-deploy",
+          "status": "success"
+        },
+        {
+          "id": 37,
+          "name": "deploy-direct",
+          "status": "manual"
+        },
+        {
+          "id": 36,
+          "name": "deploy-mesh",
+          "status": "manual"
+        },
+        {
+          "id": 35,
+          "name": "validate",
+          "status": "success"
+        }
+      ]
+    },
+    {
+      "pipeline": 22,
+      "jobs": [
+        {
+          "id": 39,
+          "name": "collect",
+          "status": "success"
+        },
+        {
+          "id": 38,
+          "name": "api-deploy",
+          "status": "success"
+        },
+        {
+          "id": 37,
+          "name": "deploy-direct",
+          "status": "success"
+        },
+        {
+          "id": 36,
+          "name": "deploy-mesh",
+          "status": "manual"
+        },
+        {
+          "id": 35,
+          "name": "validate",
+          "status": "success"
+        }
+      ]
+    }
+  ],
+  "interrupted_recovery": {
+    "case": "collect-interrupted-original-unit",
+    "mesh_job": "af3d0981-14b6-438d-b90a-7c2f276b1029",
+    "before": "results-incomplete",
+    "after": "succeeded",
+    "pass": true
+  },
+  "initial_interruption_reproduction": {
+    "pipeline": 24,
+    "job": 42,
+    "defect": "SIGTERM left a stale running record; collection refused",
+    "fixed_and_retested_pipeline": 25
+  },
+  "images": {
+    "gitlab/gitlab-ce:19.3.1-ce.0": {
+      "id": "sha256:f63df4c43029fe91db370609c0b40a1e3585cebd06e3e9637d93a9a3030eb86e",
+      "repo_digests": [
+        "gitlab/gitlab-ce@sha256:f63df4c43029fe91db370609c0b40a1e3585cebd06e3e9637d93a9a3030eb86e"
+      ]
+    },
+    "gitlab/gitlab-runner:v19.3.1": {
+      "id": "sha256:74209bd51542dc0cb8aa584f103b34c857ff240c3a275559af307c1cb1efbe4f",
+      "repo_digests": [
+        "gitlab/gitlab-runner@sha256:74209bd51542dc0cb8aa584f103b34c857ff240c3a275559af307c1cb1efbe4f"
+      ]
+    },
+    "ansible-controller:e2e": {
+      "id": "sha256:3ab98ec6f5830d54bd51bad9e07175665f76fa2bb8496aef80a60c5e05ee7874",
+      "repo_digests": [
+        "ansible-controller-ansible@sha256:3ab98ec6f5830d54bd51bad9e07175665f76fa2bb8496aef80a60c5e05ee7874",
+        "ansible-controller@sha256:3ab98ec6f5830d54bd51bad9e07175665f76fa2bb8496aef80a60c5e05ee7874",
+        "ghcr.io/allamiro/ansible-controller@sha256:3ab98ec6f5830d54bd51bad9e07175665f76fa2bb8496aef80a60c5e05ee7874"
+      ]
+    },
+    "ansible-orchestrator:e2e": {
+      "id": "sha256:3e6a7076618d4794ecca6b1f67ff31e134edaea70a5f0a3d03588a86004c2d06",
+      "repo_digests": [
+        "ansible-orchestrator@sha256:3e6a7076618d4794ecca6b1f67ff31e134edaea70a5f0a3d03588a86004c2d06"
+      ]
+    },
+    "ansible-execution-node:e2e": {
+      "id": "sha256:586b55e7555fd8ef33029b3cba7bb45cb10d61f7ecb1d35857022b48ba62ff12",
+      "repo_digests": [
+        "ansible-execution-node@sha256:586b55e7555fd8ef33029b3cba7bb45cb10d61f7ecb1d35857022b48ba62ff12"
+      ]
+    }
+  },
+  "without_gitlab": {
+    "stopped_services": [
+      "gitlab",
+      "runner",
+      "gateway"
+    ],
+    "source": "previously fetched local project files; no ctl-run fetch",
+    "results": [
+      {
+        "case": "standalone-without-gitlab",
+        "rc": 0,
+        "pass": true
+      },
+      {
+        "case": "mesh-without-gitlab",
+        "rc": 0,
+        "pass": true
+      }
+    ]
+  },
+  "teardown": {
+    "compose_project": "gitlab-audit",
+    "containers_networks_volumes_removed": true,
+    "remaining_compose_resources": 0,
+    "existing_environments_preserved": true,
+    "local_test_evidence_retained": true
+  }
+}

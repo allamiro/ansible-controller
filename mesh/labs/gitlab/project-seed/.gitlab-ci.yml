@@ -8,8 +8,8 @@
 #     project at $CI_COMMIT_SHA from GitLab and executes it. The environment
 #     map on the controller — not this file — decides mode, destination,
 #     inventory, and credentials.
-#   - Socket channel (collect): the proven recovery path keeps running where
-#     the mesh state lives, via the runner's mounted volumes.
+#   - Recovery (collect) invokes ctl-run over the same SSH channel; no job
+#     container needs mesh sockets or state volumes.
 #
 # CE governance (verified): approvals are optional in CE; the enforced gate
 # is protected main + pipelines-must-succeed + protected runner/variables +
@@ -121,24 +121,17 @@ tag-deploy:
     - $CTL ctl-run --env lab-mesh --project "$CI_PROJECT_PATH" --sha "$CI_COMMIT_SHA"
         --playbook "$PLAYBOOK" --pipeline "$CI_PIPELINE_ID" --job "$CI_JOB_ID" --wait 120
 
-# ---- socket channel: result recovery (proven path, unchanged) ---------------
-# JOB_ID=<mesh uuid>; RECONCILE=1 for stale active records;
-# RESOLVE_AMBIGUOUS=failed|<unit-id> for operator verdicts.
+# Recovery uses the same controller boundary as dispatch. Unknown-unit/stale
+# administrative reconciliation remains an operator procedure on the controller.
 collect:
+  extends: .ctl-ssh
   stage: collect
-  tags: [mesh-deploy]
-  image:
-    name: ansible-orchestrator:e2e
-    entrypoint: [""]
+  environment: { name: lab-mesh }
   needs: []
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
       when: manual
       allow_failure: true
-  resource_group: mesh-lab
   script:
-    - scripts/mesh-collect.sh "$JOB_ID"
-  artifacts:
-    when: always
-    paths: [mesh-artifacts/]
-    expire_in: 1 week
+    - test -n "$JOB_ID" || { echo "Set JOB_ID to the existing mesh UUID"; exit 2; }
+    - $CTL ctl-run --collect "$JOB_ID"

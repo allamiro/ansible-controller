@@ -1,5 +1,10 @@
 # GitLab CE integration lab
 
+For current isolated CE 19.3.1 results and coverage limits, see
+[gitlab/VERIFICATION.md](../../../gitlab/VERIFICATION.md). Recovery jobs now
+invoke `ctl-run --collect` over SSH; legacy direct-socket recovery descriptions
+below do not describe the current seed CI job.
+
 An isolated, disposable environment demonstrating the **complete lifecycle of
 Git-managed Ansible automation** through the existing controller and Receptor
 execution mesh: branch → merge request → validation → review → protected
@@ -186,11 +191,12 @@ docker exec mesh-e2e-orchestrator receptorctl --socket <the-socket-that-listed-i
 #     It writes the unit into the record, marks it results-incomplete, and
 #     collects the real rc without re-executing.
 
-# 2c. NO plausible unit on either ingress: nothing left this host's ingress
-#     layer — same verdict as 2a (RESOLVE_AMBIGUOUS=failed).
+# 2c. NO plausible unit on either ingress: outcome remains UNKNOWN.
+#     Do not mark failed or clear the hold based on absence alone; tracking
+#     state may have been lost. Investigate node/target evidence and backups.
 
-# 3. The job's slot .hold names the operator step: clear it only after 2a/2c
-#    confirmation (or after 2b's collect, which frees it itself):
+# 3. The job's slot .hold names the operator step: clear it only after 2a
+#    confirmation of non-execution (or after 2b's collect, which frees it itself):
 docker exec mesh-e2e-orchestrator rm /var/lib/mesh/slots/<node>/slot.N.hold
 ```
 

@@ -179,7 +179,27 @@ docker run --rm -u 0 -v "$PWD/ssh":/ctl -v "$PWD/$STATE/target-ssh":/tgt \
 
 
 say "controller wiring (compose override) — start/refresh it now"
-docker compose -f docker-compose.yml -f gitlab/controller.override.yml up -d --wait --no-build ansible
+# Preserve the active controller's overlays (especially its mesh image,
+# sockets and state mounts). Rebuilding from the base file alone silently
+# replaced a running orchestrator with the standalone service definition.
+compose=(docker compose)
+active_files=$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project.config_files"}}' ansible-controller 2>/dev/null || true)
+if [ -n "$active_files" ] && [ "$active_files" != '<no value>' ]; then
+  active_project=$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' ansible-controller)
+  compose+=(--project-name "$active_project")
+  IFS=, read -r -a files <<< "$active_files"
+  for file in "${files[@]}"; do
+    [ -f "$file" ] || die "active controller Compose file missing: $file; restore it before wiring"
+    compose+=(-f "$file")
+  done
+else
+  docker inspect ansible-controller >/dev/null 2>&1 \
+    && die "existing controller has no Compose file metadata; wire its definition explicitly"
+  compose+=(-f docker-compose.yml)
+fi
+compose+=(-f "$PWD/gitlab/controller.override.yml")
+"${compose[@]}" --profile '*' config --quiet
+"${compose[@]}" --profile '*' up -d --wait --no-build --no-deps ansible
 docker exec -u 0 ansible-controller sh -c 'chown ansible:ansible /var/lib/gitlab-runs 2>/dev/null || true'
 
 say "pin the controller's host key (read from the container, not keyscan)"
@@ -208,14 +228,18 @@ if docker inspect --type container "$RUNNER_CONTAINER" >/dev/null 2>&1; then
   reg() { # name tag access image extra...
     local n="$1" t="$2" a="$3" i="$4"; shift 4
     if docker exec "$RUNNER_CONTAINER" sh -c "grep -q 'name = \"$n\"' /etc/gitlab-runner/config.toml 2>/dev/null"; then
-      # already registered — but an earlier registration (before the mesh volumes
-      # were added) would persist WITHOUT them and silently break collect; if any
-      # required mount is absent from config.toml, unregister and re-register.
+      # Migrate registrations that previously exposed mesh authority to CI.
       local ok=1
-      for arg in "$@"; do case "$arg" in *:/run/receptor|*:/var/lib/mesh)
-        docker exec "$RUNNER_CONTAINER" sh -c "grep -qF ':${arg##*:}' /etc/gitlab-runner/config.toml 2>/dev/null" || ok=0;; esac; done
+      if [ "$n" = prod-deploy ]; then
+        docker exec "$RUNNER_CONTAINER" awk '
+          /\[\[runners\]\]/ { selected=0 }
+          /name = "prod-deploy"/ { selected=1 }
+          selected && /volumes.*(\/run\/receptor|\/var\/lib\/mesh)/ { bad=1 }
+          END { exit bad }
+        ' /etc/gitlab-runner/config.toml || ok=0
+      fi
       [ "$ok" = 1 ] && return 0
-      echo "    $n is registered but missing a required mesh mount — re-registering"
+      echo "    $n has legacy mesh mounts — re-registering without them"
       docker exec "$RUNNER_CONTAINER" gitlab-runner unregister --name "$n" >/dev/null 2>&1 || true
     fi
     local tok
@@ -230,15 +254,10 @@ if docker inspect --type container "$RUNNER_CONTAINER" >/dev/null 2>&1; then
       --docker-pull-policy if-not-present "$@" || die "runner registration failed for $n"
   }
   reg prod-validate mesh-validate not_protected "${VALIDATE_IMAGE:-ansible-controller:e2e}"
-  # the deploy runner also runs the collect job (scripts/mesh-collect.sh), which
-  # needs the controller's submission socket (/run/receptor) and job state
-  # (/var/lib/mesh) — mount the same mesh volumes the disposable lab's deploy
-  # runner gets. Project prefix = the controller compose project (dir basename
-  # by default); override MESH_VOL_PREFIX if you renamed it.
-  MESH_VOL_PREFIX="${MESH_VOL_PREFIX:-${COMPOSE_PROJECT_NAME:-$(basename "$PWD")}}"
-  reg prod-deploy mesh-deploy ref_protected "${DEPLOY_IMAGE:-ansible-orchestrator:e2e}" \
-    --docker-volumes "${MESH_VOL_PREFIX}_receptor-runtime:/run/receptor" \
-    --docker-volumes "${MESH_VOL_PREFIX}_mesh-state:/var/lib/mesh"
+  # Both dispatch and collection go through ctl-run over SSH. CI jobs must
+  # not receive direct submission authority or controller state volumes.
+  reg prod-deploy mesh-deploy ref_protected "${DEPLOY_IMAGE:-ansible-controller:e2e}"
+
 else
   echo "    no $RUNNER_CONTAINER container — assuming an existing runner setup (e.g. the disposable lab's)"
 fi

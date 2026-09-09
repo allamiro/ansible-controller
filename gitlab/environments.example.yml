@@ -9,7 +9,8 @@ environments:
   # Test case A: standalone — the controller reaches the target directly.
   prod-direct:
     mode: standalone
-    gitlab_url: http://gitlab.lab.local:8929
+    gitlab_url: http://gitlab.lab.local:8929  # disposable lab only; use HTTPS outside it
+    # git_ca_file: /etc/pki/gitlab-ca.pem  # mount private CA read-only on controller
     allowed_projects: [root/mesh-automation]
     inventory: inventory/direct.ini
     ssh_key: /home/ansible/.ssh/id_ed25519
@@ -17,7 +18,8 @@ environments:
   # Test case B: mesh — dispatched to the single-box node exec-local-a.
   prod-mesh:
     mode: mesh
-    gitlab_url: http://gitlab.lab.local:8929
+    gitlab_url: http://gitlab.lab.local:8929  # disposable lab only; use HTTPS outside it
+    # git_ca_file: /etc/pki/gitlab-ca.pem  # mount private CA read-only on controller
     allowed_projects: [root/mesh-automation]
     inventory: inventory/direct.ini
     ssh_key: /home/ansible/.ssh/id_ed25519

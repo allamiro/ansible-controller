@@ -1,17 +1,26 @@
 # GitLab CE alongside the Ansible controller
 
+Current test results and known limits: [VERIFICATION.md](VERIFICATION.md).
+The isolated audit suite is in [tests/README.md](tests/README.md).
+
 This directory makes **GitLab CE the everyday interface** for the controller
 on the same box: projects, branches, merge requests, reviewed merges, and
-pipelines that hand approved commits to the controller for execution —
+pipelines that request controller execution of a specific commit —
 standalone (controller → SSH/WinRM → targets) or through the mesh
 (orchestrator → Receptor → node → SSH/WinRM → targets).
 
 It adds **no service and no API**. One command is the whole integration:
 [`bin/ctl-run`](bin/ctl-run) runs **on the controller**, fetches an exact
-reviewed commit from GitLab, and executes it through the engines that
+requested commit from GitLab, and executes it through the engines that
 already exist (`ansible-playbook`, `mesh/bin/mesh-run`). CI reaches it over
 SSH with a key that can invoke *only this command*
 ([`bin/ctl-shell`](bin/ctl-shell) forced command).
+
+GitLab is optional. The controller **pulls** project content; the Runner job
+sends an SSH execution request, and neither GitLab nor its jobs contact mesh
+execution nodes directly. The existing native `make run`, `make mesh-run` and
+`make mesh-collect` workflows continue to work without GitLab using local
+project files. See the [architecture boundary](ARCHITECTURE.md#required-boundary-gitlab-is-optional).
 
 | Piece | File | Role |
 |---|---|---|
@@ -124,3 +133,16 @@ via protected branches is the control for that. GitLab TLS choices (public
 CA / internal CA / self-signed / reverse proxy / lab HTTP) affect the
 GitLab hops only and never replace mesh mTLS; see
 `mesh/labs/gitlab/README.md` for the full matrix and lifecycle evidence.
+
+## Private-CA project fetch
+
+Mount the GitLab CA bundle read-only on the controller and set
+`git_ca_file: /path/inside/controller/ca.pem` in its administrator-owned
+environment mapping. `ctl-run` sets Git's CA path after the SSH/sudo boundary;
+it does not depend on forwarding environment variables from CI. Continue to
+verify the URL hostname. Configure the Runner manager and checkout helper's
+trust separately, and configure WinRM trust at the executing runtime separately.
+
+Run staging is retained for investigation. Apply an operator-owned retention
+policy that preserves unresolved runs and required audit evidence, and monitor
+the `/var/lib/gitlab-runs` volume's disk use.
