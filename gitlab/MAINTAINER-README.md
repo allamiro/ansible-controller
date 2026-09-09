@@ -286,8 +286,9 @@ ambiguous submission states need administrator reconciliation on the controller.
 CI displays console output. Controller audit records are under
 `/var/lib/gitlab-runs/records/` and streamed mesh logs under
 `/var/lib/gitlab-runs/logs/`. Mesh lifecycle metadata lives under
-`/var/lib/mesh/jobs/<uuid>/meta.json`; mesh runner artifacts are collected under
-`logs/runner/<uuid>/` in the controller's mesh workspace. The seed does **not**
+`/var/lib/mesh/jobs/<uuid>/meta.json`; mesh runner artifacts default to
+`/var/log/ansible/runner/<uuid>/` inside the controller, exposed as
+`logs/runner/<uuid>/` in the host checkout by the standard log mount. The seed does **not**
 upload these directories to GitLab's artifact browser yet.
 
 For the next automation update, repeat branch → validation → MR → merge →
