@@ -1,5 +1,7 @@
 # GitLab CE alongside the Ansible controller
 
+For a screen-by-screen walkthrough, start with [GitLab CE: from first login to Ansible results](STEP-BY-STEP.md).
+
 Start with the [operator and Maintainer walkthrough](MAINTAINER-README.md)
 for login, project creation, controller connections, review, deployment approval,
 updates and recovery. **The standard workflow uses GitLab Community Edition
@@ -247,3 +249,6 @@ against GitLab before accepting them. If a stale registration cannot be removed,
 setup fails with a reconciliation instruction instead of registering duplicates.
 These checks use GitLab's [project repository state](https://docs.gitlab.com/api/projects/)
 and [runner details API](https://docs.gitlab.com/api/runners/).
+
+For target usernames/passwords, Vault provisioning and protected release tags,
+follow [the deployment credential walkthrough](MAINTAINER-README.md#save-deployment-credentials-and-release-a-version).

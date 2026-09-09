@@ -1,5 +1,7 @@
 # GitLab operator and Maintainer walkthrough
 
+For a screen-by-screen walkthrough, start with [GitLab CE: from first login to Ansible results](STEP-BY-STEP.md).
+
 Use GitLab to store Ansible automation, review changes, and request execution
 on this controller. Run host commands from the `ansible-controller` checkout
 unless a step explicitly switches to the automation project.
@@ -302,6 +304,138 @@ make a failed connection succeed.
 Do not commit `.gitlab-state/`, `.lab-state/`, private keys, tokens or Vault
 passwords into the automation repository. Encrypted Vault data can be reviewed
 in Git; its password must be provisioned to the executing runtime separately.
+
+## Save deployment credentials and release a version
+
+Your GitLab account identifies who reviews and releases automation. The target
+account (for example, `svc_ansible`) identifies Ansible to the managed servers.
+A release tag selects a code version; it does not contain a password or select
+credentials by itself. The controller environment map selects the inventory and
+execution destination. Runner tags such as `mesh-deploy` only route jobs.
+
+### One-time target credential setup
+
+The host administrator creates or selects the target automation account and
+assigns the permissions the playbooks require. Prefer a dedicated account. For
+SSH-key authentication, provision its private key to the executing runtime and
+configure the environment's `ssh_key`; do not put it in the automation repository.
+For username/password authentication, use the following Vault workflow.
+
+From a trusted workstation with Ansible installed, inside the **automation
+project**, create a Vault file for an existing inventory group. This example
+assumes the selected inventory contains a `[deployment]` group; substitute your
+actual group name. Keep `group_vars` beside that inventory, in a directory the
+environment map can select as a whole:
+
+```bash
+mkdir -p inventory/production/group_vars/deployment
+git mv inventory/hosts.ini inventory/production/hosts.ini   # if it is still a bare file
+ansible-vault create inventory/production/group_vars/deployment/vault.yml
+```
+
+Then set that environment's `inventory: inventory/production` — the **directory**,
+not a file inside it. The distinction only matters in mesh mode, and it fails
+silently: `mesh-run` copies a file inventory into the payload as that single file,
+so sibling `group_vars` stay behind in the staged project copy, where Ansible
+looks for neither inventory-adjacent nor playbook-adjacent variables. The play
+then connects with no username or password rather than reporting a missing
+credential. A directory inventory is staged whole, so the encrypted variables
+travel with it. Standalone execution runs `ansible-playbook` in the fetched tree,
+where both layouts resolve — which is why a file selection can appear correct
+until the same project is dispatched through the mesh.
+
+The command prompts locally for a new Vault password and opens an editor. Enter
+these variables there, replacing the example values with the target credentials:
+
+```yaml
+ansible_user: svc_ansible
+ansible_password: "REPLACE_WITH_TARGET_PASSWORD"
+# Only when privilege escalation requires a password:
+ansible_become_password: "REPLACE_WITH_SUDO_PASSWORD"
+```
+
+Save and close the editor. Commit the encrypted `vault.yml`, never a plaintext
+copy or the Vault password. Enable `become: true` only on plays/tasks that need
+privilege escalation; supplying its password alone does not enable it. Ensure
+the target permits the selected authentication method. The bundled Linux image
+includes `sshpass`; custom execution images must support password authentication.
+
+Provision the **Vault decryption password** separately:
+
+- **Standalone controller:** the administrator supplies a private file at
+  `/configs/.vault_pass` (normally host `configs/.vault_pass` through the configs
+  mount). At startup, the controller entrypoint copies it to the private
+  `/home/ansible/.vault_pass`; `ctl-run` restores that password-file setting after
+  sudo. Arrange the startup/restart through normal host operations.
+- **Mesh:** provision a private, read-only password file on each eligible execution
+  node, readable by its Ansible execution user. In the automation project's
+  `ansible.cfg`, set `vault_password_file` under `[defaults]` to that node-local
+  absolute path, for example `/run/secrets/ansible_vault_password`. Merge this
+  setting into the existing config. Provision the mount/file before running;
+  merely naming the path does not create it. The mesh node does not run the
+  controller entrypoint, and `ssh_key` and `galaxy_dir` do not transport Vault
+  passwords. A project used in both modes needs config paths valid in both
+  runtimes, or separately reviewed configurations.
+
+Keep the password outside the Git checkout when possible; restrict host file
+permissions and grant runtime read access deliberately. Neither the GitLab login
+password nor `CTL_SSH_KEY` decrypts Vault data. Do not put target passwords in
+manual-job variables or expect `--ask-pass`/`--ask-vault-pass` to prompt in CI.
+The current integration has no secure per-run password-entry form.
+
+Vault protects stored data; reviewed playbooks can decrypt it at execution time.
+Use `no_log: true` on tasks that handle secrets and avoid debugging credential
+variables. See [Ansible Vault](https://docs.ansible.com/projects/ansible/latest/vault_guide/vault.html)
+and [using encrypted content](https://docs.ansible.com/projects/ansible/latest/vault_guide/vault_using_encrypted_content.html).
+
+### Validate without production credentials
+
+The seed's validation job currently loads `inventory/lab.ini`. Adding encrypted
+variables to that inventory can make syntax checking or linting request Vault
+material. Before merging, adapt validation to use a separate nonsecret fixture
+inventory and dummy variables as needed by the playbooks. Check both syntax
+checking and linting in the actual validation image. Do not give the validation
+runner the production Vault password. A host operator should separately verify
+real target authentication with a reviewed, non-mutating connectivity playbook.
+The supplied template does not configure this credential-specific validation
+split automatically.
+
+### Review, tag, run and inspect
+
+1. Push the encrypted inventory and playbook changes on a branch, pass validation,
+   and have a Maintainer review and merge into protected `main`.
+2. For a release, verify **Settings → Repository → Protected tags** has `v*`
+   restricted to creation by Maintainers. Also retain the protected deployment
+   runner and scoped variables described above. Protecting `main` alone does not
+   protect tags.
+3. In **Code → Tags → New tag**, create a tag such as `v1.0.0` on the exact reviewed
+   commit. Tag permission does not itself prove that a commit passed review;
+   check the selected commit before creating the tag.
+4. Open the tag pipeline in **Build → Pipelines**. After validation succeeds,
+   manually release `tag-deploy`. The seed maps it to `lab-mesh`; integrated
+   bootstrap maps it to `prod-mesh`. Check the actual project's environment.
+5. Open the job trace, then **Browse artifacts → mesh-artifacts/** for results.
+   The updated helper preserves the playbook result and retrieves artifacts.
+
+Alternatively, manually release `deploy-mesh` or `deploy-direct` from the reviewed
+`main` pipeline without creating a tag. Deploy through one chosen route: a tag
+pipeline and a main pipeline are separate requests and can both execute, even
+when they reference the same commit. A fresh release does not require saving
+credentials again. Rotate the target password using `ansible-vault edit` and a
+reviewed credential update; coordinate target-side rotation with deployment.
+
+This workflow uses Community Edition protected refs and manual jobs; it does
+not enforce a separate multi-person deployment approval count.
+
+### Existing lab upgrade prerequisite
+
+Updating this controller repository does not update a populated GitLab project.
+Before relying on artifact downloads and durable retries, apply the current
+`.gitlab-ci.yml` and `scripts/ctl-ci.sh` together through a reviewed project change,
+verify the controller runs the matching implementation, and check protected tag
+rules. Existing jobs do not acquire artifacts or retry protection retroactively.
+Credential files, node mounts and target accounts are separate administrator
+setup; these documentation examples do not provision them.
 
 ## Troubleshooting
 
