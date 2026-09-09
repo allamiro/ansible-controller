@@ -1,0 +1,10 @@
+flowchart TB
+    R["Request for environment, project, pipeline and playbook"] --> K{"Existing claim?"}
+    K -->|No| C["Persist claim before execution"]
+    C --> D["Execute and record result"]
+    K -->|Yes| S{"Original outcome?"}
+    S -->|Completed| P["Replay exit code and export original artifacts"]
+    S -->|Proven pre-submit refusal| A["Retry admission"]
+    A --> C
+    S -->|Unresolved| H["Refuse another execution"]
+    H --> F["Collect original UUID or reconcile on controller"]

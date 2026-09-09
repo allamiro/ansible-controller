@@ -2,8 +2,10 @@
 
 Start with the [operator and Maintainer walkthrough](MAINTAINER-README.md)
 for login, project creation, controller connections, review, deployment approval,
-updates and recovery. The CI contract below implements the reference workflow
-for [issue #94](https://github.com/allamiro/ansible-controller/issues/94).
+updates and recovery. **The standard workflow uses GitLab Community Edition
+and requires no Premium license.**
+
+![GitLab Community Edition deployment workflow](diagrams/workflow.svg)
 
 Current test results and known limits: [VERIFICATION.md](VERIFICATION.md).
 The isolated audit suite is in [tests/README.md](tests/README.md).
@@ -32,7 +34,7 @@ project files. See the [architecture boundary](ARCHITECTURE.md#required-boundary
 | GitLab CE + Runner | [`compose.gitlab.yml`](compose.gitlab.yml) | fresh single-box GitLab install (skip if you already run one) |
 | Controller wiring | [`controller.override.yml`](controller.override.yml) | mounts ctl-run + env map + secrets into the EXISTING `ansible` service and joins it to the GitLab network |
 | Environment map | [`environments.example.yml`](environments.example.yml) | administrator-owned: which env may run which projects, in which mode, against what |
-| Single-box node | [`node.local.yml`](node.local.yml) | one execution node on this box, dialing the host's 27199/27200 — the mesh test case |
+| Single-box node | [`node.local.yml`](node.local.yml) | one execution node on this box, dialing the host's 27199/27200 for mesh execution |
 | Bootstrap | [`setup.sh`](setup.sh) | tokens, keys, CI variables, project wiring — idempotent |
 
 Site state (tokens, keys, your real `environments.yml`) lives in
@@ -47,7 +49,7 @@ and an SSH client. Setup preserves populated repositories: update their
 `validate.image.name` and `.ctl-ssh.image.name` through a reviewed commit
 when changing images. Pipeline variables do not select these job images.
 
-## Test case A — GitLab + controller, single (standalone) mode
+## Standalone setup
 
 ```bash
 # 1. GitLab: reuse a running instance, or start one:
@@ -74,7 +76,7 @@ token held on the controller) → `ansible-playbook` → SSH/WinRM targets the
 controller can reach. Results: the playbook's real exit code is the CI
 job's status.
 
-## Test case B — GitLab + controller + one mesh node on this box
+## Mesh setup
 
 ```bash
 # 1. mesh PKI (real scripts; throwaway CA is fine on a test box):
@@ -82,7 +84,7 @@ mesh/pki/mesh-ca-init.sh "local test CA"
 mesh/pki/work-sign-init.sh
 # the node dials the ingresses as ${MESH_PEER_HOST:-host.docker.internal}; that
 # name MUST be a DNS SAN on the ingress certs or receptor's hostname check fails
-# (ARCHITECTURE.md §5 records this exact rejection). Pass it as an extra SAN:
+# See ARCHITECTURE.md for certificate trust. Pass it as an extra SAN:
 mesh/pki/controller-cert.sh controller-a receptor-controller "${MESH_PEER_HOST:-host.docker.internal}"
 mesh/pki/controller-cert.sh controller-b receptor-controller-b "${MESH_PEER_HOST:-host.docker.internal}"
 mesh/pki/node-csr.sh exec-local-a && mesh/pki/node-sign.sh csr/exec-local-a.csr exec-local-a
@@ -125,11 +127,11 @@ API-triggered and tag-driven runs: see the pipeline templates in the seed
 project of the disposable lab (`mesh/labs/gitlab/project-seed/`), which
 exercises this exact integration end to end.
 
-**CE honesty**: merge-request approvals are optional in CE (approval RULES
-are Premium). The enforced controls are protected branches
+**Community Edition controls:** merge-request approval is recorded but optional.
+The enforced controls are protected branches
 (merge=Maintainers, push=no one), pipelines-must-succeed, protected
 runners/variables, and manual jobs. Do not represent the manual button as
-multi-person approval enforcement.
+required reviewer counts.
 
 ## CI approval, retries and artifacts
 
@@ -137,32 +139,9 @@ The reference is [project-seed/.gitlab-ci.yml](../mesh/labs/gitlab/project-seed/
 and its [scripts/ctl-ci.sh](../mesh/labs/gitlab/project-seed/scripts/ctl-ci.sh).
 Every dispatch route, including schedules and API triggers, requires a manual
 release. CE uses protected `main`/`v*`, a protected runner and protected file
-variables. For the issue's **native protected-environment** gate, use GitLab
-Premium/Ultimate and provision the policy before releasing a deployment:
-
-```bash
-# Group IDs from your GitLab; share the project with both groups first.
-PROTECTED_DEPLOY_GROUP_ID=123 PROTECTED_APPROVER_GROUP_ID=456 \
-REQUIRED_DEPLOY_APPROVALS=2 \
-  gitlab/setup.sh https://gitlab.example.com platform/automation
-```
-
-For an already-wired project, run only the policy step with a short-lived
-administrator token in the private token file:
-
-```bash
-python3 gitlab/protect-environments.py https://gitlab.example.com platform/automation \
-  --deploy-group 123 --approver-group 456 --required-approvals 2 \
-  --environment prod-mesh --environment prod-direct
-```
-
-The script preserves matching policies, refuses drift, and fails on unavailable
-or unauthorized APIs. It never silently substitutes CE controls. Group
-membership and reviewer independence are site policy; use separate reviewers
-and deployers when separation of duties is required. See GitLab's
-[protected environments API](https://docs.gitlab.com/api/protected_environments/).
-For remote HTTPS installs configure the runner separately as described in the
-walkthrough; the bootstrap's bundled runner URL is for the local HTTP stack.
+variables. Maintainers review and merge changes, then release deployment jobs.
+This workflow does not need native protected environments or required approval
+rules. [Optional licensed approval policies](OPTIONAL-APPROVALS.md) are separate.
 
 `ctl-run --pipeline N` identifies one logical request by controller environment,
 project, pipeline ID and playbook path, and binds that request to its commit.
@@ -219,7 +198,7 @@ from before this journal existed cannot be deduplicated retroactively.
 | node → ingress | node (outbound TCP 27199/27200) | mesh mTLS + node-ID SAN binding + signed work |
 | controller/node → targets | executing runtime | SSH keys / WinRM (HTTPS+validation preferred); host-key & CA trust live where Ansible runs |
 
-Honest scope notes: the `ansible` account on the controller has broad
+The `ansible` account on the controller has broad
 privileges by design — the forced command narrows what *this SSH key* can
 invoke, not what the account could do; and `ctl-run` validates inputs and
 stages safely but does not sandbox playbook content — trusted authorship

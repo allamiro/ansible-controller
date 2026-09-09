@@ -1,0 +1,18 @@
+flowchart TB
+    G["GitLab CE<br/>Projects and pipelines"]
+    R["Runner manager"]
+    J["Deployment job"]
+    C["Controller<br/>ctl-run"]
+    S["Standalone targets"]
+    I["Mesh ingress"]
+    N["Execution node"]
+    T["Mesh targets"]
+    R -->|Poll jobs| G
+    R -->|Start container| J
+    J -->|Restricted SSH| C
+    C -->|Fetch exact commit| G
+    C -->|Ansible over SSH or WinRM| S
+    C -->|Local socket| I
+    N -->|Outbound mTLS| I
+    I -->|Signed work on established connection| N
+    N -->|Ansible over SSH or WinRM| T

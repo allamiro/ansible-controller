@@ -1,0 +1,18 @@
+sequenceDiagram
+    participant J as Deployment job
+    participant C as Controller
+    participant I as Mesh ingress
+    participant N as Execution node
+    participant T as Target
+    N->>I: Open outbound mTLS connection
+    J->>C: Request reviewed commit over SSH
+    C->>C: Fetch project and claim request
+    C->>I: Submit signed work through local socket
+    I-->>N: Deliver work over established connection
+    N->>T: Run Ansible over SSH or WinRM
+    T-->>N: Task results
+    N-->>I: Stream execution results
+    I-->>C: Record result and mesh UUID
+    C-->>J: Return exit code
+    J->>C: Retrieve original result archive
+    C-->>J: Metadata and result files
