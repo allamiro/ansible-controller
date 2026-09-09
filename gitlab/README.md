@@ -252,3 +252,5 @@ and [runner details API](https://docs.gitlab.com/api/runners/).
 
 For target usernames/passwords, Vault provisioning and protected release tags,
 follow [the deployment credential walkthrough](MAINTAINER-README.md#save-deployment-credentials-and-release-a-version).
+
+Start a new automation repository with the [copyable project template](project-template/README.md), including GitLab Tests-tab reporting and a downloadable HTML summary.
