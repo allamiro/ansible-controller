@@ -36,9 +36,11 @@ stack whose state you need to preserve.
 
 Open <http://localhost:8929>. The project is
 [root/mesh-automation](http://localhost:8929/root/mesh-automation).
-Bootstrap creates `root` and the Developer account `dev1`. Initial passwords are
-recorded in `.lab-state/lab.env`; inspect that private file locally. A password
-changed in GitLab supersedes the file's initial value.
+Bootstrap creates `root` and the Developer account `dev1`; it creates no named
+Maintainer, so on a fresh lab `root` is the only account that may merge to
+protected `main`. Initial passwords are recorded in `.lab-state/lab.env`;
+inspect that private file locally. A password changed in GitLab supersedes the
+file's initial value.
 
 | Item | Lab value |
 |---|---|
@@ -58,8 +60,14 @@ compliance. For shared deployment use the [integration setup](../../../gitlab/RE
 1. Log in as a Developer and create a branch from `main`.
 2. Update `playbooks/site.yml`, inventory or roles; open a merge request.
 3. Wait for the `validate` job to pass syntax and lint checks.
-4. Review and merge using a named Maintainer account. Root can perform initial
-   setup, but daily operation should use named accounts.
+4. Review and merge. Protected `main` accepts merges from Maintainers only and
+   `dev1` cannot merge, so in a fresh disposable lab the administrator account
+   `root` reviews and merges. To rehearse the production separation instead,
+   create a named user as root under **Admin → Users → New user** (Regular, not
+   Administrator), add it to `root/mesh-automation` under **Manage → Members →
+   Invite members** with role **Maintainer**, then review and merge as that
+   user. Shared installations do this from the start; see
+   [assign roles](../../../gitlab/MAINTAINER-README.md#2-create-an-automation-project-and-assign-roles).
 5. Open **Build → Pipelines** for the merged commit. Manually run `deploy-mesh`
    or `deploy-direct`, according to the target environment you intend to change.
 6. Inspect the job trace and **Browse artifacts → mesh-artifacts/**. The seed
@@ -94,12 +102,27 @@ Keep the mesh UUID from the job trace. Open the manual `collect` job, set
 `JOB_ID` to that UUID, and run it. The job calls `ctl-run --collect` over SSH
 and uploads the original result files.
 
-For `submit-ambiguous`, the host operator must inspect the work lists on both
-ingresses and correlate the original unit before collection or reconciliation.
-The current CI job accepts `JOB_ID`; legacy `RESOLVE_AMBIGUOUS` variables are
-not its recovery interface. Do not clear a slot hold or mark an unknown job
-failed merely because one ingress no longer lists it. See the mesh operator
-[recovery instructions](../../README.md).
+`submit-ambiguous` is different. The record carries no unit id, so the CI
+`collect` job has nothing to re-attach to, and `ctl-run` refuses every later
+deployment while the record is non-final. Only the host operator can resolve
+it, on the controller container that holds the mesh volumes:
+
+```bash
+docker exec gitlab-lab-ctl cat /var/lib/mesh/jobs/<uuid>/meta.json
+docker exec gitlab-lab-ctl receptorctl --socket /run/receptor/receptor.sock   work list
+docker exec gitlab-lab-ctl receptorctl --socket /run/receptor/receptor-b.sock work list
+```
+
+Correlate that record with a unit on either ingress, then follow
+[Resolve an ambiguous submission](../../RUNBOOK.md#resolve-an-ambiguous-submission)
+for the three outcomes and the exact record transition, substituting
+`gitlab-lab-ctl` for `ansible-controller` and
+`docker exec gitlab-lab-ctl /usr/local/mesh/bin/mesh-run --collect <uuid>` for
+`make mesh-collect` (this lab has no `ansible-controller` container). An adopted
+unit can equally be collected by the manual `collect` job with `JOB_ID` set to
+the same UUID. That job accepts `JOB_ID` only; the seed project's legacy
+`RESOLVE_AMBIGUOUS` variable is not its recovery interface. Do not clear a slot
+hold or mark an unknown job failed merely because one ingress no longer lists it.
 
 ## Credentials and retention
 
