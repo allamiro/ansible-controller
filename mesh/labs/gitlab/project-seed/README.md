@@ -58,3 +58,20 @@ agree. Ask the host administrator to configure `CTL_HOST`, `CTL_SSH_KEY` and
 For an existing project, update both `.gitlab-ci.yml` and `scripts/ctl-ci.sh`
 through a merge request. Bootstrap preserves populated repositories. Include
 new playbook entry points in the validation job when adding them.
+
+## Target credentials and release tags
+
+Your GitLab login authorizes project actions; Ansible uses a separately configured
+target account. Store target passwords in an Ansible Vault-encrypted inventory
+file and provision the decryption password on the controller or execution node.
+Do not enter target passwords as manual-job variables. Keep validation on a
+nonsecret fixture inventory when production inventory requires Vault.
+
+A Maintainer can create a protected `v*` tag on a reviewed commit, then manually
+release `tag-deploy` after validation. The tag selects code; the job environment
+selects inventory and runtime credentials. A tag pipeline is a new execution
+request even if that commit was already deployed from `main`.
+
+For the complete setup, see **Save deployment credentials and release a version**
+in `gitlab/MAINTAINER-README.md` of the controller repository. Provisioning secrets
+and protecting tags are administrator steps, not effects of pushing this README.
