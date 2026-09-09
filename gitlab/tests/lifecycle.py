@@ -66,8 +66,10 @@ def main():
         envmap['environments'][name]=dict(envmap['environments'][base],allowed_projects=[p['path_with_namespace']],inventory='inventory/direct.ini' if name=='lab-direct' else 'inventory/lab.ini')
         f=b.STATE/'fetch-secrets'/f'{name}.token'; f.write_text(deploy['username']+':'+deploy['token']+'\n'); f.chmod(0o600)
     (b.STATE/'environments.yml').write_text(json.dumps(envmap))
-    # Preserve the seed pipeline verbatim; adapt only fixture target inventory.
-    actions=[]
+    # Preserve the seed pipeline verbatim; adapt fixture inventory and trust.
+    # Both controllers and the node mount the same pinned public host keys.
+    actions=[{'action':'create','file_path':'ansible.cfg',
+        'content':'[defaults]\nhost_key_checking=True\n[ssh_connection]\nssh_args=-o UserKnownHostsFile=/known_hosts -o StrictHostKeyChecking=yes\n'}]
     for path in seed.rglob('*'):
         if path.is_file():
             rel=path.relative_to(seed).as_posix()

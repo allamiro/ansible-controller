@@ -78,8 +78,8 @@ audit:
         'playbooks/slow.yml': '- hosts: all\n  gather_facts: false\n  tasks:\n    - ansible.builtin.command: sleep 25\n',
         'inventory/direct.ini': 'direct-target ansible_user=ansible\n',
         'inventory/mesh.ini': 'mesh-target ansible_user=ansible\n',
-        'ansible.cfg':'[defaults]\nhost_key_checking=True\n[ssh_connection]\nssh_args=-o UserKnownHostsFile=/target-key/known_hosts -o StrictHostKeyChecking=yes\n',
-        # mesh stages the playbook directory; configure its node-local trust.
+        'ansible.cfg':'[defaults]\nhost_key_checking=True\n[ssh_connection]\nssh_args=-o UserKnownHostsFile=/known_hosts -o StrictHostKeyChecking=yes\n',
+        # Native playbook-directory dispatch also has the shared trust path.
         'playbooks/ansible.cfg':'[defaults]\nhost_key_checking=True\n[ssh_connection]\nssh_args=-o UserKnownHostsFile=/known_hosts -o StrictHostKeyChecking=yes\n'}
     commit = api('POST', f'/projects/{pid}/repository/commits', {'branch':'main',
        'commit_message':'Seed isolated verification project',

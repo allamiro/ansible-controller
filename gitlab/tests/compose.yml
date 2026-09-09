@@ -55,6 +55,7 @@ services:
       - ./.state/fetch-secrets:/etc/ctl-run/secrets:ro
       - ./.state/ci-authorized:/home/ansible/.ssh:ro
       - ./.state/target-key:/target-key:ro
+      - ./.state/target-key/known_hosts:/known_hosts:ro
       - ./.state/web-tls/ca.crt:/etc/audit-ca.crt:ro
       - runtime:/run/receptor
       - mesh-state:/var/lib/mesh
@@ -70,6 +71,7 @@ services:
       - ./.state/fetch-secrets:/etc/ctl-run/secrets:ro
       - ./.state/ci-authorized:/home/ansible/.ssh:ro
       - ./.state/target-key:/target-key:ro
+      - ./.state/target-key/known_hosts:/known_hosts:ro
       - ./.state/web-tls/ca.crt:/etc/audit-ca.crt:ro
       - ctl-state2:/var/lib/gitlab-runs
       - ctl-hostkeys2:/etc/ssh/host_keys
