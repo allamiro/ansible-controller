@@ -1,0 +1,14 @@
+mesh-artifacts/
+reports/
+__pycache__/
+*.pyc
+# Credentials never belong in an automation project. OpenSSH private keys carry
+# no extension, so name them explicitly as well as by suffix.
+.vault_pass
+*.pem
+*.key
+id_rsa
+id_dsa
+id_ecdsa
+id_ed25519
+known_hosts

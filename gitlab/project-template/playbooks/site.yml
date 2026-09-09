@@ -1,0 +1,7 @@
+---
+- name: Check automation target connectivity
+  hosts: deployment
+  gather_facts: false
+  tasks:
+    - name: Verify Ansible connectivity
+      ansible.builtin.ping:

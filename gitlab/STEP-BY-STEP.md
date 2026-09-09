@@ -313,6 +313,13 @@ work active, so have the operator reconcile ambiguity before starting a new pipe
 
 ## 10. Do we need another results website?
 
+Copy the [new project template](project-template/README.md) for a manual deployment
+pipeline with native GitLab JUnit reporting. After deployment, open **Build →
+Pipelines → Tests** for one aggregate deployment/transfer result. Download
+`reports/summary.html` for a standalone summary. No additional results server is
+needed. This is not a per-host dashboard and is not installed in the existing lab.
+
+
 Start with GitLab's job trace and restricted artifacts. They keep the reviewed
 commit, operator action and execution result in one place. GitBook or a static
 Markdown site can publish this guide, but is not required to view Ansible runs.
@@ -323,7 +330,7 @@ Do not expose raw result directories through an unauthenticated Nginx file listi
 | GitLab CE | Pipeline status, console trace, downloadable artifacts | Already used; update the existing project for current artifact support |
 | AWX | Ansible-focused job output, host/task events and job details | Separate automation platform; no existing mesh-result import integration here |
 | Semaphore Community | Web UI for automation tasks, inventories and credentials | Alternative execution UI; connecting it to this controller requires design and testing |
-| Static report artifact | A readable summary generated from selected result fields | Possible future enhancement; no HTML report generator is currently installed |
+| Template JUnit and HTML summary | One deployment/transfer result | Included in the new project template; configure it for your project |
 
 AWX documents [job output and host-event views](https://docs.ansible.com/projects/awx/en/24.6.1/userguide/jobs.html).
 Semaphore provides [a self-hosted automation UI](https://semaphoreui.com/docs) and
