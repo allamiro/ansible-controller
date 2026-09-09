@@ -1,0 +1,37 @@
+# Administrator-owned environment map for ctl-run — copy to
+# gitlab/.gitlab-state/environments.yml (gitignored) and edit for your box.
+# CI callers pick only an environment NAME; everything privileged — mode,
+# destination, inventory, credentials, allowed projects — is decided here,
+# on the controller, outside CI's reach. Fetch tokens live one-per-env in
+# gitlab/.gitlab-state/ctl-secrets/<env>.token as <deploy-user>:<token>.
+
+environments:
+  # Test case A: standalone — the controller reaches the target directly.
+  prod-direct:
+    mode: standalone
+    gitlab_url: http://gitlab.lab.local:8929  # disposable lab only; use HTTPS outside it
+    # git_ca_file: /etc/pki/gitlab-ca.pem  # mount private CA read-only on controller
+    allowed_projects: [root/mesh-automation]
+    inventory: inventory/direct.ini
+    ssh_key: /home/ansible/.ssh/id_ed25519
+
+  # Test case B: mesh — dispatched to the single-box node exec-local-a.
+  prod-mesh:
+    mode: mesh
+    gitlab_url: http://gitlab.lab.local:8929  # disposable lab only; use HTTPS outside it
+    # git_ca_file: /etc/pki/gitlab-ca.pem  # mount private CA read-only on controller
+    allowed_projects: [root/mesh-automation]
+    inventory: inventory/direct.ini
+    ssh_key: /home/ansible/.ssh/id_ed25519
+    node: exec-local-a
+
+  # WinRM shape (configured example; execution requires a Windows host):
+  # prod-windows:
+  #   mode: mesh
+  #   gitlab_url: http://gitlab.lab.local:8929
+  #   allowed_projects: [root/mesh-automation]
+  #   inventory: inventory/windows.ini
+  #   node: exec-local-a
+  #   galaxy_dir: /configs/.galaxy   # stages ansible.windows into the payload
+  #   # WinRM/Vault credentials do not travel via ssh_key — provision the
+  #   # vault password to the executing runtime; see gitlab/README.md.

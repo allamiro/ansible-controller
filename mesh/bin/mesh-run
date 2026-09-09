@@ -9,6 +9,7 @@
 #            [--ssh-key <file>] [--socket <receptor.sock>] [--jobs-dir <dir>] \
 #            [--log-dir <dir>] [--pools-file <yml>] [--zones-file <yml>] \
 #            [--wait <seconds>]
+#            [--project-dir <directory>]  # stage a root containing the playbook
 #
 #   mesh-run  --collect <job-id>        # recover a results-incomplete job
 #
@@ -39,6 +40,7 @@ die() { echo "mesh-run: ERROR: $*" >&2; exit 2; }
 # sidecars route to every node, so surviving either ingress suffices — losing
 # the orchestrator HOST itself is Tier 2 and out of scope here.
 NODE= POOL= ZONE= PLAYBOOK= INVENTORY= SSH_KEY= ANSIBLE_CFG= GALAXY_DIR=
+PROJECT_DIR=''
 SOCKETS=/run/receptor/receptor.sock,/run/receptor/receptor-b.sock
 JOBS_DIR=/var/lib/mesh/jobs
 SLOTS_DIR="${MESH_SLOTS_DIR:-/var/lib/mesh/slots}"
@@ -68,6 +70,7 @@ while [ $# -gt 0 ]; do
     --pool)        POOL="${2:?}"; shift 2;;
     --zone)        ZONE="${2:?}"; shift 2;;
     --playbook)    PLAYBOOK="${2:?}"; shift 2;;
+    --project-dir) PROJECT_DIR="${2:?}"; shift 2;;
     --inventory)   INVENTORY="${2:?}"; shift 2;;
     --ssh-key)     SSH_KEY="${2:?}"; shift 2;;
     --ansible-cfg) ANSIBLE_CFG="${2:?}"; shift 2;;
@@ -98,7 +101,7 @@ done
 # nothing and says so. Self-contained (its own sockets, streaming, and cleanup
 # trap) so the dispatch path below is untouched.
 if [ -n "$COLLECT" ]; then
-  case "$NODE$POOL$ZONE$PLAYBOOK$INVENTORY$SSH_KEY$ANSIBLE_CFG$GALAXY_DIR" in
+  case "$NODE$POOL$ZONE$PLAYBOOK$INVENTORY$SSH_KEY$ANSIBLE_CFG$GALAXY_DIR$PROJECT_DIR" in
     ?*) die "--collect takes only a job id — it is a recovery mode, not a dispatch (drop --node/--pool/--zone/--playbook/--inventory/...)";;
   esac
   cjob="$COLLECT"
@@ -749,7 +752,7 @@ PDD="$JOBS_DIR/$JOB_ID"
 # but must never replace the playbook's exit code — the same
 # never-corrupt-the-result rule the artifact export follows.
 finalize() {
-  local st=$?
+  local st=$? current_state
   # If the dispatcher is exiting (a trapped TERM/INT, or any error) while the
   # result stream is still running, terminate its WHOLE process group. setsid
   # detached that pipeline into its own group precisely so the watchdog could
@@ -770,6 +773,16 @@ finalize() {
   # by the marker having been written BEFORE submission).
   if [ "${DISPATCH_STATE:-}" = in-flight ]; then
     persist_slot_hold || true
+    # Catchable interruption must relinquish the streaming state so collect
+    # can attach to the SAME unit. Keep the hold; this proves no remote result.
+    # meta() is defined before submission, when in-flight first becomes true.
+    current_state=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status", ""))' "$PDD/meta.json" 2>/dev/null) || current_state=""
+    case "$current_state" in
+      running)
+        meta results-incomplete "dispatcher exited before collecting a complete result; collect the original unit" || true;;
+      submitting)
+        meta submit-ambiguous "dispatcher exited during submission; remote outcome unknown" || true;;
+    esac
   fi
   if [ -n "$SSH_KEY" ] && [ -f "$PDD/env/ssh_key" ]; then
     shred -u "$PDD/env/ssh_key" 2>/dev/null \
@@ -800,7 +813,18 @@ PLAYBOOK_REAL=$(readlink -f "$PLAYBOOK") || die "cannot resolve --playbook '$PLA
 # The playbook's DIRECTORY is the project root: roles/, templates/, files/ and
 # task includes resolve relative to the playbook, so staging the lone YAML file
 # would strand those dependencies on the controller and fail on the node.
-cp -a "$(dirname "$PLAYBOOK_REAL")/." "$PDD/project/"
+if [ -n "$PROJECT_DIR" ]; then
+  [ -d "$PROJECT_DIR" ] || die "--project-dir '$PROJECT_DIR' is not a directory"
+  PROJECT_REAL=$(readlink -f "$PROJECT_DIR") || die "cannot resolve --project-dir"
+  PLAYBOOK_REL=$(realpath --relative-to="$PROJECT_REAL" "$PLAYBOOK_REAL")
+  case "$PLAYBOOK_REL" in
+    ../*|..|/*) die "--playbook must be inside --project-dir";;
+  esac
+else
+  PROJECT_REAL=$(dirname "$PLAYBOOK_REAL")
+  PLAYBOOK_REL=$(basename "$PLAYBOOK_REAL")
+fi
+cp -a "$PROJECT_REAL/." "$PDD/project/"
 # Keep the inventory's basename: YAML inventory plugins verify by filename
 # suffix (e.g. *.aws_ec2.yml), so renaming to "hosts" would reject valid
 # plugin inventories after staging. An inventory SOURCE that reads sibling
@@ -914,6 +938,8 @@ PYEOF
   mv "$PDD/meta.json.tmp" "$PDD/meta.json"
 }
 meta created
+# Publish the authoritative identity before any remote side effect.
+echo "mesh-run: tracking job=$JOB_ID" >&2
 
 # DEFINITIVELY-pre-submit gate (plan §2.4): the selection above already looked
 # for the node on EVERY live ingress (exact first-column match — grep -w would
@@ -947,7 +973,7 @@ meta submitting
 persist_slot_hold || { meta submit-failed-pre "could not create the durable slot hold"; \
   die "cannot create the durable slot hold ($SLOT_FILE.hold) — refusing to submit; nothing was executed"; }
 DISPATCH_STATE=in-flight
-submit_out=$(ansible-runner transmit "$PDD" -p "$(basename "$PLAYBOOK_REAL")" 2>/dev/null \
+submit_out=$(ansible-runner transmit "$PDD" -p "$PLAYBOOK_REL" 2>/dev/null \
   | receptorctl --socket "$SOCKET" work submit ansible-runner \
       --node "$NODE" --payload - ${SIGNWORK:+--signwork}) \
   || { meta submit-ambiguous "unit id unknown: the response was lost after the attempt left this host; inspect 'receptorctl work list' for an unmatched unit"; \

@@ -1,0 +1,56 @@
+# Administrator-owned environment map for ctl-run — the single authority on
+# WHAT an environment is. CI callers pick only an environment NAME (plus
+# project/sha/playbook, validated against this file); everything privileged —
+# execution mode, mesh destination, credentials, inventory, allowed projects —
+# is decided here, on the controller, outside CI's reach.
+#
+# Mounted read-only at /etc/ctl-run/environments.yml in the ctl container.
+# Fetch tokens are NOT here: they live one-per-env in /etc/ctl-run/secrets/
+# (<env>.token, root-provisioned, never a CI variable).
+#
+# Fields per environment:
+#   mode:             standalone | mesh
+#   gitlab_url:       base URL the CONTROLLER fetches from (in-lab address)
+#   allowed_projects: exact project paths this environment may execute
+#   inventory:        path INSIDE the fetched project tree
+#   ssh_key:          target credential path ON THE CONTROLLER (never staged
+#                     from the project; delivered per-job to mesh nodes by
+#                     the dispatcher's existing mechanism)
+#   node|pool|zone:   mesh destination — exactly one, mesh mode only
+#   galaxy_dir:       optional; staged into the mesh payload by mesh-run
+#
+# The three lab environments demonstrate the matrix; the -win one is a
+# CONFIGURED EXAMPLE whose execution is untested here (no Windows host in
+# the lab — see the acceptance matrix).
+
+environments:
+  lab-direct:
+    mode: standalone
+    gitlab_url: http://gitlab.lab.local:8929
+    allowed_projects: [root/mesh-automation]
+    inventory: inventory/direct.ini
+    ssh_key: /e2e-ssh/id_ed25519
+    # lab targets regenerate host keys on every build; production omits
+    # this so the site's ansible.cfg host_key_checking stands
+    hostkey_checking: "False"
+
+  lab-mesh:
+    mode: mesh
+    gitlab_url: http://gitlab.lab.local:8929
+    allowed_projects: [root/mesh-automation]
+    inventory: inventory/lab.ini
+    ssh_key: /e2e-ssh/id_ed25519
+    node: exec-e2e-a
+
+  lab-mesh-win:
+    mode: mesh
+    gitlab_url: http://gitlab.lab.local:8929
+    allowed_projects: [root/mesh-automation]
+    inventory: inventory/windows.ini
+    node: exec-e2e-a
+    # ansible.windows is Galaxy content: install with `make galaxy` on the
+    # controller, and this staging dir rides into the mesh payload
+    galaxy_dir: /configs/.galaxy
+    # WinRM credentials do not travel via --ssh-key; in production they come
+    # from Vault-encrypted inventory vars (vault password provisioned to the
+    # execution runtime) — see ARCHITECTURE.md §WinRM.

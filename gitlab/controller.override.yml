@@ -1,0 +1,64 @@
+# Controller-side wiring for the GitLab integration — an OVERRIDE for the
+# stock docker-compose.yml, so the existing controller (or, with the mesh
+# overlay, the orchestrator) gains the ctl-run entrypoint without any change
+# to the base file or the direct workflow:
+#
+#   single mode:  docker compose -f docker-compose.yml -f gitlab/controller.override.yml up -d
+#   mesh mode:    docker compose -f docker-compose.yml -f gitlab/controller.override.yml \
+#                   [-f orchestrator.override.yml] -f mesh/compose.mesh.yml --profile mesh up -d
+#
+# What it adds to the `ansible` service:
+#   - gitlab/bin mounted read-only (ctl-run + the ctl-shell forced command)
+#   - the administrator-owned environment map + per-env fetch tokens
+#     (site files under gitlab/.gitlab-state/, created by setup.sh)
+#   - a named volume for per-run staging and audit records
+#   - membership in the GitLab network (alias ${CTL_HOST:-ctl.prod.local}) so CI job
+#     containers can SSH in, and in directnet for the demo target
+#
+# CI's authorized key goes into ./ssh/authorized_keys (the base compose
+# already mounts ./ssh at /home/ansible/.ssh) — setup.sh appends a
+# restrict,command="/usr/local/lab-bin/ctl-shell" line there.
+
+services:
+  ansible:
+    networks:
+      default: {}
+      gitlab-net:
+        aliases: ["${CTL_HOST:-ctl.prod.local}"]
+      directnet: {}
+    volumes:
+      - ./gitlab/bin:/usr/local/lab-bin:ro
+      # Long syntax + create_host_path:false: with short syntax, a MISSING env
+      # map is silently created as a DIRECTORY, and ctl-run then rejects the
+      # mounted path (not a file). Fail the compose up loudly instead — create
+      # the map first (setup.sh, or the README pre-flight).
+      - type: bind
+        source: ./gitlab/.gitlab-state/environments.yml
+        target: /etc/ctl-run/environments.yml
+        read_only: true
+        bind:
+          create_host_path: false
+      # Pre-create as the host operator; Docker must not create this as root
+      # before setup.sh writes the deploy tokens.
+      - type: bind
+        source: ./gitlab/.gitlab-state/ctl-secrets
+        target: /etc/ctl-run/secrets
+        read_only: true
+        bind:
+          create_host_path: false
+      - gitlab-runs:/var/lib/gitlab-runs
+
+networks:
+  # Defaults match the companion fresh stack (gitlab/compose.gitlab.yml,
+  # project gitlab-prod, which creates BOTH networks). Reusing the
+  # disposable lab's GitLab instead? Export:
+  #   GITLAB_NETWORK=gitlab-lab_labnet DIRECT_NETWORK=gitlab-lab-ctl_directnet
+  gitlab-net:
+    external: true
+    name: ${GITLAB_NETWORK:-gitlab-prod_labnet}
+  directnet:
+    external: true
+    name: ${DIRECT_NETWORK:-gitlab-prod_directnet}
+
+volumes:
+  gitlab-runs:

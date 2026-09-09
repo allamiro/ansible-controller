@@ -1,0 +1,76 @@
+# Controller-entrypoint extension of the GitLab lab: adds the SSH-reachable
+# control container (`ctl`) that CI jobs invoke, and a directly-reachable
+# target for STANDALONE-mode runs. Started by lab-up.sh after the base
+# stacks; same lifecycle, torn down by lab-down.sh.
+#
+#   ctl          orchestrator image with its STOCK entrypoint (sshd) — the
+#                controller as production runs it. Carries the mesh volumes
+#                (submission authority via /run/receptor), the ctl-run
+#                command, the admin-owned environment map, and the per-env
+#                fetch tokens. CI reaches it ONLY over SSH as `ansible`,
+#                key-authenticated, host key pinned in a CI variable.
+#   direct-target  a plain sshd host on a dedicated network shared with ctl
+#                — what "the controller can reach this target directly"
+#                looks like, for standalone-mode demonstrations.
+#
+# Trust note: ctl joins labnet (to fetch from GitLab and accept CI SSH) and
+# directnet (to reach the standalone target). It does NOT join the mesh's
+# ctlnet — mesh work still flows exclusively through the ingress sockets on
+# the shared volume, exactly like production.
+
+name: gitlab-lab-ctl
+
+services:
+  ctl:
+    image: ansible-orchestrator:e2e
+    container_name: gitlab-lab-ctl
+    networks:
+      gitlab-lab_labnet:
+        aliases: [ctl.lab.local]
+      directnet:
+    volumes:
+      - receptor-runtime:/run/receptor            # submission authority
+      - mesh-state:/var/lib/mesh                  # job records, slots, holds
+      - e2e-ssh:/e2e-ssh:ro                       # disposable target key
+      - ctl-runs:/var/lib/gitlab-runs             # per-run staging + records
+      # the shared integration commands live in gitlab/bin (a DIRECTORY mount:
+      # single-file binds pin the inode and go stale on host edits)
+      - ../../../gitlab/bin:/usr/local/lab-bin:ro
+      - ./environments.yml:/etc/ctl-run/environments.yml:ro
+      - ./.lab-state/ctl-secrets:/etc/ctl-run/secrets:ro
+      - ./.lab-state/ctl-ssh:/home/ansible/.ssh:ro   # CI's authorized key
+      - ctl-host-keys:/etc/ssh/host_keys
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/22' 2>/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  direct-target:
+    image: ansible-controller:e2e
+    container_name: gitlab-lab-direct-target
+    networks: [directnet]
+    volumes:
+      - ./.lab-state/target-ssh:/home/ansible/.ssh:ro
+      - target-host-keys:/etc/ssh/host_keys
+
+networks:
+  directnet:
+  gitlab-lab_labnet:
+    external: true
+
+volumes:
+  ctl-runs:
+  ctl-host-keys:
+  target-host-keys:
+  # the mesh-e2e volumes are shared, not owned, by this stack
+  receptor-runtime:
+    external: true
+    name: mesh-e2e_receptor-runtime
+  mesh-state:
+    external: true
+    name: mesh-e2e_mesh-state
+  e2e-ssh:
+    external: true
+    name: mesh-e2e_e2e-ssh

@@ -2,6 +2,13 @@
 
 > Run your playbooks inside networks your controller can't reach.
 
+GitLab is an optional integration, not a mesh dependency. Operators can keep
+using `make mesh-run` and `make mesh-collect` with local project files without
+GitLab or a GitLab Runner. When GitLab is enabled, the controller pulls the
+requested project commit; CI calls the controller only. Execution nodes receive
+signed work through Receptor, never directly from GitLab. See the
+[GitLab architecture boundary](../gitlab/ARCHITECTURE.md#required-boundary-gitlab-is-optional).
+
 [![Mesh CI](https://github.com/allamiro/ansible-controller/actions/workflows/mesh-image.yml/badge.svg)](https://github.com/allamiro/ansible-controller/actions/workflows/mesh-image.yml)
 ![mTLS](https://img.shields.io/badge/mTLS-mandatory-2ea44f)
 ![Arch](https://img.shields.io/badge/arch-amd64%20%7C%20arm64-blue)

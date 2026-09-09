@@ -1,0 +1,46 @@
+# One execution node ON THIS BOX for the mesh test case — it dials the
+# host's PUBLISHED ingress ports (host-gateway), exactly the path a node in
+# a remote network would take, so the full production transport is
+# exercised: outbound dial, mTLS, node-ID binding, signed work.
+#
+# Prerequisites (gitlab/README.md, test case B): the mesh control plane up
+# via the mesh overlay, and an issued identity for exec-local-a under
+# mesh/secrets/receptor/issued/exec-local-a (tls.crt, tls.key, ca.crt).
+#
+#   docker compose -f gitlab/node.local.yml up -d --wait
+
+name: gitlab-local-node
+
+services:
+  exec-node:
+    image: ${MESH_NODE_IMAGE:-ansible-execution-node:e2e}
+    container_name: mesh-node-exec-local-a
+    restart: unless-stopped
+    extra_hosts:
+      # MESH_PEER_HOST: where the node dials the ingresses. Default is the
+      # docker host itself (host-gateway maps it); point it at any control
+      # host instead — and remove extra_hosts — for a real remote deployment.
+      - "${MESH_PEER_HOST:-host.docker.internal}:host-gateway"
+    networks: [nodenet, directnet]
+    tmpfs:
+      - /run/receptor:uid=1000,gid=1000,mode=0750
+    environment:
+      RECEPTOR_NODE_ID: exec-local-a
+      RECEPTOR_PEERS: ${MESH_PEER_HOST:-host.docker.internal}:${MESH_PORT_A:-27199},${MESH_PEER_HOST:-host.docker.internal}:${MESH_PORT_B:-27200}
+      RECEPTOR_TLS_CERT: /etc/receptor/tls/tls.crt
+      RECEPTOR_TLS_KEY: /etc/receptor/tls/tls.key
+      RECEPTOR_TLS_CA: /etc/receptor/tls/ca.crt
+      RECEPTOR_WORK_PUBKEY: /etc/receptor/signing/work-public.pem
+    volumes:
+      - ../mesh/secrets/receptor/issued/exec-local-a:/etc/receptor/tls:ro
+      - ../mesh/secrets/receptor/work-signing/work-public.pem:/etc/receptor/signing/work-public.pem:ro
+
+networks:
+  nodenet:
+  # the node reaches the demo target's network, as a real node reaches its
+  # closed network's servers. Default matches the fresh stack
+  # (gitlab/compose.gitlab.yml, project gitlab-prod); reusing the disposable
+  # lab? Export DIRECT_NETWORK=gitlab-lab-ctl_directnet.
+  directnet:
+    external: true
+    name: ${DIRECT_NETWORK:-gitlab-prod_directnet}

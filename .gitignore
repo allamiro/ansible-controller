@@ -35,3 +35,7 @@ orchestrator.override.yml
 
 # GitLab integration lab — generated credentials/tokens, never committed
 mesh/labs/gitlab/.lab-state/
+
+# GitLab integration — site state (tokens, keys, env map), never committed
+gitlab/.gitlab-state/
+gitlab/tests/.state/
