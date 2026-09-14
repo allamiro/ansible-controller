@@ -666,6 +666,30 @@ docker exec -it ansible-controller bash -lc 'ansible-playbook /configs/playbooks
 
 ---
 
+## Preflight: is the controller ready?
+
+`make preflight` answers, from inside the running container, the question that
+otherwise gets answered by a failed play on a managed host:
+
+```bash
+make preflight             # report; exits non-zero only on real failures
+make preflight STRICT=1    # also fail on risky-but-deliberate settings (use in CI)
+```
+
+It reports the startup dependency installs (Galaxy and pip content is installed in
+the **background**, so a play dispatched immediately after `make up` can outrun it),
+whether managed-host SSH key verification is on, the Vault password file and its
+permissions, whether the configured inventory parses and resolves hosts, and the
+mode of any target SSH private key. Every location is derived from the running
+configuration rather than assumed, so it stays correct if you mount your
+configuration or logs elsewhere; `CONTROLLER_CONFIG_DIR`, `CONTROLLER_LOG_DIR`,
+`CONTROLLER_USER` and `CONTROLLER_HOME` override the derivation.
+
+Startup installs no longer fail silently: a failure is recorded beside its log and
+announced in `docker logs`, and `make preflight` reports it afterwards. The
+controller also warns at every start when managed-host key verification is
+disabled, naming the file that decided it.
+
 ## Linting playbooks
 
 [ansible-lint](https://ansible-lint.readthedocs.io/) is baked into the image:

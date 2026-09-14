@@ -6,6 +6,16 @@ services:
     container_name: ansible-controller
     ports:
       - "2222:22"
+    # `docker compose up --wait` and any orchestration around it need a real
+    # readiness signal; without one the controller counts as up the instant the
+    # container starts, before sshd is listening. Matches the check the mesh and
+    # GitLab-lab services already use.
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/22' 2>/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     volumes:
       - ./configs:/configs:rw              # ansible.cfg and inventory
       - ./playbooks:/configs/playbooks:ro  # playbooks and roles (host-managed)

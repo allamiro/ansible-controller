@@ -1,5 +1,9 @@
 #!/bin/sh
 set -eu
+# fd 3 stays attached to the container log: the background installs below send
+# their own output to log FILES, so a failure would otherwise be invisible to
+# `docker logs` and to anyone who never opens /var/log/ansible.
+exec 3>&2
 # Generate host keys on first start into /etc/ssh/host_keys (see sshd_config.d
 # drop-in). Only this directory is volume-persisted so sshd_config/moduli keep
 # tracking the image.
@@ -33,36 +37,14 @@ fi
 mkdir -p /var/log/ansible || true
 chown -R ansible:ansible /var/log/ansible || true
 
-# Auto-install Galaxy roles/collections declared in /configs/requirements.yml
-# into /configs/.galaxy (host-persisted rw mount, so installs survive container
-# recreation). Runs in the background so sshd startup is never delayed and an
-# offline host is not fatal; see /var/log/ansible/galaxy-install.log for output.
-# The flock serializes against `make galaxy`, which takes the same lock — so a
-# manual install can't race this one, and running `make galaxy` after `make up`
-# blocks until startup installation has finished (making content ready).
-if [ -f /configs/requirements.yml ]; then
-  mkdir -p /configs/.galaxy
-  (
-    flock 9
-    ansible-galaxy role install -r /configs/requirements.yml \
-      --roles-path /configs/.galaxy/roles || true
-    ansible-galaxy collection install -r /configs/requirements.yml \
-      -p /configs/.galaxy/collections || true
-    chown -R ansible:ansible /configs/.galaxy || true
-  ) 9>>/configs/.galaxy/.install.lock >>/var/log/ansible/galaxy-install.log 2>&1 &
-fi
-
-# Extra controller-side Python packages (cloud SDKs for dynamic inventory,
-# alternative WinRM transports, ...) declared in /configs/pip-requirements.txt
-# are installed at startup. Same background+lock pattern as Galaxy content;
-# `make pip` installs on demand and waits for an in-flight install.
-if [ -f /configs/pip-requirements.txt ]; then
-  (
-    flock 9
-    pip3 install --no-cache-dir --break-system-packages \
-      -r /configs/pip-requirements.txt || true
-  ) 9>>/configs/.pip-install.lock >>/var/log/ansible/pip-install.log 2>&1 &
-fi
+# Declared dependency content is installed in the background so sshd startup is
+# never delayed and an offline host is not fatal. install-deps.sh holds the same
+# per-target lock `make galaxy` / `make pip` take, records the outcome where
+# `make preflight` reads it, and announces a failure on the container log (fd 3)
+# — one implementation, so a later manual retry refreshes the same record.
+for dep in galaxy pip; do
+  /usr/local/bin/install-deps.sh "$dep" 3>&3 &
+done
 
 # Ansible Vault password: set the ANSIBLE_VAULT_PASSWORD env var or drop a
 # password file at /configs/.vault_pass. Either source is copied to a file only
@@ -105,6 +87,22 @@ fi
 
 # Lock down SSH; root login disabled
 sed -i 's/^#\?PermitRootLogin .*/PermitRootLogin no/' /etc/ssh/sshd_config
+
+# The shipped ansible.cfg disables managed-host key verification for
+# first-run convenience. That is a deliberate lab default, not a production
+# one: with it off, Ansible accepts any host key, so an attacker who can answer
+# for a target's address reads whatever those plays carry. Say so at every
+# start, naming the file that decided it, rather than leaving it to whoever
+# reads the config. Never fatal — a controller must still start.
+# force_color in the shipped config makes ansible-config emit ANSI escapes even
+# when piped, so strip them before matching.
+src="$(ansible-config dump 2>/dev/null | sed "s/$(printf '\033')\[[0-9;]*m//g" \
+       | sed -n 's/^HOST_KEY_CHECKING(\(.*\)) = False.*/\1/p' | head -1)"
+if [ -n "$src" ]; then
+  echo "entrypoint: WARNING managed-host SSH key verification is DISABLED by $src." >&3
+  echo "entrypoint:          Set host_key_checking = True (and drop the StrictHostKeyChecking=no ssh_args) before" >&3
+  echo "entrypoint:          production use; see the known-hosts procedure in README.md. 'make preflight' rechecks." >&3
+fi
 
 # .ssh is bind-mounted read-only from the host; do not attempt chmod/chown here.
 # Required host-side setup before starting the container:
