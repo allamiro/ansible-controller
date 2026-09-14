@@ -17,7 +17,11 @@ import tempfile
 
 UUID = re.compile(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}')
 RUN_ID = re.compile(r'[0-9]{8}T[0-9]{6}Z-[0-9]+')
-MESH_JOBS = Path('/var/lib/mesh/jobs')
+# Same location ctl-run guards and dispatches against; see its CTL_RUN_MESH_JOBS.
+# `or` rather than a get() default: ctl-run uses ${VAR:-...}, which treats an
+# empty value as unset. Diverging here would point replay and artifact export at
+# Path('.') while the guard still blocks on the real directory.
+MESH_JOBS = Path(os.environ.get('CTL_RUN_MESH_JOBS') or '/var/lib/mesh/jobs')
 MESH_LOGS = Path('/var/log/ansible/runner')
 
 

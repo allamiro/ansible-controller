@@ -6,7 +6,7 @@ umask 077
 rm -rf mesh-artifacts
 mkdir mesh-artifacts
 channel=(ssh -i "$CTL_SSH_KEY" -o "UserKnownHostsFile=$CTL_KNOWN_HOSTS"
-  -o StrictHostKeyChecking=yes -o BatchMode=yes "ansible@${CTL_HOST:-ctl.lab.local}")
+  -o StrictHostKeyChecking=yes -o BatchMode=yes "ansible@${CTL_HOST:?is not set: the controller address comes from a protected CI variable scoped to the job environment}")
 rc=0
 "${channel[@]}" ctl-run "$@" || rc=$?
 # Never let a failed export turn a failed playbook into success. Conversely,

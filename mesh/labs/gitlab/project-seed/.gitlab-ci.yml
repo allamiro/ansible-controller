@@ -60,6 +60,9 @@ validate:
     expose_as: Execution results
     paths: [mesh-artifacts/]
   before_script:
+    # Name the missing configuration instead of failing inside chmod or ssh, and
+    # before a scope mismatch can send the job at a default controller address.
+    - for v in CTL_SSH_KEY CTL_KNOWN_HOSTS CTL_HOST; do eval "test -n \"\${$v:-}\"" || { echo "$v is not set - check the protected variables and their environment scope"; exit 2; }; done
     # Trigger variables can override CI_COMMIT_SHA and CI_PROJECT_DIR. Read the
     # actual Runner checkout from the working directory and use that identity.
     - CTL_COMMIT_SHA=$(/usr/bin/git --git-dir="$(pwd -P)/.git" rev-parse --verify HEAD)

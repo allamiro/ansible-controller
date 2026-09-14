@@ -148,6 +148,82 @@ class ControllerTests(unittest.TestCase):
         self.assertIn('different commit', retry.stderr)
         self.assertFalse((self.base / 'executed').exists())
 
+    def _mesh_env(self, jobs_dir):
+        self.map.write_text(json.dumps({"environments": {"test": {
+            "mode": "mesh", "gitlab_url": (self.base / "repos").as_uri(),
+            "allowed_projects": ["group/project"], "inventory": "inventory.ini",
+            "node": "exec-a"}}}))
+        return dict(self.env, CTL_RUN_MESH_JOBS=str(jobs_dir))
+
+    def _dispatch(self, env):
+        self.git("add", "-A"); self.git("commit", "-qm", "fixture", "--allow-empty")
+        return subprocess.run(["bash", str(ROOT / "gitlab/bin/ctl-run"),
+                               "--env", "test", "--project", "group/project",
+                               "--sha", self.git("rev-parse", "HEAD"),
+                               "--playbook", "playbooks/site.yml"],
+                              env=env, text=True, capture_output=True)
+
+    def test_mesh_guard_refuses_every_unestablished_record(self):
+        """A record is resolved only when it says so. Anything the guard cannot
+        read or cannot understand means the outcome is not established, which is
+        precisely what it exists to refuse on."""
+        jobs = self.base / "state/jobs"
+        cases = {
+            "truncated": '{"node":"exec-a"',                 # no status at all
+            "empty": "",                                      # zero-length record
+            "future": '{"status":"quarantined"}',             # status this build predates
+            "ambiguous": '{"status":"submit-ambiguous"}',     # the classic case
+        }
+        for name, body in cases.items():
+            (jobs / name).mkdir(parents=True)
+            (jobs / name / "meta.json").write_text(body)
+        (jobs / "norecord").mkdir()                           # job directory, no meta.json
+        out = self._dispatch(self._mesh_env(jobs))
+        self.assertNotEqual(out.returncode, 0)
+        for name in list(cases) + ["norecord"]:
+            self.assertIn(name, out.stderr, f"{name} was silently treated as finished")
+        self.assertFalse((self.base / "executed").exists())
+
+    def test_mesh_guard_bootstraps_a_fresh_state_volume(self):
+        """A fresh mesh-state volume has no jobs/ child — mesh-run creates it on
+        first dispatch — so requiring it would refuse the very first deployment."""
+        state = self.base / "state"
+        state.mkdir()
+        out = self._dispatch(self._mesh_env(state / "jobs"))
+        self.assertNotIn("retry guard cannot prove", out.stderr)
+        self.assertNotIn("unresolved mesh job", out.stderr)
+        self.assertTrue((state / "jobs").is_dir(), "the guard did not initialise the jobs directory")
+
+    def test_mesh_guard_rejects_a_partial_failed_status(self):
+        """failed rc=<n> is terminal; failed rc=<n> followed by anything else is a
+        record nobody has established the meaning of."""
+        jobs = self.base / "state/jobs"
+        (jobs / "partial").mkdir(parents=True)
+        (jobs / "partial" / "meta.json").write_text('{"status":"failed rc=2 pending"}')
+        out = self._dispatch(self._mesh_env(jobs))
+        self.assertNotEqual(out.returncode, 0)
+        self.assertIn("partial", out.stderr)
+        self.assertFalse((self.base / "executed").exists())
+
+    def test_mesh_guard_allows_dispatch_once_every_record_is_terminal(self):
+        """The mirror of the above: succeeded and failed rc=<n> are terminal, so
+        the guard must let those through — otherwise it would block forever."""
+        jobs = self.base / "state/jobs"
+        (jobs / "ok").mkdir(parents=True)
+        (jobs / "ok" / "meta.json").write_text('{"status":"succeeded"}')
+        (jobs / "bad").mkdir()
+        (jobs / "bad" / "meta.json").write_text('{"status":"failed rc=2"}')
+        out = self._dispatch(self._mesh_env(jobs))
+        self.assertNotIn("unresolved mesh job", out.stderr)
+
+    def test_mesh_guard_fails_closed_when_job_records_are_unreadable(self):
+        """With the state volume unmounted or relocated the guard can see nothing,
+        which is not the same as having nothing to see."""
+        out = self._dispatch(self._mesh_env(self.base / "absent-state/jobs"))
+        self.assertNotEqual(out.returncode, 0, "dispatch proceeded with unreadable job records")
+        self.assertIn("retry guard cannot prove", out.stderr)
+        self.assertFalse((self.base / "executed").exists(), "a playbook ran despite the blind guard")
+
     def test_unresolved_request_refuses_second_execution(self):
         self.assertEqual(self.run_ctl('--pipeline', '10').returncode, 0)
         record = next((self.base / 'runs/records').glob('*.json'))
