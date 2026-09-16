@@ -248,6 +248,18 @@ class ControllerTests(unittest.TestCase):
         self.assertIn("retry guard cannot prove", out.stderr)
         self.assertFalse((self.base / "executed").exists(), "a playbook ran despite the blind guard")
 
+    @unittest.skipIf(os.getuid() == 0, "root bypasses directory permission bits")
+    def test_unwritable_jobs_directory_refuses_before_pipeline_claim(self):
+        jobs = self.base / "state/jobs"
+        jobs.mkdir(parents=True)
+        jobs.chmod(0o555)
+        self.addCleanup(jobs.chmod, 0o700)
+        self.env = self._mesh_env(jobs)
+        result = self.run_ctl('--pipeline', '10')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('unwritable', result.stderr)
+        self.assertEqual(list((self.base / 'runs/requests').glob('*.json')), [])
+
     def test_unresolved_request_refuses_second_execution(self):
         self.assertEqual(self.run_ctl('--pipeline', '10').returncode, 0)
         record = next((self.base / 'runs/records').glob('*.json'))

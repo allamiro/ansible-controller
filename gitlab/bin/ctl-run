@@ -183,8 +183,8 @@ if [ "$MODE" = mesh ]; then
   [ -d "$MESH_STATE" ] && [ -w "$MESH_STATE" ] \
     || die "mesh state directory $MESH_STATE is missing or not writable — the retry guard cannot prove earlier work finished; mount the mesh state volume before dispatching"
   mkdir -p "$MESH_JOBS" 2>/dev/null || true
-  [ -d "$MESH_JOBS" ] && [ -r "$MESH_JOBS" ] && [ -x "$MESH_JOBS" ] \
-    || die "mesh job records are unreadable at $MESH_JOBS — the retry guard cannot prove earlier work finished"
+  [ -d "$MESH_JOBS" ] && [ -r "$MESH_JOBS" ] && [ -w "$MESH_JOBS" ] && [ -x "$MESH_JOBS" ] \
+    || die "mesh job directory is unreadable or unwritable at $MESH_JOBS — the retry guard cannot prove earlier work finished"
   # A record counts as resolved ONLY when it says so. Listing the non-final
   # statuses instead let every other outcome through: a truncated or unreadable
   # meta.json parsed to an empty status and was silently treated as finished,
