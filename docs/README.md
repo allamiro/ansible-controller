@@ -44,6 +44,12 @@ If you add playbooks outside the `playbooks/` directory, add an extra volume ent
 
 ## Quick start
 
+These steps set up a single deployment: one controller running playbooks directly against targets it can reach.
+
+![Single deployment: an operator runs playbooks in the ansible-controller container, which connects to Linux, Windows and network targets](../assets/diagrams/single-deployment.png)
+
+<sub>The illustration simplifies some paths. See [How it works](#how-it-works) for the exact mounts.</sub>
+
 ### 1 — Clone the repo
 
 ```bash
@@ -284,7 +290,9 @@ execution mesh** removes that requirement: the controller becomes an
 [Receptor](https://github.com/ansible/receptor) mesh to **execution nodes**
 placed inside segmented networks, and the playbook runs there.
 
-![Direct controller execution and optional mesh execution](../assets/diagrams/controller-overview.svg)
+![Distributed deployment: execution nodes in remote networks connect outbound over mTLS to two Receptor ingresses on the orchestrator's control host and run playbooks against local targets](../assets/diagrams/distributed-deployment.png)
+
+<sub>The illustration simplifies controller paths; the mounts are the same as the [standalone controller](#how-it-works). Receptor control sockets are under `/run/receptor/`.</sub>
 
 Key properties:
 

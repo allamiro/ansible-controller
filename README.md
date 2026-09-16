@@ -26,7 +26,15 @@ An Ubuntu 26.04 container with Ansible, OpenSSH, and Windows/WinRM support. Keep
 
 ## Choose how to run
 
-![Direct execution from the controller, or optional mesh execution inside a remote network](assets/diagrams/controller-overview.svg)
+**Single deployment.** The controller runs playbooks directly against the targets it can reach.
+
+![Single deployment: an operator runs playbooks in the ansible-controller container, which connects to Linux, Windows and network targets](assets/diagrams/single-deployment.png)
+
+**Distributed deployment (mesh).** The orchestrator dispatches signed work to execution nodes inside networks it cannot reach.
+
+![Distributed deployment: execution nodes in remote networks connect outbound over mTLS to two Receptor ingresses on the orchestrator's control host and run playbooks against local targets](assets/diagrams/distributed-deployment.png)
+
+<sub>The illustrations simplify some paths. The included Compose file mounts `configs/` at `/configs`, `playbooks/` (including roles) at `/configs/playbooks`, `ssh/` at `/home/ansible/.ssh`, and `logs/` at `/var/log/ansible`. With GitLab, CI connects to the controller over SSH and the controller fetches the reviewed commit from GitLab over HTTP(S).</sub>
 
 | Image on Docker Hub | Purpose and where it runs |
 |---|---|
