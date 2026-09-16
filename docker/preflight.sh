@@ -145,7 +145,8 @@ if [ -f "$vp" ]; then
     mode=$(stat -c %a "$vp" 2>/dev/null)
     case "$mode" in
       600|400) ok "$vp" "mode $mode";;
-      *)       risk "$vp" "mode $mode — should be 600, readable only by its owner";;
+      700|500) ok "$vp" "owner-only executable Vault client, mode $mode";;
+      *)       risk "$vp" "mode $mode — use owner-only read/write permissions (execute is allowed for Vault clients)";;
     esac
   else
     bad "$vp" "Vault password file is not readable by $RUN_USER (check as root or $RUN_USER)"

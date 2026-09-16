@@ -183,6 +183,9 @@ exit "$INVENTORY_RC"
         self.assertNotIn("secret-vault-value", output)
         vault.chmod(0o600)
         self.run_preflight("--strict")
+        for mode in (0o700, 0o500):
+            vault.chmod(mode)
+            self.assertIn("executable Vault client", self.run_preflight("--strict"))
         vault.unlink()
         self.assertIn("configured Vault password file does not exist", self.run_preflight(expected=1))
 
