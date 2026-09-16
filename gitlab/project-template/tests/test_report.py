@@ -57,6 +57,21 @@ class ReportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertTrue(report.write_report(0, Path(tmp) / 'reports', tmp))
 
+    def test_transfer_failure_keeps_successful_channel_and_playbook_codes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            (base / 'ctl-run.json').write_text('{"status":"succeeded","rc":"0"}')
+            (base / 'channel.json').write_text('{"execution_channel_rc":0,"artifact_rc":23}')
+            self.assertTrue(report.write_report(2, base / 'reports', base))
+            summary = json.loads((base / 'reports/summary.json').read_text())
+            self.assertEqual(summary['operation_rc'], 2)
+            self.assertEqual(summary['execution_channel_rc'], 0)
+            self.assertEqual(summary['execution_rc'], '0')
+            self.assertEqual(summary['transfer_rc'], 23)
+            html = (base / 'reports/summary.html').read_text()
+            self.assertIn('SSH operation exit code</th><td>0', html)
+            self.assertIn('Artifact transfer exit code</th><td>23', html)
+
     def test_sync_report_does_not_claim_execution(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
