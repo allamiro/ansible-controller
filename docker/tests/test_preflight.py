@@ -154,7 +154,13 @@ exit "$INVENTORY_RC"
             "DEFAULT_PRIVATE_KEY_FILE(default) = None",
             f"DEFAULT_PRIVATE_KEY_FILE(test) = {key}",
         ))
+        self.root.chmod(0o755)
         self.assertIn("not readable by nobody", self.run_preflight(expected=1))
+        account = pwd.getpwnam("nobody")
+        os.chown(key, account.pw_uid, account.pw_gid)
+        output = self.run_preflight("--strict")
+        self.assertIn("configured private_key_file, mode 600", output)
+        self.assertNotIn("private-key-material", output)
 
 
 if __name__ == "__main__":
