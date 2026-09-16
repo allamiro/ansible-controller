@@ -173,6 +173,8 @@ class ControllerTests(unittest.TestCase):
             "empty": "",                                      # zero-length record
             "future": '{"status":"quarantined"}',             # status this build predates
             "ambiguous": '{"status":"submit-ambiguous"}',     # the classic case
+            "truncated_success": '{"status":"succeeded"',
+            "truncated_refusal": '{"status":"submit-failed-pre"',
         }
         for name, body in cases.items():
             (jobs / name).mkdir(parents=True)
@@ -213,8 +215,30 @@ class ControllerTests(unittest.TestCase):
         (jobs / "ok" / "meta.json").write_text('{"status":"succeeded"}')
         (jobs / "bad").mkdir()
         (jobs / "bad" / "meta.json").write_text('{"status":"failed rc=2"}')
+        (jobs / "refused").mkdir()
+        (jobs / "refused" / "meta.json").write_text('{"status":"submit-failed-pre"}')
         out = self._dispatch(self._mesh_env(jobs))
         self.assertNotIn("unresolved mesh job", out.stderr)
+
+    def test_collect_passes_relocated_jobs_directory(self):
+        # Copy only the wrapper and replace its fixed executable path with a
+        # harmless recorder; never write to the installed mesh dispatcher.
+        fake = self.bin / "mesh-run"
+        fake.write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n')
+        fake.chmod(0o755)
+        wrapper = self.base / "ctl-run"
+        wrapper.write_text((ROOT / "gitlab/bin/ctl-run").read_text().replace(
+            'MESH_RUN=/usr/local/mesh/bin/mesh-run', f'MESH_RUN="{fake}"',
+        ))
+        uuid = '00000000-0000-0000-0000-000000000001'
+        jobs = self.base / "relocated/jobs"
+        result = subprocess.run(
+            ['bash', str(wrapper), '--collect', uuid],
+            env=dict(self.env, CTL_RUN_MESH_JOBS=str(jobs)),
+            text=True, capture_output=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), ['--collect', uuid, '--jobs-dir', str(jobs)])
 
     def test_mesh_guard_fails_closed_when_job_records_are_unreadable(self):
         """With the state volume unmounted or relocated the guard can see nothing,

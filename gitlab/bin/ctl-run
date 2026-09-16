@@ -189,18 +189,27 @@ if [ "$MODE" = mesh ]; then
   # statuses instead let every other outcome through: a truncated or unreadable
   # meta.json parsed to an empty status and was silently treated as finished,
   # and a status added to the dispatcher later would have been too. Succeeded
-  # and failed rc=<n> are the only terminal states mesh-run writes; everything
-  # else — including nothing at all — means the outcome is not established,
-  # which is the situation this guard exists for.
+  # and failed rc=<n> establish completed execution. submit-failed-pre proves
+  # nothing was submitted, so it also permits a retry. Everything else means
+  # the outcome is not established, which is the situation this guard exists for.
   unresolved=""
   for d in "$MESH_JOBS"/*/; do
     [ -d "$d" ] || continue
     job=$(basename "$d")
     if [ ! -r "$d" ] || [ ! -x "$d" ]; then unresolved="$unresolved $job(unreadable directory)"; continue; fi
     if [ ! -r "$d/meta.json" ]; then unresolved="$unresolved $job(no readable record)"; continue; fi
-    s=$(sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$d/meta.json" 2>/dev/null | tail -1)
+    s=$(python3 - "$d/meta.json" <<'PY'
+import json, sys
+try:
+    status = json.load(open(sys.argv[1]))['status']
+    if isinstance(status, str):
+        print(status)
+except (OSError, ValueError, KeyError, TypeError):
+    pass
+PY
+    )
     case "$s" in
-      succeeded) ;;
+      succeeded|submit-failed-pre) ;;
       # [0-9]* is one digit followed by ANYTHING, so a record reading
       # "failed rc=2 pending" would have counted as terminal. Require the whole
       # suffix to be digits.
