@@ -98,6 +98,7 @@ def main():
     pipeline = yaml.safe_load((seed / '.gitlab-ci.yml').read_text())
     for name in ('deploy-direct', 'scheduled-check', 'api-deploy', 'tag-deploy'):
         pipeline.pop(name)
+        pipeline.pop("sync-" + name, None)
     pipeline['validate']['tags'] = ['audit-deploy']
     pipeline['.ctl-ssh']['tags'] = ['audit-deploy']
     pipeline['variables'] = {'CTL_HOST': 'controller'}
@@ -121,6 +122,8 @@ def main():
                 'playbooks/slow.yml': '- name: Exercise waiting\n  hosts: all\n  gather_facts: false\n  tasks:\n    - name: Wait for recovery test\n      ansible.builtin.command: sleep 25\n      changed_when: false\n',
                 'playbooks/ping.yml': (seed / 'playbooks/ping.yml').read_text(),
                 'inventory/lab.ini': 'mesh-target ansible_user=ansible\n'}
+    for name in ('deploy.sh', 'report.py'):
+        contents['scripts/' + name] = (seed / 'scripts' / name).read_text()
     actions = []
     for name, content in contents.items():
         try:
@@ -142,6 +145,7 @@ def main():
     assert pipelines, 'push did not create a pipeline'
     pipeline_id = pipelines[0]['id']
     wait_job(pid, pipeline_id, 'validate', {'success'})
+    sync = wait_job(pid, pipeline_id, 'sync-deploy-mesh', {'success'})
     manual = wait_job(pid, pipeline_id, 'deploy-mesh', {'manual'})
     before = b.docker('exec', 'gitlab-audit-mesh-target-1', 'sh', '-c',
                       'wc -l < /home/ansible/issue94-runs 2>/dev/null || echo 0').strip()
@@ -179,7 +183,7 @@ def main():
     assert failed_retry['id'] != failed['id']
     assert repeated['run_id'] == failed_record['run_id']
     result = {'pass': True, 'project': project['path'], 'sha': commit['id'],
-              'pipeline': pipeline_id, 'job': deployed['id'], 'retry_job': retried['id'],
+              'pipeline': pipeline_id, 'sync_job': sync['id'], 'job': deployed['id'], 'retry_job': retried['id'],
               'mesh_job': original['mesh_job'], 'failure_pipeline': failure['id'],
               'failure_job': failed['id'], 'failure_retry_job': failed_retry['id']}
     permissions_and_collection(pid, result)

@@ -24,14 +24,16 @@ class PipelineTests(unittest.TestCase):
             sha = subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip()
             (repo / 'key').write_text('unused fixture')
             (repo / 'scripts').mkdir()
-            shutil.copy(ROOT / 'mesh/labs/gitlab/project-seed/scripts/ctl-ci.sh', repo / 'scripts')
+            for name in ('ctl-ci.sh', 'deploy.sh', 'report.py'):
+                shutil.copy(ROOT / 'mesh/labs/gitlab/project-seed/scripts' / name, repo / 'scripts')
             (repo / 'ssh').write_text('''#!/usr/bin/env python3
 import io, json, os, sys, tarfile
 if '--artifacts' in sys.argv:
     with tarfile.open(fileobj=sys.stdout.buffer, mode='w|') as archive:
         info = tarfile.TarInfo('ctl-run.json')
-        info.size = 2
-        archive.addfile(info, io.BytesIO(b'{}'))
+        payload = b'{"status":"finished","rc":"0"}'
+        info.size = len(payload)
+        archive.addfile(info, io.BytesIO(payload))
 else:
     open(os.environ['SSH_ARGS'], 'w').write(json.dumps(sys.argv[1:]))
 ''')
@@ -59,6 +61,24 @@ else:
             self.assertTrue(all(rule.get('when') == 'manual' for rule in job['rules']), name)
         self.assertEqual(pipeline['.ctl-ssh']['artifacts']['when'], 'always')
         self.assertEqual(pipeline['.ctl-ssh']['artifacts']['access'], 'maintainer')
+
+    def test_mesh_routes_require_the_matching_sync_and_exact_commit(self):
+        pipeline = yaml.safe_load((ROOT / 'mesh/labs/gitlab/project-seed/.gitlab-ci.yml').read_text())
+        for name in ('deploy-mesh', 'scheduled-check', 'api-deploy', 'tag-deploy'):
+            sync, deploy = pipeline['sync-' + name], pipeline[name]
+            self.assertEqual(sync['stage'], 'sync')
+            self.assertEqual(sync['environment']['action'], 'prepare')
+            self.assertEqual(deploy['needs'], [{'job': 'sync-' + name, 'artifacts': False}])
+            self.assertEqual([r['if'] for r in sync['rules']], [r['if'] for r in deploy['rules']])
+            self.assertIn('--sync-only', sync['script'][0])
+            self.assertIn('--execute-synced', deploy['script'][0])
+            for job in (sync, deploy):
+                self.assertIn('--sha "$CTL_COMMIT_SHA"', job['script'][0])
+
+    def test_seed_and_template_report_implementations_match(self):
+        for name in ('ctl-ci.sh', 'deploy.sh', 'report.py'):
+            self.assertEqual((ROOT / 'gitlab/project-template/scripts' / name).read_bytes(),
+                             (ROOT / 'mesh/labs/gitlab/project-seed/scripts' / name).read_bytes())
 
     def test_export_failure_never_masks_execution_failure(self):
         state = ROOT / 'gitlab/tests/.state'

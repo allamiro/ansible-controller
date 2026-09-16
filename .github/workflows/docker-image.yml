@@ -29,6 +29,7 @@ jobs:
           "$RUNNER_TEMP/gitlab-tests/bin/pip" install PyYAML
           export PATH="$RUNNER_TEMP/gitlab-tests/bin:$PATH"
           "$RUNNER_TEMP/gitlab-tests/bin/python" -m unittest discover -s gitlab/tests -p 'test_*.py' -v
+          "$RUNNER_TEMP/gitlab-tests/bin/python" -m unittest discover -s gitlab/project-template/tests -v
 
   lint:
     name: Lint Dockerfile

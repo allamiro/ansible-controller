@@ -105,6 +105,133 @@ class ControllerTests(unittest.TestCase):
         self.env["TEST_RC"] = "7"
         self.assertEqual(self.run_ctl().returncode, 7)
 
+    def test_sync_then_execute_uses_same_tree_without_fetch_and_replays(self):
+        first = self.run_ctl('--sync-only', '--pipeline', '10', '--job', '20')
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertFalse((self.base / 'executed').exists())
+        record = json.loads(next((self.base / 'runs/records').glob('*.json')).read_text())
+        self.assertEqual(record['status'], 'synced')
+        self.assertEqual(record['commit_subject'], 'fixture')
+        retry = self.run_ctl('--sync-only', '--pipeline', '10', commit=False)
+        self.assertEqual(retry.returncode, 0, retry.stderr)
+        self.assertIn('already verified', retry.stdout)
+        # A disappeared Git server cannot force a refetch or a different revision.
+        sha = self.git('rev-parse', 'HEAD')
+        self.repo.rename(self.repo.with_name('offline.git'))
+        (self.secrets / 'test.token').unlink()
+        args = ['bash', str(ROOT / 'gitlab/bin/ctl-run'), '--env', 'test',
+                '--project', 'group/project', '--sha', sha, '--playbook',
+                'playbooks/site.yml', '--pipeline', '10', '--job', '21', '--execute-synced']
+        result = subprocess.run(args, env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.base / 'executed').read_text(), record['stage_dir'])
+        final = next(r for r in (json.loads(p.read_text()) for p in
+                     (self.base / 'runs/records').glob('*.json')) if r['status'] == 'finished')
+        self.assertEqual(final['sync_job'], '20')
+        self.assertEqual(final['gitlab_job'], '21')
+        (self.base / 'executed').unlink()
+        self.assertEqual(subprocess.run(args, env=self.env, capture_output=True).returncode, 0)
+        self.assertFalse((self.base / 'executed').exists())
+
+    def test_execute_requires_sync(self):
+        result = self.run_ctl('--execute-synced', '--pipeline', '10')
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('no approved sync', result.stderr)
+        self.assertFalse((self.base / 'executed').exists())
+
+    def test_administrator_can_require_two_phases(self):
+        config = json.loads(self.map.read_text())
+        config['environments']['test']['require_sync'] = True
+        self.map.write_text(json.dumps(config))
+        result = self.run_ctl('--pipeline', '10')
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('requires separate sync', result.stderr)
+        self.assertEqual(self.run_ctl('--sync-only', '--pipeline', '10', commit=False).returncode, 0)
+        self.assertEqual(self.run_ctl('--execute-synced', '--pipeline', '10', commit=False).returncode, 0)
+
+    def test_mesh_sync_never_dispatches_even_with_unresolved_work(self):
+        jobs = self.base / 'state/jobs'
+        self.env = self._mesh_env(jobs)
+        (jobs / 'pending').mkdir(parents=True)
+        (jobs / 'pending/meta.json').write_text('{"status":"results-incomplete"}')
+        result = self.run_ctl('--sync-only', '--pipeline', '10')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.base / 'executed').exists())
+        result = self.run_ctl('--execute-synced', '--pipeline', '10', commit=False)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('unresolved mesh job', result.stderr)
+
+    def test_synced_mesh_dispatch_preserves_snapshot_tracking_and_retry(self):
+        import shutil
+        jobs = self.base / 'state/jobs'
+        jobs.mkdir(parents=True)
+        self.env = self._mesh_env(jobs)
+        self.assertEqual(self.run_ctl('--sync-only', '--pipeline', '10', '--job', '20').returncode, 0)
+        record = json.loads(next((self.base / 'runs/records').glob('*.json')).read_text())
+        stub = self.bin / 'mesh-run'
+        stub.write_text('''#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+job = '00000000-0000-0000-0000-000000000001'
+root = Path(sys.argv[sys.argv.index('--jobs-dir') + 1]) / job
+root.mkdir(parents=True)
+(root / 'meta.json').write_text(json.dumps({'status': 'succeeded'}))
+Path(os.environ['TEST_MARKER']).write_text(json.dumps(sys.argv))
+print('mesh-run: tracking job=' + job)
+''')
+        stub.chmod(0o755)
+        wrapper = self.bin / 'ctl-run'
+        wrapper.write_text((ROOT / 'gitlab/bin/ctl-run').read_text().replace(
+            'MESH_RUN=/usr/local/mesh/bin/mesh-run', f'MESH_RUN={stub}'))
+        shutil.copy(ROOT / 'gitlab/bin/ctl_ci.py', self.bin)
+        args = ['bash', str(wrapper), '--execute-synced', '--env', 'test',
+                '--project', 'group/project', '--sha', self.git('rev-parse', 'HEAD'),
+                '--playbook', 'playbooks/site.yml', '--pipeline', '10', '--job', '21']
+        result = subprocess.run(args, env=self.env, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        dispatched = json.loads((self.base / 'executed').read_text())
+        self.assertEqual(dispatched[dispatched.index('--project-dir') + 1], record['stage_dir'])
+        final = next(r for r in (json.loads(p.read_text()) for p in
+                     (self.base / 'runs/records').glob('*.json')) if r['status'] == 'succeeded')
+        self.assertEqual(final['sync_job'], '20')
+        self.assertEqual(final['gitlab_job'], '21')
+        self.assertNotEqual(final['run_id'], record['run_id'])
+        (self.base / 'executed').unlink()
+        self.assertEqual(subprocess.run(args, env=self.env, capture_output=True).returncode, 0)
+        self.assertFalse((self.base / 'executed').exists())
+
+    def test_changed_snapshot_or_environment_refuses_execution(self):
+        self.assertEqual(self.run_ctl('--sync-only', '--pipeline', '10').returncode, 0)
+        record = json.loads(next((self.base / 'runs/records').glob('*.json')).read_text())
+        play = Path(record['stage_dir']) / 'playbooks/site.yml'
+        original = play.read_text()
+        play.write_text('changed\n')
+        result = self.run_ctl('--execute-synced', '--pipeline', '10', commit=False)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('synced tree changed', result.stderr)
+        play.write_text(original)
+        config = json.loads(self.map.read_text())
+        config['environments']['test']['inventory'] = 'other.ini'
+        self.map.write_text(json.dumps(config))
+        result = self.run_ctl('--execute-synced', '--pipeline', '10', commit=False)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('configuration changed', result.stderr)
+        self.assertFalse((self.base / 'executed').exists())
+
+    def test_sync_rejects_commit_change_and_exports_receipt(self):
+        self.assertEqual(self.run_ctl('--sync-only', '--pipeline', '10').returncode, 0)
+        args = ['bash', str(ROOT / 'gitlab/bin/ctl-run'), '--env', 'test',
+                '--project', 'group/project', '--sha', self.git('rev-parse', 'HEAD'),
+                '--playbook', 'playbooks/site.yml', '--pipeline', '10', '--sync-only', '--artifacts']
+        result = subprocess.run(args, env=self.env, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with tarfile.open(fileobj=io.BytesIO(result.stdout)) as archive:
+            self.assertEqual(archive.getnames(), ['ctl-run.json'])
+            self.assertEqual(json.load(archive.extractfile('ctl-run.json'))['status'], 'synced')
+        result = self.run_ctl('--sync-only', '--pipeline', '10')
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('different commit', result.stderr)
+
     def test_pipeline_retry_replays_success_without_execution(self):
         first = self.run_ctl('--pipeline', '10', '--job', '20')
         self.assertEqual(first.returncode, 0, first.stderr)

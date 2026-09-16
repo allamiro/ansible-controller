@@ -1,7 +1,7 @@
 # Ansible automation project template
 
 Copy this directory into a new GitLab CE project. It provides a non-mutating
-Linux connectivity playbook, protected manual deployment, result artifacts,
+Linux connectivity playbook, reviewed Git sync, protected manual deployment, result artifacts,
 and a JUnit summary displayed inside GitLab. No additional results server is
 needed. This is a starting project, not automatic controller provisioning.
 
@@ -58,7 +58,7 @@ Protect `v*` so only Maintainers create release tags. Do not grant this executio
 environment to untrusted playbook authors: reviewed code executes with its
 provisioned credentials.
 
-For mesh, replace **both** `prod-direct` literals in `.gitlab-ci.yml` with your
+For mesh, replace **all** `prod-direct` literals in `.gitlab-ci.yml` with your
 mesh environment. The administrator must configure that environment's mode,
 node/pool/zone and inventory, and provision runtime secrets on eligible nodes.
 A changed CI environment name alone does not connect the mesh.
@@ -116,10 +116,13 @@ nonsecret fixtures and test validation without the production Vault password.
 
 1. Create a feature branch, edit playbooks/inventory, push and open a merge request.
 2. Wait for `validate`; a Maintainer reviews and merges into protected `main`.
-3. Open the new pipeline and manually release **deploy**. Leave password variables
-   empty. Confirm the environment and commit before clicking Run.
+3. Wait for **sync**, which stages the reviewed commit without running Ansible.
+   Review its receipt, then manually release **deploy**. Leave password variables
+   empty. Confirm the environment, inventory, destination and commit before Run.
+   To approve sync separately, set its rule to `when: manual` and
+   `allow_failure: false`; deployment still requires its own manual release.
 4. Alternatively, create a protected `v*` tag on that reviewed commit and release
-   its manual **deploy** job. Choose one route: tag and main pipelines can both
+   its **sync** and manual **deploy** jobs. Choose one route: tag and main pipelines can both
    execute the same commit as separate requests.
 
 This starter accepts push and merge-request pipelines. Schedules, API triggers
@@ -139,12 +142,15 @@ GitLab supports [JUnit reports in its Free tier](https://docs.gitlab.com/ci/test
 Open the job trace for Ansible output. Under **Browse artifacts**, download:
 
 - `reports/deployment.xml`: the same aggregate result used by GitLab's Tests tab.
+- `reports/summary.json`: structured provenance, outcome and available recap totals.
 - `reports/summary.html`: a standalone summary you can open locally; in-browser
   artifact preview depends on GitLab configuration.
 - `mesh-artifacts/`: controller records and available execution output.
 
-The generated summaries contain only a fixed status message and exit code; they
-do not copy raw task output or decrypted variables. Review playbook logging for
+The generated summaries include commit identity/subject, pipeline and job IDs,
+inventory and destination, controller outcome and available final recap totals.
+They do not copy raw task output, host names or decrypted variables. Host counts
+refer to inventory names, not deduplicated machines or licensed systems. Review playbook logging for
 secret exposure before sharing execution artifacts. The artifact archive is
 restricted to Maintainers, but do not assume that this hides the Tests-tab status
 from everyone who can view the pipeline. Default retention is seven days subject
@@ -170,3 +176,9 @@ HA and external credential brokers need explicit configuration and verification.
 No target accounts, secrets or runtime mounts are created by copying this project.
 AWX and Semaphore are alternative automation UIs, not preconfigured viewers for
 this template's existing mesh results. Begin with the GitLab Tests tab and artifacts.
+
+For controller upgrades, optional separate sync approval, rollout batches and
+recovery, see `gitlab/MESH-ROLLOUTS.md` in the controller repository. The controller
+must support `--sync-only` and `--execute-synced`; deploy the matching `gitlab/bin/`
+before adopting this pipeline. Set administrator `require_sync: true` to reject
+combined fetch-and-run requests for the environment.

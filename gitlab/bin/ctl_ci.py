@@ -49,6 +49,51 @@ def request_path(root, env, project, pipeline, playbook):
     return root / 'requests' / (hashlib.sha256(identity).hexdigest() + '.json')
 
 
+def tree_digest(root):
+    """Bind approval to staged bytes, link targets and executable permissions."""
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError('synced tree is missing or replaced')
+    digest = hashlib.sha256()
+    digest.update(str(root.stat().st_mode).encode() + b'\0')
+    def fail(error):
+        raise error
+
+    for directory, dirs, files in os.walk(root, followlinks=False, onerror=fail):
+        dirs.sort()
+        for name in sorted(dirs + files):
+            path = Path(directory) / name
+            info = path.lstat()
+            digest.update(json.dumps([str(path.relative_to(root)), info.st_mode]).encode() + b'\0')
+            if stat.S_ISLNK(info.st_mode):
+                digest.update(os.readlink(path).encode() + b'\0')
+            elif stat.S_ISREG(info.st_mode):
+                digest.update(str(info.st_size).encode() + b'\0')
+                with path.open('rb') as stream:
+                    for block in iter(lambda: stream.read(1024 * 1024), b''):
+                        digest.update(block)
+            elif not stat.S_ISDIR(info.st_mode):
+                raise ValueError('unsupported file in synced tree')
+    return digest.hexdigest()
+
+
+def sync_record(root, request, sha, env, config):
+    receipt = root / 'syncs' / request.name
+    if not receipt.exists():
+        return None
+    data = json.loads(receipt.read_text())
+    record = data['record']
+    if record['sha'] != sha:
+        raise ValueError('synced request binds a different commit; use a new pipeline')
+    if data['config'] != json.loads(config):
+        raise ValueError('environment configuration changed since sync; use a new pipeline')
+    if not RUN_ID.fullmatch(record['run_id']):
+        raise ValueError('invalid synced run identity')
+    stage = root / env / sha / record['run_id']
+    if tree_digest(stage) != data['digest']:
+        raise ValueError('synced tree changed; refusing execution, use a new pipeline')
+    return record
+
+
 def load_record(root, request, sha):
     reference = json.loads(request.read_text())
     if reference['sha'] != sha:
@@ -123,6 +168,8 @@ def export(root, record):
         info.mode = 0o600
         info.size = len(payload)
         archive.addfile(info, io.BytesIO(payload))
+        if record.get('status') == 'synced':
+            return
         log = root / 'logs' / (record['run_id'] + '.log')
         if log.exists():
             add_file(archive, log, 'console.log')
@@ -167,6 +214,25 @@ def main():
     request = request_path(root, env, project, pipeline, playbook)
     if command == 'replay':
         replay(root, request, sha)
+    elif command == 'sync-load':
+        record = sync_record(root, request, sha, env, extra[0])
+        if record is not None:
+            print(json.dumps(record))
+    elif command == 'sync-save':
+        run = extra[1]
+        if not RUN_ID.fullmatch(run):
+            raise ValueError('invalid synced run identity')
+        record = json.loads((root / 'records' / (run + '.json')).read_text())
+        atomic_json(root / 'syncs' / request.name, {
+            'record': record, 'config': json.loads(extra[0]),
+            'digest': tree_digest(root / env / sha / run),
+        })
+    elif command == 'sync-export':
+        # A sync receipt contains no playbook output or execution claim.
+        record = sync_record(root, request, sha, env, extra[0])
+        if record is None:
+            raise ValueError('no completed sync for this request')
+        export(root, record)
     elif command == 'claim':
         atomic_json(request, {'sha': sha, 'run_id': extra[0]})
     elif command == 'export':
