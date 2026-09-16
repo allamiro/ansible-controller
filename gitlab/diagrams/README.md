@@ -8,9 +8,21 @@ The diagrams use Mermaid 10-compatible syntax and plain SVG text labels. To
 regenerate one with Mermaid CLI installed:
 
 ```bash
-mmdc -i gitlab/diagrams/workflow.mmd -o gitlab/diagrams/workflow.svg \
-  -c gitlab/diagrams/config.json -b white
+for diagram in gitlab/diagrams/*.mmd; do
+  mmdc -i "$diagram" -o "${diagram%.mmd}.svg" \
+    -c gitlab/diagrams/config.json -b white
+done
 ```
+
+| Diagram | Case |
+|---|---|
+| [Workflow](workflow.svg) | Review, optional separate sync release, receipt verification, manual execution. Applies to mesh and the reusable template. |
+| [Lifecycle](lifecycle.svg) | Platform preparation versus repeatable automation project changes. |
+| [Rollout](rollout.svg) | Canary verification, wider batches and recovery decisions. |
+| [Standalone](standalone.svg) | Bootstrap seed's single manual fetch-and-run route. |
+| [Mesh](mesh.svg) | Separate sync and execution, outbound connections and result return. |
+| [Components](components.svg) | GitLab, Runner, controller and node responsibilities. |
+| [Retries](retries.svg) | Replay, pre-submit admission retry and unresolved outcomes. |
 
 Render every changed source and inspect the SVG at a readable size before
 committing. Sequence message labels must not contain bare semicolons: Mermaid

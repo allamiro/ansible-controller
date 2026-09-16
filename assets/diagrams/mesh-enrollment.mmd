@@ -1,0 +1,16 @@
+sequenceDiagram
+    accTitle: Execution-node certificate enrollment
+    accDescr: The node generates a private key locally. Only its certificate signing request goes to the offline CA. Issued certificates return to the node, which then authenticates to both ingress endpoints.
+    participant Node as Execution node
+    participant CA as Offline CA operator
+    participant Ingress as Ingress A and B
+    Note over CA: Keep CA private key offline
+    Node->>Node: Generate key pair and CSR
+    Note over Node: Keep node private key locally
+    Node->>CA: Transfer CSR only
+    CA->>CA: Verify identity and sign CSR
+    CA-->>Node: Return node and CA certificates
+    Node->>Node: Install issued certificates
+    Node->>Ingress: Open outbound mutual TLS connections
+    Ingress-->>Node: Authenticate the node
+    Note over Node,Ingress: Work authorization uses a separate signing key

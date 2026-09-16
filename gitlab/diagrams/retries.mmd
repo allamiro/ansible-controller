@@ -1,4 +1,6 @@
 flowchart TB
+    accTitle: Repeated request recovery
+    accDescr: Completed requests replay their original result. Proven refusals before submission can retry admission. Unresolved requests refuse another execution until the original outcome is collected or reconciled.
     R["Request for environment, project, pipeline and playbook"] --> K{"Existing claim?"}
     K -->|No| C["Persist claim before execution"]
     C --> D["Execute and record result"]

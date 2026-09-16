@@ -1,1068 +1,124 @@
+<div align="center">
+
+<a href="https://buymeacoffee.com/pcileky2q"><img src="assets/support/buy-me-a-coffee.svg" alt="Buy Me a Coffee" height="56"></a>
+&nbsp;&nbsp;
+<a href="https://github.com/sponsors/allamiro"><img src="assets/support/github-sponsors.svg" alt="Sponsor on GitHub" height="56"></a>
+
+<sub>Support maintenance, testing, and documentation. Sponsorship is optional.</sub>
+
+<br><br>
+<img src="assets/ansible-controller.png" alt="Ansible Controller logo" width="220">
+
+# Ansible Controller
+
+**Run Ansible playbooks in Docker, with your files on the host.**
+
 [![CI](https://github.com/allamiro/ansible-controller/actions/workflows/docker-image.yml/badge.svg?branch=main)](https://github.com/allamiro/ansible-controller/actions/workflows/docker-image.yml)
 [![Build & Publish](https://github.com/allamiro/ansible-controller/actions/workflows/docker-publish.yml/badge.svg?branch=main)](https://github.com/allamiro/ansible-controller/actions/workflows/docker-publish.yml)
-[![Last commit](https://img.shields.io/github/last-commit/allamiro/ansible-controller)](https://github.com/allamiro/ansible-controller)
+[![Version](https://img.shields.io/github/v/tag/allamiro/ansible-controller?label=version)](https://github.com/allamiro/ansible-controller/releases)
+[![License](https://img.shields.io/github/license/allamiro/ansible-controller)](LICENSE)
 
-<div align="center">
-  <img src="assets/ansible-controller.png" alt="Ansible Controller" width="350"/>
-  <h1>Ansible Controller</h1>
-  <p><strong>Run Ansible playbooks from any machine — no local Ansible installation required.</strong></p>
+[Detailed guide](docs/README.md) · [Architecture](docs/ARCHITECTURE.md) · [Mesh](mesh/README.md) · [GitLab integration](gitlab/README.md) · [Support](SUPPORT.md) · [Contact](SUPPORT.md#learn-more)
 
-  [![Docker Pulls](https://img.shields.io/docker/pulls/allamiro1/ansible-controller)](https://hub.docker.com/r/allamiro1/ansible-controller)
-  [![Image Size](https://img.shields.io/docker/image-size/allamiro1/ansible-controller/latest)](https://hub.docker.com/r/allamiro1/ansible-controller)
-  [![License](https://img.shields.io/github/license/allamiro/ansible-controller)](LICENSE)
-  [![Latest Tag](https://img.shields.io/github/v/tag/allamiro/ansible-controller?label=version)](https://github.com/allamiro/ansible-controller/releases)
-
-  [![GitHub Sponsors](https://img.shields.io/badge/Sponsor-on%20GitHub-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/allamiro)
-  [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/pcileky2q)
 </div>
 
----
+An Ubuntu 26.04 container with Ansible, OpenSSH, and Windows/WinRM support. Keep playbooks, inventory, and credentials on your machine and mount them into the controller. No host Ansible installation is needed. All three images below are published for **amd64 and arm64** on Docker Hub and as `ghcr.io/allamiro/<image-name>`.
 
-Ubuntu 26.04-based Docker image that packages Ansible, OpenSSH, and everything needed to manage remote infrastructure. Write your playbooks on the host, mount them into the container, and run — no need to install Ansible locally.
+## Choose how to run
 
-## Features
+![Direct execution from the controller, or optional mesh execution inside a remote network](assets/diagrams/controller-overview.svg)
 
-- **Zero local dependencies** — only Docker required on the host
-- **SSH built-in** — connect into the controller or out to managed hosts
-- **Mount-based workflow** — playbooks, inventory, and SSH keys live on the host; no rebuild needed to change them
-- **Multi-platform** — ships `linux/amd64` and `linux/arm64` (Apple Silicon, AWS Graviton)
-- **Auto-versioned** — every push to `main` is automatically tagged via conventional commits
-- **Published to two registries** — Docker Hub and GitHub Container Registry (GHCR)
-- **SSH access controls** — `ansible` login account, `PermitRootLogin no`, pip-upgraded CVE packages, unused vendored binaries stripped; container startup and `docker exec` run as root
-- **Distributed execution mesh (opt-in)** — dispatch playbooks over a mutually-authenticated [Receptor](https://github.com/ansible/receptor) mesh to execution nodes inside networks the controller cannot route to ([details](#distributed-execution-mesh))
+| Image on Docker Hub | Purpose and where it runs |
+|---|---|
+| [ansible-controller](https://hub.docker.com/r/allamiro1/ansible-controller) | Standalone control host. Runs playbooks directly against reachable SSH or WinRM targets. |
+| [ansible-orchestrator](https://hub.docker.com/r/allamiro1/ansible-orchestrator) | Mesh control host. Includes the controller runtime and dispatches signed jobs through Receptor ingress sidecars to execution nodes. |
+| [ansible-execution-node](https://hub.docker.com/r/allamiro1/ansible-execution-node) | Inside each target network. Runs mesh jobs against local targets and connects outbound to the control host; no running SSH server. |
 
----
-
-## Table of Contents
-
-- [Prerequisites](#prerequisites)
-- [How it works](#how-it-works)
-- [Quick start](#quick-start)
-- [Pull the image](#pull-the-image)
-- [Makefile targets](#makefile-targets)
-- [Running playbooks](#running-playbooks)
-- [Distributed execution mesh](#distributed-execution-mesh)
-- [Adding roles from a GitHub repository](#adding-roles-from-a-github-repository)
-- [Adding roles from Ansible Galaxy](#adding-roles-from-ansible-galaxy)
-- [Ad-hoc commands](#ad-hoc-commands)
-- [Build from source](#build-from-source)
-- [Run with Docker (manual)](#run-with-docker-manual)
-- [Dynamic inventory](#dynamic-inventory)
-- [Cloud dynamic inventory (AWS / Azure / GCP)](#cloud-dynamic-inventory-aws--azure--gcp)
-- [Managing Windows hosts (WinRM)](#managing-windows-hosts-winrm)
-- [Ansible Vault](#ansible-vault)
-- [Controller preflight](#preflight-is-the-controller-ready)
-- [Linting playbooks](#linting-playbooks)
-- [Faster runs with Mitogen](#faster-runs-with-mitogen)
-- [SSH keys for managed hosts](#ssh-keys-for-managed-hosts)
-- [SSH agent forwarding](#ssh-agent-forwarding-optional)
-- [Logs](#logs)
-- [Versioning and releases](#versioning-and-releases)
-- [Contributing](#contributing)
-- [Support this project](#support-this-project)
-- [License](#license)
-- [Notes](#notes)
-
----
-
-## Prerequisites
-
-| Requirement | Minimum version | Notes |
-|-------------|----------------|-------|
-| Docker Engine | 20.10+ | [Install guide](https://docs.docker.com/engine/install/) |
-| Docker Compose | V2 (`docker compose`) | Included with Docker Desktop |
-
-No other tools required. Ansible runs entirely inside the container.
-
----
-
-## How it works
-
-You write and store your playbooks on your host machine. The container provides Ansible and SSH. You mount your playbook directory into the container and tell Ansible where to find it.
-
-```
-Host machine                        Container
-──────────────────────────────      ────────────────────────────────
-~/my-project/
-  configs/          ──mount──→      /configs/
-    ansible.cfg                       ansible.cfg
-    inventory/hosts.ini               inventory/hosts.ini
-  playbooks/        ──mount──→      /configs/playbooks/
-    site.yml                          site.yml
-    roles/                            roles/
-  ssh/              ──mount──→      /home/ansible/.ssh/
-    id_ed25519                        id_ed25519  (used to reach remote hosts)
-  logs/             ──mount──→      /var/log/ansible/
-```
-
-The `docker-compose.yml` included in the repo mounts `configs/` at `/configs`,
-`playbooks/` at `/configs/playbooks`, `ssh/` at `/home/ansible/.ssh`, and `logs/`
-at `/var/log/ansible`. A named volume also persists the controller's SSH host keys.
-If you add playbooks outside the `playbooks/` directory, add an extra volume entry for that path.
-
----
+Use the standalone quick start below for the controller, or the [mesh guide](mesh/README.md) for the orchestrator and execution nodes. [GitLab integration](gitlab/MAINTAINER-README.md) is optional for either mode.
 
 ## Quick start
 
-### 1 — Clone the repo
+You need Docker Engine, Docker Compose 2.17 or newer, Git, and OpenSSH tools on the host. Run these commands from the repository root. Replace `192.0.2.10` and `deploy` with your server and SSH account.
+
+**1. Clone and prepare an SSH key.** For existing keys or SSH agent forwarding, see the [detailed guide](docs/README.md#ssh-keys-for-managed-hosts).
 
 ```bash
 git clone https://github.com/allamiro/ansible-controller.git
 cd ansible-controller
-```
-
-The repo already includes the full directory structure, `docker-compose.yml`, `ansible.cfg`, and example playbooks in `playbooks/`. Nothing to create manually.
-
-### 2 — Add your servers to the inventory
-
-```bash
-# Edit configs/inventory/hosts.ini and list your servers
-cat > configs/inventory/hosts.ini << 'EOF'
-[all]
-192.168.1.10
-192.168.1.11
-192.168.1.12
-
-[webservers]
-192.168.1.10
-192.168.1.11
-
-[databases]
-192.168.1.12
-EOF
-```
-
-Hosts that authenticate with a password instead of a key work too — `sshpass`
-is in the image, so `ansible_user=... ansible_password=...` on a host or group
-is all Ansible needs. Keep such an inventory out of git, or vault-encrypt the
-password ([Ansible Vault](#ansible-vault)); the mesh execution-node image
-inherits `sshpass`, so the same inventory works over the mesh.
-
-### 3 — Generate an SSH key and copy it to your servers
-
-```bash
-# Generate a key pair into ssh/ (the directory is gitignored, so create it first)
 mkdir -p ssh && chmod 700 ssh
 ssh-keygen -t ed25519 -C "ansible-controller" -f ssh/id_ed25519 -N ""
-chmod 600 ssh/id_ed25519
-
-# Copy the public key to every unique host in the inventory
-for host in $(grep -v '^\[' configs/inventory/hosts.ini \
-             | grep -v '^#' \
-             | grep -v '^$' \
-             | sort -u); do
-  ssh-copy-id -i ssh/id_ed25519.pub user@$host
-done
+ssh-copy-id -i ssh/id_ed25519.pub deploy@192.0.2.10
 ```
 
-### 4 — Start the container
-
-```bash
-docker compose up -d
-```
-
-### 5 — Test connectivity
-
-```bash
-# Run the included ping playbook against all servers
-docker exec -it ansible-controller \
-  ansible-playbook /configs/playbooks/ping.yml
-```
-
-All hosts should return `pong`. If they do, Ansible can reach your servers.
-
-### 6 — Add your own playbooks and run them
-
-Drop your playbooks into the `playbooks/` directory on the host:
-
-```bash
-# Example: create a simple playbook
-cat > playbooks/deploy.yml << 'EOF'
----
-- name: Deploy application
-  hosts: webservers
-  tasks:
-    - name: Ensure nginx is installed
-      ansible.builtin.apt:
-        name: nginx
-        state: present
-      become: true
-EOF
-
-# Run it
-docker exec -it ansible-controller \
-  ansible-playbook /configs/playbooks/deploy.yml
-```
-
-### 7 — Open a shell inside the container (optional)
-
-```bash
-make shell
-# or
-docker exec -it ansible-controller bash
-```
-
----
-
-## Pull the image
-
-**Docker Hub**
-```bash
-docker pull allamiro1/ansible-controller:latest
-```
-
-**GitHub Container Registry (GHCR)**
-```bash
-docker pull ghcr.io/allamiro/ansible-controller:latest
-```
-
-### Image tags
-
-| Tag | Description |
-|-----|-------------|
-| `latest` | Most recent successful build from `main` |
-| `sha-XXXXXXX` | Immutable pointer to a specific commit — use for pinned/reproducible deployments |
-| `v1.2.3` | Semantic version — published when a `v*` git tag is pushed |
-| `main` | Tracks the `main` branch |
-
----
-
-## Makefile targets
-
-| Target | Description |
-|--------|-------------|
-| `make build` | Build the Docker image locally |
-| `make up` | Start the container in the background |
-| `make down` | Stop and remove the container |
-| `make shell` | Open an interactive bash shell inside the container |
-| `make support` | Show optional support and sponsorship links in a terminal |
-| `make run PLAYBOOK=site.yml` | Run an Ansible playbook |
-| `make galaxy` | Install roles and collections from `configs/requirements.yml` |
-| `make galaxy-force` | Re-install / update Galaxy content to the pinned versions |
-| `make pip` | Install extra Python packages from `configs/pip-requirements.txt` |
-| `make lint` | Lint everything under `playbooks/` with ansible-lint |
-| `make preflight` / `make preflight STRICT=1` | Check controller readiness; strict mode also fails on risks |
-| `make mesh-up` / `mesh-down` | Start/stop the [distributed execution mesh](mesh/README.md) control plane |
-| `make mesh-status` / `mesh-ping NODE=x` | Mesh health from both ingresses / round-trip one node |
-| `make mesh-run NODE=x PLAYBOOK=y.yml` | Dispatch a playbook to a mesh node (or `POOL=` / `ZONE=`) |
-| `make logs` | Tail container logs |
-
----
-
-## Running playbooks
-
-```bash
-# Basic run against the default inventory in ansible.cfg
-docker exec -it ansible-controller \
-  ansible-playbook /configs/playbooks/site.yml
-
-# Specify a user to connect as on the remote hosts
-docker exec -it ansible-controller \
-  ansible-playbook /configs/playbooks/site.yml -u deploy
-
-# Specify a different inventory file
-docker exec -it ansible-controller \
-  ansible-playbook /configs/playbooks/site.yml \
-  -i /configs/inventory/hosts.ini
-
-# Run against a single host
-docker exec -it ansible-controller \
-  ansible-playbook /configs/playbooks/site.yml \
-  -i "192.168.1.10," -u deploy
-
-# Limit to a specific group or host from inventory
-docker exec -it ansible-controller \
-  ansible-playbook /configs/playbooks/site.yml --limit webservers
-
-# Pass extra variables
-docker exec -it ansible-controller \
-  ansible-playbook /configs/playbooks/site.yml \
-  -e "env=production version=1.2.3"
-
-# Run only tasks with specific tags
-docker exec -it ansible-controller \
-  ansible-playbook /configs/playbooks/site.yml --tags "install,configure"
-
-# Dry run — show what would change without applying it
-docker exec -it ansible-controller \
-  ansible-playbook /configs/playbooks/site.yml --check --diff
-
-# Increase verbosity for troubleshooting
-docker exec -it ansible-controller \
-  ansible-playbook /configs/playbooks/site.yml -vv
-```
-
-### With roles
-
-Roles must be reachable from inside the container. If your project layout is:
-
-```
-playbooks/
-  site.yml
-  roles/
-    webserver/
-    database/
-```
-
-They are already available at `/configs/playbooks/roles/` inside the container. Reference them normally in your playbook:
-
-```yaml
-- hosts: webservers
-  roles:
-    - webserver
-    - database
-```
-
-If roles live in a separate directory, mount them and set `roles_path` in `configs/ansible.cfg`:
+**2. Set your inventory** in `configs/inventory/hosts.ini`:
 
 ```ini
-[defaults]
-roles_path = /configs/roles:/configs/playbooks/roles
+[all]
+web01 ansible_host=192.0.2.10 ansible_user=deploy
+
+[all:vars]
+ansible_ssh_private_key_file=/home/ansible/.ssh/id_ed25519
 ```
 
----
-
-## Distributed execution mesh
-
-Everything above runs Ansible **directly on the controller** — which requires
-the controller to have a network route to every target. The **distributed
-execution mesh** removes that requirement: the controller becomes an
-*orchestrator* that dispatches jobs over a mutually-authenticated
-[Receptor](https://github.com/ansible/receptor) mesh to **execution nodes**
-placed inside segmented networks, and the playbook runs there.
-
-```mermaid
-flowchart LR
-    subgraph direct["Direct (default — unchanged)"]
-        C1["controller"] -- "SSH" --> T0["reachable targets"]
-    end
-    subgraph dist["Distributed (opt-in)"]
-        C2["orchestrator"] == "Receptor mesh<br/>mandatory mTLS" ==> N["execution node<br/>(inside the segmented network)"]
-        N -- "SSH" --> T["targets the controller<br/>cannot route to"]
-    end
-```
-
-Key properties:
-
-- **Opt-in and non-disruptive** — the mesh is profile-gated
-  (`--profile mesh`); `make up` / `make run` and the published
-  `ansible-controller` image are byte-identical with or without it.
-- **Mandatory mutual TLS** — every mesh hop authenticates both sides; node
-  identity is bound to its certificate, and the CA private key stays offline.
-- **HA built in** — redundant receptor ingress sidecars with dispatcher
-  failover (Tier 1), designed for active/active orchestrators later.
-- **Same supply chain** — the `ansible-orchestrator` and
-  `ansible-execution-node` images build `FROM` the controller's digest and are
-  published by the same release pipeline: multi-arch manifests, cosign
-  signatures, and the CVE gate, on Docker Hub and GHCR alike:
+**3. Build, start, and test connectivity.** The included Compose file builds the controller from this checkout.
 
 ```bash
-# Pin the release you deploy (vX.Y.Z from this repo's Releases page).
-# `latest` exists but is for evaluation only — see mesh/README.md.
-docker pull ghcr.io/allamiro/ansible-orchestrator:vX.Y.Z
-docker pull ghcr.io/allamiro/ansible-execution-node:vX.Y.Z
+docker compose up -d --build --wait
+docker exec -it ansible-controller \
+  ansible-playbook /configs/playbooks/ping.yml -e ansible_become=false
 ```
 
-The mesh ships with three documents, in reading order:
+A successful run returns `pong`; this connectivity check does not require sudo. Add your own playbooks under `playbooks/`; they are available inside the container at `/configs/playbooks/`. The [full quick start](docs/README.md#quick-start) covers custom playbooks and the optional Make helpers.
 
-| Document | Read it for |
+### SSH host-key checking
+
+The shipped configuration disables managed-host key verification for lab use. Before production, follow the [managed known-hosts procedure](docs/README.md#ssh-host-key-checking). Use `make preflight` (requires Make) to check readiness and `make preflight STRICT=1` to also flag risky settings. Container startup and `docker exec` run as root; SSH logins use the `ansible` account.
+
+## GitLab: review, sync, then execute
+
+GitLab CE can manage project review and deployment for either execution mode.
+For mesh and the project template, the controller **syncs an exact commit without
+running Ansible**, then a separate manual deployment executes the verified snapshot.
+You can require a manual release before sync as well. These are voluntary operator
+decisions about deployment, unrelated to sponsorship or fleet size.
+
+![Reviewed commit, optional sync approval, verified staging, manual execution and results](gitlab/diagrams/workflow.svg)
+
+Start with the [project lifecycle guide](docs/LIFECYCLE.md) to create a project,
+connect its runners and environment, choose both approval gates, read reports,
+and handle upgrades or recovery. The bootstrap seed's standalone `deploy-direct`
+job combines fetch and execution; the reusable project template uses separate
+sync and execution for either mode. GitLab remains optional.
+
+## Common use cases
+
+| Your situation | Start here |
 |---|---|
-| [`mesh/README.md`](mesh/README.md) | What the mesh is and the full deployment walk-through: PKI, control plane, nodes, first playbook |
-| [`mesh/RUNBOOK.md`](mesh/RUNBOOK.md) | Day-2 operations: enrolling and evicting nodes, credential rotation, upgrades, troubleshooting |
-| [`mesh/EXTERNAL-CA.md`](mesh/EXTERNAL-CA.md) | Alternative deployment where your organization's own CA signs the certificates (CSR configs included) |
-| [`mesh/DESIGN.md`](mesh/DESIGN.md) | The design of record: architecture and HA decisions, non-disruption guarantees, and the verification matrix |
-
----
-
-## Adding roles from a GitHub repository
-
-Any role published as a git repository can be installed directly — useful for roles that aren't on Galaxy, forks, or a version pinned to a specific branch/tag/commit.
-
-Roles are declared in `configs/requirements.yml` and installed into `configs/.galaxy/` on the host (a read-write mount), so they persist across restarts and need no image rebuild. Everything declared there is installed **automatically when the container starts**, in the background (logged to `logs/galaxy-install.log`); run `make galaxy` after `make up` to install on demand — it shares a lock with the startup installer, so it also blocks until any in-flight startup install has finished, guaranteeing content is ready before you run playbooks. `configs/ansible.cfg` already points `roles_path` there, so installed roles resolve automatically.
-
-### 1 — Declare the role
-
-Add a git source to `configs/requirements.yml`. For example, to install [geerlingguy/ansible-role-nginx](https://github.com/geerlingguy/ansible-role-nginx):
-
-```yaml
----
-roles:
-  - src: https://github.com/geerlingguy/ansible-role-nginx
-    name: nginx          # directory name the role installs as — reference this in playbooks
-    version: master      # branch, tag, or commit SHA to pin to
-```
-
-### 2 — Install it
-
-```bash
-make up        # the container must be running
-make galaxy    # installs everything declared in requirements.yml
-```
-
-Use `make galaxy-force` later to update an already-installed role to the version in the file.
-
-### 3 — Use it in a playbook
-
-Reference the role by the `name` you set above:
-
-```yaml
-- name: Configure web servers
-  hosts: webservers
-  roles:
-    - nginx
-```
-
-```bash
-make run PLAYBOOK=site.yml
-```
-
----
-
-## Adding roles from Ansible Galaxy
-
-When a role is published on [Ansible Galaxy](https://galaxy.ansible.com/), reference it by its Galaxy name (`namespace.role`) instead of a git URL. Galaxy also resolves the role's dependencies automatically.
-
-### 1 — Declare the role (and any collections)
-
-```yaml
----
-roles:
-  - name: geerlingguy.nginx
-    version: 3.2.0          # pin so installs are reproducible
-  - name: geerlingguy.docker
-    version: 7.4.2
-
-collections:
-  - name: community.docker  # ansible.posix and community.general ship in the image
-    version: ">=4.0.0,<5.0.0"
-```
-
-### 2 — Install it
-
-```bash
-make up        # the container must be running
-make galaxy    # installs everything declared in requirements.yml
-```
-
-Both `roles_path` and `collections_path` in `configs/ansible.cfg` already point at `/configs/.galaxy/`, so installed content is found automatically.
-
-### 3 — Use it in a playbook
-
-```yaml
-- name: Install Docker
-  hosts: all
-  roles:
-    - geerlingguy.docker
-```
-
-```bash
-make run PLAYBOOK=site.yml
-```
-
-> **Tip:** Inspect installed content from inside the container:
-> ```bash
-> make shell
-> ansible-galaxy list                          # installed roles + versions
-> ansible-galaxy role info geerlingguy.nginx   # details for a Galaxy role
-> ```
-
----
-
-## Ad-hoc commands
-
-```bash
-# Ping all hosts to verify connectivity
-docker exec -it ansible-controller ansible all -m ping
-
-# Ping a specific group
-docker exec -it ansible-controller ansible webservers -m ping
-
-# Run a shell command on all hosts
-docker exec -it ansible-controller ansible all -m shell -a "uptime"
-
-# Check disk space
-docker exec -it ansible-controller ansible all -m shell -a "df -h"
-
-# Gather all facts from a host
-docker exec -it ansible-controller ansible server1 -m setup
-
-# Gather a specific fact
-docker exec -it ansible-controller ansible all -m setup \
-  -a "filter=ansible_os_family"
-
-# Copy a file to all hosts
-docker exec -it ansible-controller ansible all -m copy \
-  -a "src=/configs/file.txt dest=/tmp/file.txt"
-
-# Install a package (requires become)
-docker exec -it ansible-controller ansible all -m apt \
-  -a "name=nginx state=present" --become
-
-# Restart a service
-docker exec -it ansible-controller ansible all -m service \
-  -a "name=nginx state=restarted" --become
-
-# Reboot all hosts and wait for them to come back
-docker exec -it ansible-controller ansible all -m reboot --become
-```
-
----
-
-## Build from source
-
-```bash
-git clone https://github.com/allamiro/ansible-controller.git
-cd ansible-controller
-docker build -t ansible-controller:local -f docker/Dockerfile .
-```
-
----
-
-## Run with Docker (manual)
-
-```bash
-# Prepare ssh/ directory first (see Quick start step 1)
-
-docker run -d --name ansible-controller \
-  -p 2222:22 \
-  -v "$PWD/configs":/configs:rw \
-  -v "$PWD/playbooks":/configs/playbooks:ro \
-  -v "$PWD/logs":/var/log/ansible:rw \
-  -v "$PWD/ssh":/home/ansible/.ssh:ro \
-  ansible-controller:latest
-```
-
-> **Note:** Mount the entire `ssh/` directory (not a single file). Set `chmod 700 ssh` and `chmod 600 ssh/authorized_keys` on the host before starting.
-
----
-
-## Dynamic inventory
-
-A dynamic inventory script is included at `configs/inventory/inventory.py`. It reads hosts from `configs/inventory/hosts.json` when present and falls back gracefully when the file is absent.
-
-**hosts.json example:**
-```json
-{
-  "all": {
-    "hosts": ["192.168.1.10", "192.168.1.11"],
-    "vars": { "ansible_user": "ansible" }
-  },
-  "webservers": {
-    "hosts": ["192.168.1.10"],
-    "vars": {}
-  }
-}
-```
-
-**Use it:**
-```bash
-docker exec -it ansible-controller \
-  ansible-playbook -i /configs/inventory/inventory.py /configs/playbooks/site.yml
-```
-
----
-
-## Cloud dynamic inventory (AWS / Azure / GCP)
-
-Pull live inventory from your cloud provider instead of maintaining a static hosts file. Each provider needs its **collection** (declared in `configs/requirements.yml`) and its **Python SDK** (declared in `configs/pip-requirements.txt`) — both are installed automatically when the container starts, or on demand with `make galaxy` and `make pip`.
-
-| Provider | Collection (`requirements.yml`) | SDK (`pip-requirements.txt`) | Inventory plugin |
-|----------|--------------------------------|------------------------------|------------------|
-| AWS | `amazon.aws` | `boto3` | `amazon.aws.aws_ec2` |
-| Azure | `azure.azcollection` | `azure-identity`, `azure-mgmt-*` | `azure.azcollection.azure_rm` |
-| GCP | `google.cloud` | `google-auth`, `requests` | `google.cloud.gcp_compute` |
-
-Commented, version-pinned entries for all three providers ship in both files. In `pip-requirements.txt` simply uncomment the lines; in `requirements.yml` replace the empty `collections: []` list at the bottom with a `collections:` block containing the entries you need (the commented example block shows the exact syntax). Example AWS setup:
-
-```yaml
-# configs/requirements.yml
-collections:
-  - name: amazon.aws
-    version: ">=9.0.0,<10.0.0"
-```
-
-```
-# configs/pip-requirements.txt
-boto3>=1.34,<2
-```
-
-```yaml
-# configs/inventory/aws_ec2.yml — filename must end in aws_ec2.yml
-plugin: amazon.aws.aws_ec2
-regions:
-  - us-east-1
-keyed_groups:
-  - key: tags.Role
-    prefix: role
-```
-
-```bash
-make up && make galaxy && make pip   # galaxy/pip also wait for the startup installs
-docker exec -it ansible-controller \
-  ansible-inventory -i /configs/inventory/aws_ec2.yml --graph
-```
-
-Provide cloud credentials the usual way (environment variables on the container, or credential files mounted under `configs/` and referenced from the inventory file).
-
----
-
-## Managing Windows hosts (WinRM)
-
-`pywinrm` (with NTLM support) is baked into the image, so Windows hosts work out of the box over WinRM:
-
-```ini
-# configs/inventory/hosts.ini
-[windows]
-win-server1 ansible_host=192.168.1.20
-
-[windows:vars]
-ansible_connection=winrm
-ansible_user=Administrator
-ansible_winrm_transport=ntlm
-ansible_port=5986
-# the sudo become defaults in ansible.cfg don't apply to Windows
-ansible_become=false
-# 'ignore' is for labs only — validate certs in production
-# (note: INI inventory values keep trailing text, so comments must stay on their own line)
-ansible_winrm_server_cert_validation=ignore
-```
-
-```bash
-docker exec -it ansible-controller ansible windows -m ansible.windows.win_ping
-```
-
-The `ansible.windows` collection is not baked in — declare it (pinned) in `configs/requirements.yml`. The Kerberos transport compiles against native libraries that don't survive container recreation, so bake it into a small derived image instead of installing at runtime:
-
-```dockerfile
-# Dockerfile.kerberos
-FROM allamiro1/ansible-controller:latest
-USER root
-RUN apt-get update \
- && apt-get install -y --no-install-recommends gcc python3-dev libkrb5-dev krb5-user \
- && pip3 install --no-cache-dir --break-system-packages 'pyspnego[kerberos]>=0.10,<1' \
- && apt-get purge -y --auto-remove gcc python3-dev libkrb5-dev \
- && rm -rf /var/lib/apt/lists/*
-```
-
-```bash
-docker build -f Dockerfile.kerberos -t ansible-controller:kerberos .
-# then use this tag in docker-compose.yml / docker run
-```
-
----
-
-## Ansible Vault
-
-Two ways to supply the vault password — pick one:
-
-**Option A — password file (simplest).** Drop the password in `configs/.vault_pass` (the path is gitignored so it can't be committed):
-
-```bash
-echo 'my-vault-password' > configs/.vault_pass
-chmod 600 configs/.vault_pass
-```
-
-**Option B — environment variable (no file on the host).** Export `ANSIBLE_VAULT_PASSWORD` and uncomment the matching line in `docker-compose.yml`; the entrypoint writes it to a file readable only by the `ansible` user inside the container.
-
-Either way the entrypoint copies the password to a file readable only by the `ansible` user and exports `ANSIBLE_VAULT_PASSWORD_FILE` to **all SSH sessions** — interactive logins and one-shot `ssh host command` runs alike (via `pam_env`) — so vaulted content just works:
-
-```bash
-docker exec -it ansible-controller ansible-vault encrypt_string 'secret123' --name db_password
-ssh -p 2222 ansible@localhost ansible-playbook /configs/playbooks/site.yml   # vault decrypts automatically
-```
-
-For `docker exec` (which bypasses PAM), run through `bash -lc` or pass `--vault-password-file` explicitly:
-
-```bash
-docker exec -it ansible-controller bash -lc 'ansible-playbook /configs/playbooks/site.yml'
-```
-
----
-
-## Preflight: is the controller ready?
-
-`make preflight` answers, from inside the running container, the question that
-otherwise gets answered by a failed play on a managed host:
-
-```bash
-make preflight             # report; exits non-zero only on real failures
-make preflight STRICT=1    # also fail on risky-but-deliberate settings (use in CI)
-```
-
-It reports the startup dependency installs (Galaxy and pip content is installed in
-the **background**, so a play dispatched immediately after `make up` can outrun it),
-whether managed-host SSH key verification is on, the Vault password file and its
-permissions, whether the configured inventory parses and resolves hosts, and the
-mode and readability of target SSH private keys for the controller login account.
-It checks the configured Vault password file and SSH connection options as well
-as global host-key checking. Configuration errors and unparseable or missing
-inventory sources fail the check, even when another source provides hosts. A
-valid inventory that currently resolves no hosts is a risk (fatal in strict mode).
-
-`CONTROLLER_CONFIG_DIR` overrides the configuration directory used for dependency
-status checks; `CONTROLLER_LOG_DIR` selects their logs (default `/var/log/ansible`).
-These overrides must match the dependency installer's settings. They do not move
-the entrypoint's Vault files or change its configuration selection.
-`CONTROLLER_USER` (default `ansible`) and `CONTROLLER_HOME` select the local
-account and home inspected by preflight. Run as root or that account to check key
-readability. Preflight checks controller configuration; it does not connect to
-targets or validate per-host credential and SSH-option overrides in inventory.
-
-Startup installs no longer fail silently: a failure is recorded beside its log and
-announced in `docker logs`, and `make preflight` reports it afterwards. The
-controller also warns at every start when managed-host key verification is
-disabled, naming the file that decided it.
-
-Install status includes a fingerprint of the requirements file. Changed requirements
-or older status records without a fingerprint are reported as risks until you run
-`make galaxy` or `make pip` again; strict mode rejects them. The fingerprint covers
-the top-level requirements file, not included files or changes to remote packages.
-
-The isolated regression suite runs in both architecture builds in CI. To run it
-against an existing local controller image without starting services:
-
-```bash
-docker run --rm -v "$PWD":/repo:ro -w /repo -e PYTHONDONTWRITEBYTECODE=1 \
-  --entrypoint python3 ansible-controller:local \
-  -m unittest discover -s docker/tests -v
-```
-
-## Linting playbooks
-
-[ansible-lint](https://ansible-lint.readthedocs.io/) is baked into the image:
-
-```bash
-make lint                                    # lints everything under playbooks/
-# or lint a single file (run from the playbooks dir so config discovery works):
-docker exec -it ansible-controller sh -c 'cd /configs/playbooks && ansible-lint site.yml'
-```
-
-Customize rules with a `.ansible-lint` file in the `playbooks/` directory — both commands run from there, which is where ansible-lint looks for its configuration.
-
-### The CI gate
-
-Every pull request runs this gate as part of [`docker-image.yml`](.github/workflows/docker-image.yml), inside the controller image built from that very commit — the Dockerfile resolves its Ansible tooling unpinned, so the runtime that will ship is the only one whose verdict counts. Every check lives in one script, [`.github/scripts/ansible-quality.sh`](.github/scripts/ansible-quality.sh): `yamllint` with the repository's [`.yamllint`](.yamllint), `ansible-lint` at the **production** profile with the root [`.ansible-lint`](.ansible-lint), `--syntax-check` for every shipped playbook against its own inventory, and the project template's unit tests. It covers this repository's `playbooks/`, the GitLab lab seed, and the copyable project template.
-
-The script reproduces the controller's own layout — `configs/` at `/configs`, `playbooks/` at `/configs/playbooks` — and points `ANSIBLE_CONFIG` at the controller's `ansible.cfg`. So the gate uses the ansible-core, ansible-lint and yamllint you run, resolves the Galaxy collections baked into the image, and honours the same `roles_path`/`collections_path`, rather than approximating them with a separate pinned install. Content declared in `configs/requirements.yml` is installed first, with the same commands and destinations [`docker/entrypoint.sh`](docker/entrypoint.sh) uses, so a declared collection resolves here exactly as it will on the controller.
-
-To reproduce CI exactly, build the image from your checkout and run the script in it — that is what the job does, and the script is the same file. The checkout is mounted read-only so the container, which runs as root, cannot leave root-owned cache directories in your tree:
-
-```bash
-docker build -f docker/Dockerfile -t ansible-controller:local .
-docker run --rm -v "$PWD":/repo:ro -w /repo -e PYTHONDONTWRITEBYTECODE=1 \
-  --entrypoint bash ansible-controller:local /repo/.github/scripts/ansible-quality.sh
-```
-
-Swapping in a released image (`ghcr.io/allamiro/ansible-controller:0.23.3`) skips the build and is usually enough while iterating on a playbook. Treat it as an approximation, not the gate: the Dockerfile tracks a mutable base and installs its Ansible tooling unpinned, so a released image can carry a different toolchain than the one your commit would build.
-
-Note the two configuration scopes: `make lint` above runs inside `/configs/playbooks` and reads a config from there, while this gate runs from the repository root and reads the root `.ansible-lint` and `.yamllint`.
-
----
-
-## Faster runs with Mitogen
-
-[Mitogen](https://mitogen.networkgenomics.com/ansible_detailed.html) is baked into the image (disabled by default) with its strategy plugin already on Ansible's default search path. It multiplexes SSH connections and can cut playbook runtime substantially on large inventories. Enable it by uncommenting one line in `configs/ansible.cfg`:
-
-```ini
-strategy = mitogen_linear
-```
-
-Leave it disabled if you depend on the `free` strategy or strategy-sensitive plugins — Mitogen replaces the linear strategy wholesale.
-
----
-
-## SSH keys for managed hosts
-
-To allow the controller to connect passwordlessly to your managed servers, generate a key pair on the host and let the container pick it up via the volume mount.
-
-```bash
-# Generate the key pair into the ssh/ directory
-ssh-keygen -t ed25519 -C "ansible-controller" -f ssh/id_ed25519 -N ""
-chmod 600 ssh/id_ed25519
-```
-
-Copy the public key to every server you want Ansible to manage:
-
-```bash
-ssh-copy-id -i ssh/id_ed25519.pub user@server1
-ssh-copy-id -i ssh/id_ed25519.pub user@server2
-```
-
-Tell Ansible to use the key by adding this to `configs/ansible.cfg`:
-
-```ini
-[defaults]
-private_key_file = /home/ansible/.ssh/id_ed25519
-```
-
-The private key is available inside the container at `/home/ansible/.ssh/id_ed25519` via the volume mount. Restart the container after adding the key if it was already running.
-
----
-
-## SSH host-key checking
-
-By default the shipped `configs/ansible.cfg` **disables** SSH host-key checking:
-
-```ini
-[defaults]
-host_key_checking = False
-
-[ssh_connection]
-ssh_args = -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no
-```
-
-This is a **development convenience** — it avoids host-key prompts against lab
-hosts whose keys change often — but it is **not production-safe**: it disables
-SSH man-in-the-middle protection, so a spoofed or hijacked host is trusted
-silently. The insecure default is kept for backward compatibility and is slated
-to flip to strict in a future major release.
-
-**For production, enable strict checking with a managed `known_hosts`:**
-
-```ini
-[defaults]
-host_key_checking = True
-
-[ssh_connection]
-ssh_args = -o UserKnownHostsFile=/configs/known_hosts -o StrictHostKeyChecking=yes
-```
-
-Pre-populate the `known_hosts` file on the host (it persists via the `./configs`
-mount). **Verify the keys out-of-band before trusting them.** `ssh-keyscan`
-records whatever key answers on the network, so over an untrusted or compromised
-path it will happily capture an attacker's key — its manual explicitly warns
-against building `known_hosts` "without verifying the keys":
-
-```bash
-# 1. Fetch candidate keys — WITHOUT -H, so each fingerprint stays attributable to
-#    its plaintext host in the next step (-H hashes the hostnames):
-#    The candidate file gets a private random name. A fixed path like
-#    /tmp/known_hosts.new on a multi-user host is a classic spoof target: another
-#    user can pre-create or symlink it, seeding the file you later trust:
-kh_new=$(mktemp)
-ssh-keyscan server1 server2 > "$kh_new"
-
-#    A host reached on a non-default port (ansible_port) must be scanned WITH -p.
-#    OpenSSH looks such a host up as [host]:port, and ssh-keyscan only writes that
-#    bracketed form when -p is given — scan it without and you store a plain
-#    `server3` entry that never matches, so StrictHostKeyChecking=yes rejects the
-#    host even though its key was verified:
-ssh-keyscan -p 2222 server3 >> "$kh_new"
-
-#    Scan the address Ansible actually CONNECTS to, which is `ansible_host` when
-#    the inventory sets one and the inventory name otherwise. OpenSSH looks the
-#    key up under the address it dials, so a key pinned under an inventory alias
-#    is never found and strict checking rejects the host:
-#      web01 ansible_host=10.0.0.5   ->   ssh-keyscan 10.0.0.5   (not web01)
-
-# 2. Compare each fingerprint against a TRUSTED source before pinning — the host
-#    console, the cloud provider's API, a config-management fact, or the host's
-#    own /etc/ssh/ssh_host_*_key.pub obtained over a channel you already trust:
-ssh-keygen -lf "$kh_new"
-
-# 3. Install — but only if every host actually made it into the candidate file.
-#    ssh-keyscan skips hosts it cannot reach and still exits 0 when only some of
-#    them failed, so an unguarded run would delete a briefly-down or mistyped
-#    host's good key below and have nothing to put back, turning a transient
-#    outage into a host strict checking then refuses to connect to. The check
-#    therefore GATES the removal rather than just warning about it.
-#
-#    Removing each superseded entry first is what stops a rekeyed host from
-#    staying trusted on its OLD key (a match on ANY entry passes). `-R` takes a
-#    single host, so keep the loop — a second `-R` overrides the first instead of
-#    removing both — and name non-default-port hosts in the bracketed form they
-#    were stored under.
-#
-#    Every mutation happens on TEMP FILES; the live file changes only via one
-#    atomic rename at the end. Any earlier failure — an unreadable existing file,
-#    a failed removal, a full disk while writing the replacement — aborts with
-#    the live file byte-identical. A plain `>` redirect could not promise that:
-#    it truncates the live file BEFORE writing, so an interruption mid-write
-#    strands it empty or partial. The subshell + set -e keeps the block safe to
-#    paste (a failure exits the subshell, not your shell), and the explicit
-#    chmod means a first-ever pin is readable by the container's uid 1000 even
-#    under a restrictive host umask like 077 (known_hosts holds public keys;
-#    0644 is what OpenSSH itself creates).
-ok=1   # reset up front: a stale ok=0 from an earlier paste in the same shell
-       # would otherwise let the hashing step below run after a failed re-run
-missing=
-for h in server1 server2 '[server3]:2222'; do
-  ssh-keygen -F "$h" -f "$kh_new" >/dev/null || missing="$missing $h"
-done
-
-if [ -n "$missing" ]; then
-  echo "NOT scanned:$missing — fix and re-scan; known_hosts left unchanged"
-else
-  # The subshell must stand ALONE, with its status tested on the next line.
-  # Chaining it into `( ... ) && echo ... || echo ...` would quietly disable the
-  # `set -e` inside: the shell ignores errexit in every non-final command of an
-  # AND-OR list, so failures would stop aborting the update.
-  (
-    set -e
-    work=$(mktemp); new=
-    trap 'rm -f "$work" "$work.old" "$new"' EXIT
-    [ ! -e configs/known_hosts ] || cp configs/known_hosts "$work"
-    for h in server1 server2 '[server3]:2222'; do
-      ssh-keygen -R "$h" -f "$work" >/dev/null 2>&1
-    done
-    new=$(mktemp configs/known_hosts.XXXXXX)
-    cat "$work" "$kh_new" > "$new"
-    chmod 644 "$new"
-    mv "$new" configs/known_hosts && new=
-  )
-  ok=$?
-  if [ "$ok" -eq 0 ]; then echo "known_hosts updated"; else echo "FAILED — known_hosts left unchanged"; fi
-fi
-
-# 4. (optional) hash the hostnames at rest once pinned:
-#    Gated on the update above having succeeded — pasted verbatim after a failed
-#    or skipped update, an unguarded hash would still rewrite the live file:
-[ "${ok:-1}" -eq 0 ] && ssh-keygen -Hf configs/known_hosts && rm -f configs/known_hosts.old
-```
-
-Better still, provision authoritative host keys directly from your
-config-management system or golden image instead of scanning at all.
-
-If you prefer trust-on-first-use over pre-pinning every host, use
-`StrictHostKeyChecking=accept-new`: Ansible records each host key the first time
-it connects and then fails if a key later changes. That still catches
-key-substitution attacks after the first contact, unlike the `=no` default.
-
-`accept-new` has to **write** the first key, so `configs/known_hosts` must be
-writable by the container user (uid 1000) — otherwise the write silently fails and
-every session keeps treating keys as new. Prepare it on the host:
-
-```bash
-touch configs/known_hosts
-sudo chown 1000:1000 configs/known_hosts   # the container's ansible user is uid 1000
-chmod 600 configs/known_hosts
-```
-
-The pre-pinned `StrictHostKeyChecking=yes` recipe above needs the file only
-*readable*, so it sidesteps this ownership requirement entirely.
-
-> The distributed execution mesh (see [`mesh/`](mesh/README.md)) will use strict,
-> managed host-key checking as its default from the start — this relaxed setting
-> is scoped to the existing direct controller only.
-
----
-
-## SSH agent forwarding (optional)
-
-To use your host SSH keys inside the container without copying them to disk, uncomment the volume and environment entries in `docker-compose.yml`:
-
-```yaml
-volumes:
-  - ${SSH_AUTH_SOCK}:/run/host-services/ssh-auth.sock
-environment:
-  - SSH_AUTH_SOCK=/run/host-services/ssh-auth.sock
-```
-
-Make sure your key is loaded on the host first:
-
-```bash
-ssh-add ~/.ssh/id_ed25519
-```
-
----
-
-## Logs
-
-Ansible logs are written to `/var/log/ansible/ansible.log` inside the container and persisted to `./logs/ansible.log` on the host via the volume mount.
-
-```bash
-# Tail logs from the host
-tail -f logs/ansible.log
-
-# Or from inside the container
-docker exec -it ansible-controller tail -f /var/log/ansible/ansible.log
-```
-
----
-
-## Versioning and releases
-
-Every push to `main` is automatically tagged based on [conventional commit](https://www.conventionalcommits.org/) prefixes:
-
-| Commit prefix | Version bump | Example |
-|---------------|--------------|---------|
-| `fix:` / `perf:` / `refactor:` | patch | `v1.0.0` → `v1.0.1` |
-| `feat:` | minor | `v1.0.0` → `v1.1.0` |
-| `feat!:` / `BREAKING CHANGE` | major | `v1.0.0` → `v2.0.0` |
-
-The new git tag triggers the publish workflow which:
-- Builds and pushes `v1.2.3`, `v1.2`, `v1`, `latest` tags to both Docker Hub and GHCR
-- Creates a GitHub Release with auto-generated changelog
-
-### Image signing (cosign)
-
-Every published multi-arch manifest is signed with [cosign](https://docs.sigstore.dev/cosign/signing/overview/) using keyless GitHub OIDC — no long-lived signing keys exist. Verify a pulled image before running it:
-
-```bash
-cosign verify \
-  --certificate-identity-regexp 'https://github\.com/allamiro/ansible-controller/\.github/workflows/docker-publish\.yml@.*' \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/allamiro/ansible-controller:latest
-```
-
-The same works against `docker.io/allamiro1/ansible-controller`. A valid signature proves the image was built and published by this repository's GitHub Actions workflow, not tampered with in transit or on the registry.
-
----
+| A workstation or one reachable server network | [Standalone quick start](#quick-start); edit mounted playbooks without rebuilding. |
+| Branch offices, private networks, or several reachability zones | [Mesh setup](mesh/README.md); place nodes near targets and use separate environment inventories per zone. |
+| A team needs reviewed Git changes and approval before sync and execution | [Project setup and approvals](docs/LIFECYCLE.md#create-an-automation-project). |
+| A rollout affects 100+ inventory hosts | [Canary and batch rollout](docs/LIFECYCLE.md#roll-out-to-100-or-more-systems); pool selection does not split an inventory automatically. |
+| Windows, cloud inventory, or encrypted credentials | [Controller reference](docs/README.md); provision dependencies and trust in the runtime that executes Ansible. |
+| A job disconnected or its outcome is unclear | [Results and recovery](docs/LIFECYCLE.md#read-results-and-recover); collect the original job before considering another execution. |
+
+## Documentation
+
+| Guide | What you will find |
+|---|---|
+| [Detailed controller README](docs/README.md) | Images and tags, commands, Galaxy roles, cloud inventory, Windows, Vault, SSH, logs, and troubleshooting checks. |
+| [Architecture and diagrams](docs/ARCHITECTURE.md) | Host mounts, direct execution, mesh connections, certificate enrollment, and the GitLab boundary. |
+| [Project lifecycle and use cases](docs/LIFECYCLE.md) | Create projects, sync GitLab revisions, approve execution, roll out in batches, read reports, and upgrade. |
+| [Mesh deployment](mesh/README.md) · [Runbook](mesh/RUNBOOK.md) | Execution nodes, redundant ingress, deployment, upgrades, and recovery. |
+| [External CA](mesh/EXTERNAL-CA.md) | Use your organization's certificate authority for mesh identities. |
+| [GitLab walkthrough](gitlab/MAINTAINER-README.md) | Project setup, permissions, reviewed commits, and manual deployments. |
+| [Releases and image signatures](docs/README.md#versioning-and-releases) | Versioning, registry tags, and cosign verification. |
+
+## License and support
+
+This project's source is licensed under the **[Apache License 2.0](LICENSE)**. Bundled third-party software retains its own licenses.
+
+The community controller and mesh are free to use with **no host limit or purchase requirement**. Sponsorship is voluntary. For deployment assistance, [contact the maintainer](mailto:tsuliman@linuxvaults.com?subject=Ansible%20Controller%20support%20enquiry) and see [SUPPORT.md](SUPPORT.md) for scope and terms. Sponsorship alone does not include a support contract or guaranteed response.
 
 ## Contributing
 
-Contributions are welcome. Please open an issue before submitting a pull request so the change can be discussed first.
-
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feat/my-feature`
-3. Commit using [conventional commits](https://www.conventionalcommits.org/): `feat:`, `fix:`, `docs:` etc.
-4. Push and open a pull request against `main`
-
-Bug reports, feature requests, and documentation improvements are all appreciated.
-
----
-
-## Support this project
-
-If Ansible Controller helps you automate your infrastructure, consider supporting
-its maintenance, testing, and documentation through
-[GitHub Sponsors](https://github.com/sponsors/allamiro) or
-[Buy Me a Coffee](https://buymeacoffee.com/pcileky2q).
-
-You can also help by reporting bugs, improving the docs, or contributing fixes.
-
-The standalone controller remains community open source, with voluntary
-sponsorship and no automatic support notice. Both controller and mesh remain
-free to use with no host limit. For mesh deployment assistance and support
-enquiries, see [Support](SUPPORT.md).
-
-Interactive mesh shells show a brief notice with **Learn more**, **Sponsor**,
-and **Continue free** options; it never waits for input. Set
-`ANSIBLE_CONTROLLER_SUPPORT_NOTICE=0` to hide it, or run `make support` to show the
-links on demand. The notice is silent in noninteractive and CI sessions.
-
----
-
-## License
-
-This project is licensed under the [Apache License 2.0](LICENSE).
-
----
-
-## Notes
-
-- **Base image:** Ubuntu 26.04 LTS — standard security support until 2031, extended further with Ubuntu Pro.
-- **CVE surface:** the build strips two sources of findings that `apt-get upgrade` cannot reach. CI rejects fixable CRITICAL/HIGH findings, subject to the repository's documented scan exceptions; vulnerability status depends on the image digest and scan date.
-  - Canonical drops `/usr/bin/pebble` into the OCI rootfs outside dpkg, so no package owns it and it can never be patched in place. This image runs `entrypoint.sh` + sshd as PID 1 and never invokes pebble, so it is deleted along with `/var/lib/pebble` — taking eight Go stdlib CVEs with it.
-  - pip bundles its own pinned copies of a few libraries under `pip/_vendor` and advertises them in `vendor.txt` and `bom.cdx.json`, which scanners read independently of what is actually installed. `docker/patch-pip-vendor.py` re-vendors msgpack from the patched release installed alongside it and deletes the vendored `pkg_resources` tree (dead code — pip declares that metadata backend unusable on Python 3.14+), updating both manifests to match. The script asserts its own result, so a future pip release that reshapes `_vendor` fails the build rather than silently reintroducing the findings. The redundant apt `python3-pip`, fully shadowed by the pip in `/usr/local`, is purged.
-- **Ansible:** the image ships the current `ansible-core` (via pip) plus the `ansible.posix` and `community.general` collections — not the ~280 MiB `ansible` community bundle. Declare any additional collections or roles in `configs/requirements.yml`; they are installed automatically at container start (or on demand with `make galaxy`) into the host-persisted `configs/.galaxy/` directory, no rebuild needed.
-- If `configs/ansible.cfg` exists on the host it is used automatically; otherwise the image default applies.
-- The `ansible` user (uid 1000) is the intended SSH login account. `PermitRootLogin no` is enforced. Root and system accounts also exist; container startup and the documented `docker exec` commands run as root.
-- SSH host keys are generated on first container start (not baked into the image, so every deployment gets unique keys). Keys live in `/etc/ssh/host_keys`, and the compose file persists that directory in the `ssh-host-keys` volume so they survive container recreation (only the keys are persisted — `sshd_config` and `moduli` keep tracking the image). Without a volume on `/etc/ssh/host_keys`, recreating the container generates new keys and SSH clients will warn about a changed host key.
-- A `HEALTHCHECK` verifies sshd is listening on port 22. Check container health with `docker ps`.
-
----
-
-<div align="center">
-  <sub>Built with care · <a href="https://hub.docker.com/r/allamiro1/ansible-controller">Docker Hub</a> · <a href="https://ghcr.io/allamiro/ansible-controller">GHCR</a></sub>
-</div>
+Bug reports, documentation improvements, and fixes are welcome. [Open an issue](https://github.com/allamiro/ansible-controller/issues/new/choose) before a PR, then follow the [contribution and validation instructions](docs/README.md#contributing).

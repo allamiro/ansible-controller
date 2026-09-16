@@ -1,4 +1,6 @@
 sequenceDiagram
+    accTitle: Standalone bootstrap deployment
+    accDescr: The bootstrap standalone job manually releases one fetch-and-run request. A Runner job contacts the controller over pinned SSH, the controller fetches the commit and runs Ansible, then returns status and artifacts. The reusable project template uses separate sync and execution instead.
     actor M as Maintainer
     participant G as GitLab CE
     participant R as Runner manager

@@ -25,10 +25,10 @@
   "sequence": {
     "useMaxWidth": false,
     "wrap": true,
-    "actorMargin": 35,
+    "actorMargin": 90,
     "messageMargin": 28,
     "noteMargin": 12,
-    "width": 140,
+    "width": 200,
     "mirrorActors": false
   },
   "themeCSS": ".edgeLabel rect { opacity: 1 !important; }"

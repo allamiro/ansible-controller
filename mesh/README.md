@@ -46,29 +46,9 @@ protocol output stay silent. See [notice opt-outs](../SUPPORT.md#terminal-notice
 
 ## How it works
 
-```mermaid
-flowchart LR
-    subgraph ctl["Your control host"]
-        direction TB
-        ORC["<b>orchestrator</b><br/>your controller + dispatcher"]
-        RA["ingress <b>A</b>"]
-        RB["ingress <b>B</b>"]
-        ORC --> RA
-        ORC -. "automatic failover" .-> RB
-    end
+![Outbound node connections to two mesh ingress endpoints](../assets/diagrams/mesh-topology.svg)
 
-    subgraph z1["Closed network (e.g. DMZ)"]
-        N1["execution node"] -- "SSH" --> T1["targets"]
-    end
-    subgraph z2["Closed network (e.g. OT VLAN)"]
-        N2["execution node"] -- "SSH" --> T2["targets"]
-    end
-
-    N1 == "node dials OUT<br/>TCP 27199 / 27200, mTLS" ==> RA
-    N1 -.-> RB
-    N2 == "mTLS" ==> RA
-    N2 -.-> RB
-```
+Arrows show connection initiation. Signed work and results use those established connections. See the [architecture guide](../docs/ARCHITECTURE.md#mesh-connections-and-work-delivery) for the component and network boundaries.
 
 Five properties you can rely on (each one is re-proven automatically by the
 project's test suite on every change):
@@ -154,7 +134,7 @@ reached from that node over SSH.
 | Execution node | Control host | TCP 27199 | Outbound from the node network | Receptor mesh, ingress A (mTLS) |
 | Execution node | Control host | TCP 27200 | Outbound from the node network | Receptor mesh, ingress B (mTLS, redundancy) |
 | Execution node | Its Linux/Unix targets | TCP 22 | Inside the closed network | Ansible over SSH |
-| Execution node | Its Windows targets | TCP 5985/5986 | Inside the closed network | Ansible over WinRM (pywinrm/NTLM ships in the node image; see the main README's [WinRM section](../README.md#managing-windows-hosts-winrm)) |
+| Execution node | Its Windows targets | TCP 5985/5986 | Inside the closed network | Ansible over WinRM (pywinrm/NTLM ships in the node image; see the detailed guide's [WinRM section](../docs/README.md#managing-windows-hosts-winrm)) |
 | Controller | Directly-reachable targets | TCP 22 (SSH) / 5985–5986 (WinRM) | Direct path | Unchanged non-mesh runs |
 
 Nothing connects inbound into a closed network. The control host is the only
@@ -194,13 +174,7 @@ names.
 > PKI signs the CSRs (including the `.cnf` files and the SAN requirements
 > your CA must honour) and this step's scripts are not used.
 
-```mermaid
-flowchart LR
-    P1["<b>offline machine</b><br/>create the CA<br/><i>once</i>"] --> P2["<b>each node</b><br/>generate key + request<br/><i>key never leaves</i>"]
-    P2 --> P3["<b>offline machine</b><br/>verify the name,<br/>sign the request"]
-    P3 --> P4["<b>each node</b><br/>install the issued bundle"]
-    P4 --> P5["node is trusted<br/>and can join"]
-```
+![Execution-node certificate enrollment with an offline CA](../assets/diagrams/mesh-enrollment.svg)
 
 ```bash
 # ON THE OFFLINE MACHINE — once. Then keep ca.key there, and only there.
@@ -267,7 +241,7 @@ the `ansible` service at a pinned release of the published image (see
 # CONTROL HOST — orchestrator.override.yml (repo root)
 services:
   ansible:
-    image: ghcr.io/allamiro/ansible-orchestrator:v1.2.3   # pin your release
+    image: ghcr.io/allamiro/ansible-orchestrator:1.2.3   # pin your release
 ```
 
 Then `make mesh-up` again: compose replaces the container in place, keeping
@@ -504,11 +478,11 @@ All three ship per release to Docker Hub and GHCR — multi-arch
 the exact controller digest pushed by the same run, so a release is
 internally consistent by construction. **Pin a release tag (or digest) in
 production**; `latest` moves on every merge and is for evaluation only (the
-tag scheme is in the [root README](../README.md#image-tags)):
+tag scheme is in the [detailed guide](../docs/README.md#image-tags)):
 
 ```bash
-docker pull ghcr.io/allamiro/ansible-orchestrator:v1.2.3
-docker pull ghcr.io/allamiro/ansible-execution-node:v1.2.3
+docker pull ghcr.io/allamiro/ansible-orchestrator:1.2.3
+docker pull ghcr.io/allamiro/ansible-execution-node:1.2.3
 ```
 
 Prefer building from your checkout instead? The

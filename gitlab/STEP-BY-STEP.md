@@ -246,6 +246,13 @@ not require a separate multi-person deployment approval count.
 Open **Build → Pipelines**, select the reviewed commit, then open the chosen job.
 Check its commit and environment before running it.
 
+For current mesh pipelines, first finish the matching `sync-*` job and review its
+receipt. If sync is configured as manual, release it separately before deployment.
+Sync stages the exact commit without running Ansible; deployment verifies that
+snapshot and executes without another fetch. The screenshots below predate the
+separate sync stage. See the [current workflow diagram](diagrams/workflow.svg) and
+[both-gates configuration](../docs/LIFECYCLE.md#review-approve-sync-approve-execution).
+
 ![Pipeline with validation passed, mesh succeeded and direct still manual](screenshots/06-pipeline.png)
 
 ![deploy-direct manual action page with optional variables](screenshots/07-manual-job.png)
@@ -266,7 +273,8 @@ does not update #67. Use the new commit's pipeline after merging the setup chang
 
 For tagged releases, first configure protected `v*`, then open **Code → Tags →
 New tag**, enter a version such as `v1.0.0`, and select the exact reviewed commit.
-After the tag pipeline validates, manually release `tag-deploy`. A tag pipeline
+After the tag pipeline validates and `sync-tag-deploy` completes, manually release
+`tag-deploy`. A tag pipeline
 is a separate execution request even if the same commit ran from `main`.
 
 ![Create a release tag from the reviewed commit](screenshots/09-new-tag.png)

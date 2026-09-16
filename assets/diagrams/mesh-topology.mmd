@@ -1,0 +1,12 @@
+flowchart LR
+    accTitle: Mesh topology and connection initiation
+    accDescr: Execution nodes in separate networks open outbound mutual TLS connections to ingress A on TCP 27199 and ingress B on TCP 27200. Both ingress endpoints and the orchestrator run on the control host. The orchestrator uses local sockets. Each node reaches its local targets over SSH or WinRM.
+    D["DMZ NETWORK<br/>Execution node · exec-dmz-a<br/>Local targets via SSH or WinRM"]
+    N["OT NETWORK<br/>Execution node · exec-ot-a<br/>Local targets via SSH or WinRM"]
+    O["CONTROL HOST<br/>Orchestrator<br/>Select node and track job"]
+    I["CONTROL HOST · Receptor ingress<br/>A: TCP 27199<br/>B: TCP 27200<br/>Mutual TLS required"]
+    D -->|Outbound mTLS<br/>to both endpoints| I
+    N -->|Outbound mTLS<br/>to both endpoints| I
+    O -->|Local Unix sockets<br/>primary and failover| I
+    classDef execution fill:#edf8f2,stroke:#3d8164,color:#143b2b
+    class D,N execution

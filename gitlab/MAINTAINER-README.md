@@ -18,6 +18,10 @@ chosen deployment job. GitLab displays the result and downloadable artifacts.
 
 ![Branch, validation, Maintainer merge and manual deployment](diagrams/workflow.svg)
 
+The diagram shows the mesh/template route. The bootstrap seed's standalone
+`deploy-direct` remains one manual fetch-and-run job. For project creation,
+both manual gates and rollout examples, see the [lifecycle guide](../docs/LIFECYCLE.md).
+
 Keep platform setup with the host administrator. Use a named Maintainer account
 for daily reviews and releases; use root only for initial administration.
 
