@@ -33,6 +33,12 @@ def read_meta(job):
     return json.loads(b.docker('exec','gitlab-audit-controller-1','cat',f'/var/lib/mesh/jobs/{job}/meta.json',timeout=10))
 
 
+def collect(job):
+    project = json.loads((b.STATE / 'project.json').read_text())['path']
+    return b.docker('exec', 'gitlab-audit-controller-1', '/usr/local/lab-bin/ctl-run',
+                    '--env', 'audit-mesh', '--project', project, '--collect', job)
+
+
 if __name__=='__main__':
     result=[]
     thread=threading.Thread(target=lambda: result.append(v.run_case('interrupted-mesh-stream','audit-mesh','playbooks/slow.yml','failed')))
@@ -59,7 +65,7 @@ if __name__=='__main__':
             '--socket','/run/receptor/receptor.sock','work','list','--unit_id',meta['unit_id'],timeout=10))
         return any(unit.get('StateName') in ('Succeeded','Failed') for unit in units.values())
     poll(unit_finished, 'Original unit did not finish before collection', timeout=150)
-    output=b.docker('exec','gitlab-audit-controller-1','/usr/local/lab-bin/ctl-run','--collect',job)
+    output=collect(job)
     after=json.loads(b.docker('exec','gitlab-audit-controller-1','cat',f'/var/lib/mesh/jobs/{job}/meta.json'))
     assert after['status']=='succeeded',after['status']
     record={'case':'collect-interrupted-original-unit','mesh_job':job,'before':meta['status'],'after':after['status'],'pass':True}

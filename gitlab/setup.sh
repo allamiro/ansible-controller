@@ -232,13 +232,20 @@ say "controller->target key (./ssh/id_ed25519) + demo target's authorized_keys"
 # .gitlab-state/target-ssh as that target's ~/.ssh — else Test case A fails with
 # SSH authentication errors.
 mkdir -p ssh "$STATE/target-ssh"
+# When reusing the disposable lab, provision its actual target bind mount.
+# Never assume the production-shaped state directory is mounted by that target.
+target_dir="${DEMO_TARGET_SSH_DIR:-$PWD/$STATE/target-ssh}"
+if [ "${DIRECT_NETWORK:-gitlab-prod_directnet}" = gitlab-lab-ctl_directnet ] && [ -z "${DEMO_TARGET_SSH_DIR:-}" ]; then
+  target_dir=$(docker inspect gitlab-lab-direct-target --format '{{json .Mounts}}' |
+    jq -er '[.[] | select(.Type == "bind" and .Destination == "/home/ansible/.ssh")] | if length == 1 then .[0].Source else error("missing target SSH bind") end')
+fi
 timg=$(docker inspect --type container -f '{{.Config.Image}}' ansible-controller 2>/dev/null) || timg=
 [ -n "$timg" ] || timg=ansible-controller:e2e
 # One root-in-container step so ownership is correct on ANY host uid: the key
 # must be readable by the controller's ansible user (uid 1000), and the target's
 # sshd StrictModes requires its ~/.ssh + authorized_keys owned by uid 1000. The
 # CI authorized_keys (already written above) is re-owned to 1000 here too.
-docker run --rm -u 0 -v "$PWD/ssh":/ctl -v "$PWD/$STATE/target-ssh":/tgt \
+docker run --rm -u 0 -v "$PWD/ssh":/ctl -v "$target_dir":/tgt \
   -v "$PWD/$STATE/ci_ed25519.pub":/ci.pub:ro \
   --entrypoint bash "$timg" -euc '
     set -e
@@ -284,16 +291,24 @@ say "protected CI variables CTL_SSH_KEY / CTL_KNOWN_HOSTS"
 # scoped to this controller's environments (default prod-*): several
 # controllers share one project by scoping channel variables per environment
 ENV_SCOPE="${ENV_SCOPE:-prod-*}"
-setvar() { glab DELETE "/projects/$PID/variables/$1?filter%5Benvironment_scope%5D=$(printf %s "$ENV_SCOPE" | sed s/\*/%2A/)" >/dev/null 2>&1 || true
-  glab POST "/projects/$PID/variables" --data-urlencode "key=$1" \
-    --data-urlencode "value@$2" --data-urlencode "variable_type=file" \
-    --data-urlencode "protected=true" --data-urlencode "environment_scope=$ENV_SCOPE" >/dev/null; }
-setvar CTL_SSH_KEY "$STATE/ci_ed25519"
-setvar CTL_KNOWN_HOSTS "$STATE/ctl-known-hosts"
-glab DELETE "/projects/$PID/variables/CTL_HOST?filter%5Benvironment_scope%5D=$(printf %s "$ENV_SCOPE" | sed s/\*/%2A/)" >/dev/null 2>&1 || true
-glab POST "/projects/$PID/variables" --data-urlencode "key=CTL_HOST" \
-  --data-urlencode "value=$CTL_HOST" --data-urlencode "protected=true" \
-  --data-urlencode "environment_scope=$ENV_SCOPE" >/dev/null
+setvar() { # key type curl-value-argument; never delete a working variable
+  local scope route code method destination
+  scope=$(python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$ENV_SCOPE")
+  route="/projects/$PID/variables/$1?filter%5Benvironment_scope%5D=$scope"
+  code=$(curl -sS -K "$STATE/.curl-auth" -o /dev/null -w '%{http_code}' "$GLURL/api/v4$route") \
+    || die "cannot inspect variable $1; existing value retained"
+  case "$code" in
+    200) method=PUT; destination="$route";;
+    404) method=POST; destination="/projects/$PID/variables";;
+    *) die "variable lookup returned HTTP $code; existing value retained";;
+  esac
+  glab "$method" "$destination" --data-urlencode "key=$1" \
+    --data-urlencode "$3" --data-urlencode "variable_type=$2" \
+    --data-urlencode "protected=true" --data-urlencode "environment_scope=$ENV_SCOPE" >/dev/null
+}
+setvar CTL_SSH_KEY file "value@$STATE/ci_ed25519"
+setvar CTL_KNOWN_HOSTS file "value@$STATE/ctl-known-hosts"
+setvar CTL_HOST env_var "value=$CTL_HOST"
 
 say "runners (fresh bundled runner only; skipped when absent)"
 RUNNER_CONTAINER="${RUNNER_CONTAINER:-gitlab-prod-runner}"
@@ -329,7 +344,7 @@ if docker inspect --type container "$RUNNER_CONTAINER" >/dev/null 2>&1; then
               sed '$d' <<<"$detail" | jq -e --arg access "$a" --arg tag "$t" --argjson pid "$PID" \
                 '.paused == false and .access_level == $access and .locked == true
                  and .run_untagged == false and (.tag_list | index($tag) != null)
-                 and (.projects | any(.id == $pid))' >/dev/null || ok=0;;
+                 and (.projects | length == 1 and .[0].id == $pid)' >/dev/null || ok=0;;
             *) die "runner lookup returned HTTP $runner_code; registration left unchanged";;
           esac;;
       esac

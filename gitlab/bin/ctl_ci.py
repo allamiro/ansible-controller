@@ -197,15 +197,41 @@ def export(root, record):
                     add_file(archive, path, prefix + 'job_events/' + path.name)
 
 
+def collection_record(root, mesh, env, project):
+    """Require controller-owned provenance, including crash-before-link records."""
+    if not UUID.fullmatch(mesh):
+        raise ValueError('invalid mesh job identity')
+    for path in (root / 'records').glob('*.json'):
+        record = json.loads(path.read_text())
+        if (record.get('env'), record.get('project'), record.get('mode')) != (env, project, 'mesh'):
+            continue
+        run = record.get('run_id', '')
+        if not RUN_ID.fullmatch(run):
+            raise ValueError('invalid controller run identity')
+        recorded_mesh = record.get('mesh_job')
+        if not recorded_mesh:
+            log = root / 'logs' / (run + '.log')
+            if log.exists():
+                with log.open() as stream:
+                    recorded_mesh = next((match[1] for line in stream
+                        if (match := re.fullmatch(r'mesh-run: tracking job=(' + UUID.pattern + r')\n?', line))), '')
+        if recorded_mesh == mesh:
+            metadata = json.loads((MESH_JOBS / mesh / 'meta.json').read_text())
+            record.update(mesh_job=mesh, status=metadata['status'])
+            if metadata['status'] == 'succeeded':
+                record['rc'] = '0'
+            elif re.fullmatch(r'failed rc=[0-9]+', metadata['status']):
+                record['rc'] = metadata['status'].split('=')[1]
+            return record
+    raise ValueError('mesh job is not linked to this project and environment')
+
+
 def main():
-    if sys.argv[1] == 'collect-export':
+    if sys.argv[1] in ('collect-check', 'collect-export'):
         root = Path(sys.argv[2])
-        mesh = sys.argv[3]
-        if not UUID.fullmatch(mesh):
-            raise ValueError('invalid mesh job identity')
-        metadata = json.loads((MESH_JOBS / mesh / 'meta.json').read_text())
-        export(root, {'run_id': 'collection', 'mesh_job': mesh,
-                      'status': metadata['status'], 'mode': 'mesh'})
+        record = collection_record(root, *sys.argv[3:6])
+        if sys.argv[1] == 'collect-export':
+            export(root, record)
         return
     command, directory, env, project, pipeline, playbook, sha, *extra = sys.argv[1:]
     root = Path(directory)

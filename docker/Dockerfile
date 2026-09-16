@@ -138,6 +138,7 @@ RUN mkdir -p /etc/ssh/host_keys /etc/ssh/sshd_config.d \
       > /etc/ssh/sshd_config.d/10-host-keys.conf
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY docker/install-deps.sh /usr/local/bin/install-deps.sh
+COPY docker/controller-env.py /usr/local/bin/controller-env.py
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/install-deps.sh
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD bash -c 'exec 6<>/dev/tcp/127.0.0.1/22'

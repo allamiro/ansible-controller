@@ -29,13 +29,13 @@ for t in rsa ecdsa ed25519; do
   esac
 done
 
-# Prefer host-provided cfg/inventory if mounted under /configs
-if [ -f /configs/ansible.cfg ]; then
-  export ANSIBLE_CONFIG=/configs/ansible.cfg
-fi
+# ANSIBLE_CONFIG is fixed in the container environment (default /configs/ansible.cfg).
+# Never override it only in PID 1: later docker exec calls must see the same value.
+# Missing config files follow Ansible's normal discovery, including /etc/ansible.
+python3 /usr/local/bin/controller-env.py
 # Ensure log directory exists and is writable (volume is rw)
-mkdir -p /var/log/ansible || true
-chown -R ansible:ansible /var/log/ansible || true
+mkdir -p "${CONTROLLER_LOG_DIR:-/var/log/ansible}" || true
+chown -R "${CONTROLLER_USER:-ansible}:${CONTROLLER_USER:-ansible}" "${CONTROLLER_LOG_DIR:-/var/log/ansible}" || true
 
 # Declared dependency content is installed in the background so sshd startup is
 # never delayed and an offline host is not fatal. install-deps.sh holds the same
@@ -101,7 +101,7 @@ src="$(ansible-config dump 2>/dev/null | sed "s/$(printf '\033')\[[0-9;]*m//g" \
 if [ -n "$src" ]; then
   echo "entrypoint: WARNING managed-host SSH key verification is DISABLED by $src." >&3
   echo "entrypoint:          Set host_key_checking = True (and drop the StrictHostKeyChecking=no ssh_args) before" >&3
-  echo "entrypoint:          production use; see the known-hosts procedure in README.md. 'make preflight' rechecks." >&3
+  echo "entrypoint:          production use; see the known-hosts procedure in docs/README.md. 'make preflight' rechecks." >&3
 fi
 
 # .ssh is bind-mounted read-only from the host; do not attempt chmod/chown here.

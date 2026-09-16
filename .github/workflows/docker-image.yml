@@ -14,6 +14,11 @@ on:
   push:
     branches: ["main"]
 
+# Supersede only revisions of the same PR. Every release run has its own group.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   gitlab-regressions:
     name: GitLab command regressions
@@ -89,6 +94,8 @@ jobs:
           sleep 5
           docker exec ci-smoke ansible --version
           docker exec ci-smoke pgrep sshd
+      - name: Startup configuration and SSH regressions
+        run: bash .github/scripts/test-controller-startup.sh ansible-controller:ci
       - name: Controller preflight regressions
         run: |
           docker run --rm -v "$PWD":/repo:ro -w /repo \
@@ -115,8 +122,8 @@ jobs:
 
       # The gate that makes a CVE fix verifiable before it is merged. This image is
       # built with push: false, so a regression caught here never reaches a registry —
-      # unlike the scan in docker-publish.yml, which can only report after the manifest
-      # is already public.
+      # the publish workflow independently scans each architecture digest before
+      # moving public manifest tags.
       #
       # --ignore-unfixed: fail only on findings that can actually be acted on. Without
       # it, a newly disclosed HIGH with no upstream patch yet would block every merge

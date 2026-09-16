@@ -18,11 +18,8 @@ case "$*" in
   *) echo 'usage: preflight.sh [--strict]' >&2; exit 2;;
 esac
 
-# Nothing below is baked in. Every location is derived from the environment the
-# controller actually runs with, so a site that mounts its configuration
-# somewhere else, logs somewhere else, or runs Ansible as a different account
-# gets a correct report instead of one about paths it does not use. Each can
-# still be overridden explicitly.
+# Read the selected Ansible configuration, while matching the installer
+# defaults for dependency paths. Site directory/account overrides are explicit.
 nocolor() { sed "s/$(printf '\033')\[[0-9;]*m//g"; }
 read_config() {
   # Capture before filtering: a pipeline would hide ansible-config's failure.
@@ -40,7 +37,9 @@ if [ -z "$CONFIG_FILE" ]; then
   CONFIG_FILE=$(dump | sed -n 's/^CONFIG_FILE(.*) = \(.*\)/\1/p' | head -1)
 fi
 [ "$CONFIG_FILE" = "None" ] && CONFIG_FILE=""
-CONFIG_DIR="${CONTROLLER_CONFIG_DIR:-$([ -n "$CONFIG_FILE" ] && dirname "$CONFIG_FILE" || echo /configs)}"
+# Requirements are independent of the selected Ansible configuration file.
+# Match install-deps.sh, including its backward-compatible /configs default.
+CONFIG_DIR="${CONTROLLER_CONFIG_DIR:-/configs}"
 
 # An image built before ANSIBLE_CONFIG was set in the Dockerfile — the published
 # image this is advertised to work against — gives `docker exec` no config at
@@ -154,7 +153,7 @@ if [ -f "$vp" ]; then
 elif [ -n "$vault_configured" ]; then
   bad "$vp" "configured Vault password file does not exist"
 else
-  note "vault password" "not configured (set ANSIBLE_VAULT_PASSWORD or $CONFIG_DIR/.vault_pass)"
+  note "vault password" "not configured (set ANSIBLE_VAULT_PASSWORD or /configs/.vault_pass)"
 fi
 
 # ---- inventory -------------------------------------------------------------

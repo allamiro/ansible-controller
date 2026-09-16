@@ -22,6 +22,11 @@ on:
     branches: ["main"]
   workflow_dispatch: {}
 
+# Supersede only revisions of the same PR. Every release run has its own group.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   # Each platform builds natively (no QEMU emulation — arm64 under QEMU was ~5x
   # slower). Non-PR builds push by digest; the merge job stitches the digests
@@ -36,7 +41,7 @@ jobs:
           - platform: linux/arm64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    timeout-minutes: 45
     permissions:
       contents: read
       packages: write   # required to push to ghcr.io
@@ -147,6 +152,27 @@ jobs:
           cache-to: type=gha,mode=max,scope=mesh-${{ matrix.platform }}
           outputs: type=image,"name=docker.io/${{ secrets.DOCKERHUB_USERNAME }}/ansible-execution-node,ghcr.io/${{ github.repository_owner }}/ansible-execution-node",push-by-digest=true,name-canonical=true,push=true
 
+      - uses: ./.github/actions/install-trivy
+        if: github.event_name != 'pull_request'
+
+      - name: Scan every architecture before promoting public tags
+        if: github.event_name != 'pull_request'
+        env:
+          CONTROLLER_DIGEST: ${{ steps.build.outputs.digest }}
+          ORCHESTRATOR_DIGEST: ${{ steps.build-orchestrator.outputs.digest }}
+          NODE_DIGEST: ${{ steps.build-execution-node.outputs.digest }}
+          REGISTRY_OWNER: ${{ github.repository_owner }}
+          IMAGE_PLATFORM: ${{ matrix.platform }}
+        run: |
+          for pair in "ansible-controller $CONTROLLER_DIGEST" \
+                      "ansible-orchestrator $ORCHESTRATOR_DIGEST" \
+                      "ansible-execution-node $NODE_DIGEST"; do
+            read -r name digest <<< "$pair"
+            trivy image --platform "$IMAGE_PLATFORM" --severity CRITICAL,HIGH \
+              --ignore-unfixed --exit-code 1 --timeout 10m \
+              "ghcr.io/$REGISTRY_OWNER/$name@$digest"
+          done
+
       # One subdirectory per image: the merge job reassembles per-image manifest
       # lists from these, so the digests must stay attributable to their image.
       - name: Export digests
@@ -171,18 +197,18 @@ jobs:
     if: github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest
-    # 15 sufficed for one image; the job now stitches, signs, and Trivy-scans
-    # three per registry, and the backstop scan alone can take a few minutes
-    # per image on a cold DB.
+    # Three manifest lists per registry and their signature checks. All
+    # architecture digests have passed the scan in the build job.
     timeout-minutes: 25
     permissions:
       contents: read
       packages: write
       id-token: write   # keyless cosign signing via GitHub OIDC
+      checks: read      # gh run watch
       actions: read     # read the Auto-tag run's status (see Resolve release version)
 
     steps:
-      - uses: actions/checkout@v7   # .trivyignore, and the tag lookup below
+      - uses: actions/checkout@v7   # tag lookup below
         with:
           fetch-depth: 0   # tags are not fetched by a shallow clone
 
@@ -315,7 +341,7 @@ jobs:
       # invalid character 'u' looking for beginning of value"); the same job,
       # re-run unchanged an hour later, signed all six. By this step the
       # manifests are already pushed and tagged, so a one-shot failure leaves a
-      # release public but unsigned — and the Trivy backstop below never runs.
+      # release public but unsigned.
       # Retry with backoff instead; a run that still cannot sign after ~100s of
       # retries is a real outage and fails.
       #
@@ -356,27 +382,6 @@ jobs:
             done
           done
 
-      - uses: ./.github/actions/install-trivy
-
-      # Backstop, not the primary gate: by the time this runs the manifest is already
-      # pushed and tagged, so a failure here means "a published image regressed, go pull
-      # the tag" rather than "the bad image was stopped". The gate that actually blocks a
-      # regression is the same scan in docker-image.yml, which runs against a PR build
-      # with push: false. This one still fails loudly — it previously ran with
-      # --exit-code 0 and scrolled past in a green run, which is how a scanner stops
-      # being a signal. See docker-image.yml for why --ignore-unfixed.
-      - name: Fail on CRITICAL/HIGH CVEs in the published images (Trivy)
-        run: |
-          tag="sha-$(echo '${{ github.sha }}' | cut -c1-7)"
-          for name in ansible-controller ansible-orchestrator ansible-execution-node; do
-            trivy image \
-              --severity CRITICAL,HIGH \
-              --ignore-unfixed \
-              --exit-code 1 \
-              --timeout 10m \
-              "ghcr.io/${{ github.repository_owner }}/${name}:${tag}"
-          done
-
   # ---- Docker Hub overviews for all three images (the README tab on Hub) ----
   # Hub cannot derive an overview from an image. Track every page in this repo
   # so controller and mesh documentation follow the same reviewed release path.
@@ -396,7 +401,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-    # Serialize each page's uploads, then reject stale commits inside the lock.
+    # Serialize uploads and publish the newest successful revision inside the lock.
     # Concurrency alone does not order runs: an older build can finish later.
     # Keep in-flight API writes intact; a newer eligible run updates them next.
     concurrency:
@@ -406,21 +411,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # short: the one-liner under the repository name (Hub caps it at 100 bytes)
           - image: ansible-controller
-            short: "Community Ansible controller on Ubuntu 26.04: SSH/WinRM, mounted configuration, amd64 and arm64."
           - image: ansible-orchestrator
-            short: "Ansible mesh orchestrator: signed dispatch, optional Git sync/approval workflow and result reports."
           - image: ansible-execution-node
-            short: "Ansible mesh execution node: signed jobs over outbound mTLS, SSH/WinRM targets, no running sshd."
     steps:
       - uses: actions/checkout@v7
 
-      - name: Reject stale overview revisions
+      - name: Select latest published overview revision
         id: overview-revision
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          OVERVIEW_IMAGE: ${{ matrix.image }}
         run: |
           # A newer commit must not block this upload until its images publish.
           # Include prior attempts: retrying failed overview jobs can reuse a
@@ -444,19 +446,24 @@ jobs:
             echo "::error::Cannot identify the latest published main revision."
             exit 1
           fi
-          if [ "$(git rev-parse HEAD)" = "$latest_published" ]; then
-            echo "publish=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "publish=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Skipping an older overview revision; newer main images have already published."
-          fi
+          # A queued latest job can be displaced by a slower older build.
+          # Whichever job gets the lock publishes the selected latest content.
+          git fetch --no-tags origin "$latest_published"
+          git checkout --detach FETCH_HEAD
+          python3 - "$OVERVIEW_IMAGE" >> "$GITHUB_OUTPUT" <<'PYOVERVIEW'
+          import json, sys
+          with open('.github/dockerhub/descriptions.json') as stream:
+              short = json.load(stream)[sys.argv[1]]
+          if not isinstance(short, str) or '\n' in short or '\r' in short or len(short.encode()) > 100:
+              raise ValueError('invalid Docker Hub short description')
+          print('short=' + short)
+          PYOVERVIEW
 
       - name: Push overview to Docker Hub
-        if: steps.overview-revision.outputs.publish == 'true'
         uses: peter-evans/dockerhub-description@v5
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
           repository: ${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.image }}
           readme-filepath: .github/dockerhub/${{ matrix.image }}.md
-          short-description: ${{ matrix.short }}
+          short-description: ${{ steps.overview-revision.outputs.short }}

@@ -100,7 +100,8 @@ review, because bootstrap does not overwrite a populated repository.
 Cancellation or a wait deadline does not prove the remote play stopped.
 Keep the mesh UUID from the job trace. Open the manual `collect` job, set
 `JOB_ID` to that UUID, and run it. The job calls `ctl-run --collect` over SSH
-and uploads the original result files.
+with `--env lab-mesh --project "$CI_PROJECT_PATH"` and uploads the original result
+files. Update older collection jobs to supply both provenance arguments.
 
 `submit-ambiguous` is different. The record carries no unit id, so the CI
 `collect` job has nothing to re-attach to, and `ctl-run` refuses every later

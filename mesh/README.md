@@ -320,6 +320,24 @@ keeps the historical fail-fast behaviour.
 `/usr/local/mesh/bin/mesh-run`, inside the orchestrator; call it directly for
 flags `make` doesn't surface, like `--jobs-dir`.)
 
+To carry controller-installed collections (for example `ansible.windows`) and
+configuration, use the dispatcher flags explicitly; `make mesh-run` does not pass
+them. Install the required collection with `make galaxy` first, then, after
+provisioning target trust/credentials and any absolute config paths on the node:
+
+```bash
+docker exec -i ansible-controller /usr/local/mesh/bin/mesh-run \
+  --node exec-dmz-a --playbook /configs/playbooks/site.yml \
+  --inventory /configs/inventory/dmz \
+  --galaxy-dir /configs/.galaxy --ansible-cfg /configs/ansible.cfg
+```
+
+Use an inventory directory to carry its adjacent variables and plugin files.
+With `--project-dir` (as used by GitLab), inventory inside that project retains
+its original relative path, so a selected file keeps its siblings without
+automatically selecting other inventory files. Omit `--ansible-cfg` if the project
+already includes one. Node Python dependencies still require a site image.
+
 What you get back:
 
 - **Live output** — the playbook's events stream back to your terminal as it
@@ -343,10 +361,11 @@ What you get back:
   copy is destroyed by the worker itself the moment execution finishes, even
   if the controller never reconnects).
 
-**A job never runs twice.** If a submission provably failed to leave the
+**No automatic resubmission after an attempt.** If a submission provably failed to leave the
 control host, it can be retried elsewhere — but once a node has (or even *may*
 have) accepted it, it is never re-sent. A network blip mid-job can cost you a
-retry you do by hand; it can never silently run your playbook twice.
+result stream. Collect or reconcile that original job before a manual retry;
+a new invocation can duplicate work whose outcome is still unknown.
 
 ### Pools and zones
 

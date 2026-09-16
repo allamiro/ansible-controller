@@ -35,6 +35,8 @@ import json, os, pathlib, sys
 p = pathlib.Path(sys.argv[2]) / 'project'
 pathlib.Path(os.environ['TRANSMIT_CAPTURE']).write_text(json.dumps({
     'playbook': sys.argv[4],
+    'env': json.loads((p.parent / 'env/envvars').read_text()) if (p.parent / 'env/envvars').exists() else {},
+    'detached_inventory': (p.parent / 'inventory').exists(),
     'files': {str(f.relative_to(p)): f.read_text() for f in p.rglob('*') if f.is_file()}
 }))
 print('fixture payload')
@@ -72,6 +74,19 @@ print('fixture payload')
         self.assertEqual(capture['playbook'], 'playbooks/site.yml')
         self.assertIn('roles/demo/tasks/main.yml', capture['files'])
         self.assertIn('ansible.cfg', capture['files'])
+        self.assertEqual(capture['env'], {'ANSIBLE_INVENTORY': 'inventory.ini'})
+        self.assertFalse(capture['detached_inventory'])
+
+    def test_file_inventory_retains_siblings_without_selecting_other_sources(self):
+        (self.project / 'group_vars').mkdir()
+        (self.project / 'group_vars/all.yml').write_text('marker: fixture\n')
+        (self.project / 'other.ini').write_text('do-not-select\n')
+        self.run_fixture(self.project / 'playbooks/site.yml', '--project-dir', str(self.project))
+        capture = json.loads(self.capture.read_text())
+        self.assertEqual(capture['env'], {'ANSIBLE_INVENTORY': 'inventory.ini'})
+        self.assertFalse(capture['detached_inventory'])
+        self.assertIn('group_vars/all.yml', capture['files'])
+        self.assertIn('other.ini', capture['files'])
 
     def test_default_retains_playbook_directory_and_resolved_alias(self):
         alias = self.base / 'alias.yml'
@@ -80,6 +95,21 @@ print('fixture payload')
         capture = json.loads(self.capture.read_text())
         self.assertEqual(capture['playbook'], 'site.yml')
         self.assertEqual(set(capture['files']), {'site.yml'})
+
+    def test_inventory_alias_retains_plugin_suffix_and_adjacent_variables(self):
+        (self.project / 'shared').mkdir()
+        (self.project / 'shared/config.yml').write_text('plugin: amazon.aws.aws_ec2\n')
+        (self.project / 'inventory').mkdir()
+        alias = self.project / 'inventory/prod.aws_ec2.yml'
+        alias.symlink_to('../shared/config.yml')
+        (alias.parent / 'group_vars').mkdir()
+        (alias.parent / 'group_vars/all.yml').write_text('marker: beside-alias\n')
+        self.run_fixture(self.project / 'playbooks/site.yml', '--project-dir', str(self.project),
+                         '--inventory', str(alias))
+        capture = json.loads(self.capture.read_text())
+        self.assertEqual(capture['env'], {'ANSIBLE_INVENTORY':'inventory/prod.aws_ec2.yml'})
+        self.assertIn('inventory/group_vars/all.yml', capture['files'])
+        self.assertIn('shared/config.yml', capture['files'])
 
     def test_outside_project_playbook_is_refused_before_transmit(self):
         outside = self.base / 'outside.yml'

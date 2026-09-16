@@ -100,6 +100,11 @@ export GITLAB_HOST=gitlab.lab.local GITLAB_PORT=8929
 export CTL_HOST=ctl.prod.local
 ```
 
+Bootstrap discovers the reused lab target's actual SSH bind mount and installs
+the generated controller public key there. For a custom demo target, set
+`DEMO_TARGET_SSH_DIR` to its absolute host-side SSH directory. This only provisions
+the demo target; fleet access remains an administrator-managed credential.
+
 For the **fresh `gitlab/compose.gitlab.yml` stack**, use its names instead:
 
 ```bash
@@ -277,7 +282,8 @@ UUID from its log and inspect the controller's lifecycle state before retrying.
 
 For recovery, open the manual **collect** job on `main`, set `JOB_ID` to the
 original mesh UUID in the manual job's variable form, and run it. This calls
-`ctl-run --collect` through the same restricted SSH connection. A
+`ctl-run --collect` with the original `--env` and `--project` through the same
+restricted SSH connection. Update older collection jobs to pass both fields. A
 `submit-ambiguous` record has no unit to re-attach to: the host administrator
 resolves it on the controller with
 [Resolve an ambiguous submission](../mesh/RUNBOOK.md#resolve-an-ambiguous-submission)

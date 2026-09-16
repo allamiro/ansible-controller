@@ -209,4 +209,4 @@ collect:
       allow_failure: true
   script:
     - test -n "$JOB_ID" || { echo "Set JOB_ID to the existing mesh UUID"; exit 2; }
-    - bash scripts/deploy.sh --collect "$JOB_ID"
+    - bash scripts/deploy.sh --collect "$JOB_ID" --env lab-mesh --project "$CI_PROJECT_PATH"

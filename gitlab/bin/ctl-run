@@ -3,9 +3,9 @@
 #
 #   ctl-run --env <name> --project <group/path> --sha <40-hex> \
 #           --playbook <relative.yml> [--pipeline N --job N] [--wait N]
-#   ctl-run --collect <mesh-job-uuid>            # pass-through recovery
+#   ctl-run --env <name> --project <group/path> --collect <mesh-job-uuid>
 #   ctl-run --artifacts <same request arguments> # tar stream of result files
-#   ctl-run --collect <mesh-job-uuid> --artifacts # tar stream after recovery
+#   ctl-run --env <name> --project <group/path> --collect <mesh-job-uuid> --artifacts
 #   ctl-run --sync-only <request arguments>     # stage only, no execution
 #   ctl-run --execute-synced <request arguments> # verify and execute staged bytes
 #
@@ -96,25 +96,18 @@ if [ "$SYNC_ONLY$EXECUTE_SYNCED" != 00 ]; then
   [ -n "$PIPELINE" ] && [ -z "$COLLECT" ] || die "sync phases require --pipeline and cannot use --collect"
 fi
 
-# ---- recovery pass-through ---------------------------------------------------
-if [ -n "$COLLECT" ]; then
-  case "$COLLECT" in *[!0-9a-fA-F-]*|'') die "--collect takes a mesh job uuid";; esac
-  if [ "$ARTIFACTS" = 1 ]; then
-    exec python3 "$(dirname "$0")/ctl_ci.py" collect-export "$RUNS_DIR" "$COLLECT"
-  fi
-  exec "$MESH_RUN" --collect "$COLLECT" --jobs-dir "$MESH_JOBS"
-fi
-
 # ---- strict input grammars (reject shell/path games at the boundary) ----------
-[ -n "$ENVN" ] && [ -n "$PROJECT" ] && [ -n "$SHA" ] && [ -n "$PLAYBOOK" ] \
+[ -n "$ENVN" ] && [ -n "$PROJECT" ] && { [ -n "$COLLECT" ] || { [ -n "$SHA" ] && [ -n "$PLAYBOOK" ]; }; } \
   || die "usage: ctl-run --env <name> --project <group/path> --sha <40-hex> --playbook <rel.yml> [--pipeline N --job N --wait N]"
 case "$ENVN"     in *[!a-z0-9-]*|''|-*) die "env '$ENVN' invalid ([a-z0-9-]+)";; esac
 case "$PROJECT"  in *[!A-Za-z0-9._/-]*|''|/*|*..*) die "project '$PROJECT' invalid";; esac
+if [ -z "$COLLECT" ]; then
 case "$SHA"      in *[!0-9a-f]*|'') die "sha must be 40 lowercase hex";; esac
 [ "${#SHA}" -eq 40 ] || die "sha must be exactly 40 hex characters (got ${#SHA})"
 case "$PLAYBOOK" in *[!A-Za-z0-9._/-]*|''|/*|*..*) die "playbook '$PLAYBOOK' invalid (relative, no ..)";; esac
 case "$PLAYBOOK" in *.yml|*.yaml) ;; *) die "playbook must be a .yml/.yaml path";; esac
 case "$WAIT"     in *[!0-9]*|'') die "--wait must be a number";; esac
+fi
 for n in "$PIPELINE" "$JOB"; do case "$n" in *[!0-9]*) die "--pipeline/--job must be numeric";; esac; done
 
 # ---- environment map (admin-owned; python for real YAML parsing) --------------
@@ -142,7 +135,7 @@ MODE=$(efield mode); GITLAB_URL=$(efield gitlab_url); INV_REL=$(efield inventory
 SSH_KEY=$(efield ssh_key); NODE=$(efield node); POOL=$(efield pool); ZONE=$(efield zone)
 GALAXY=$(efield galaxy_dir); HOSTKEY_CHECKING=$(efield hostkey_checking)
 GIT_CA=$(efield git_ca_file)
-if [ -n "$GIT_CA" ] && [ "$EXECUTE_SYNCED" = 0 ] && [ "$ARTIFACTS" = 0 ]; then
+if [ -z "$COLLECT" ] && [ -n "$GIT_CA" ] && [ "$EXECUTE_SYNCED" = 0 ] && [ "$ARTIFACTS" = 0 ]; then
   [ -r "$GIT_CA" ] || die "environment Git CA file is unreadable"
   export GIT_SSL_CAINFO="$GIT_CA"
 fi
@@ -151,6 +144,17 @@ case "$MODE" in standalone|mesh) ;; *) die "environment '$ENVN' has invalid mode
 [ -n "$INV_REL" ] || die "environment '$ENVN' defines no inventory"
 case "$INV_REL" in /*|*..*) die "environment inventory path must be project-relative";; esac
 eallowed || die "project '$PROJECT' is not allowed in environment '$ENVN'"
+# Collection is authorized against the current map and the original record.
+if [ -n "$COLLECT" ]; then
+  [ "$MODE" = mesh ] || die "collection requires a mesh environment"
+  python3 "$(dirname "$0")/ctl_ci.py" collect-check "$RUNS_DIR" "$COLLECT" "$ENVN" "$PROJECT" \
+    || die "collection does not belong to this project and environment"
+  if [ "$ARTIFACTS" = 1 ]; then
+    exec python3 "$(dirname "$0")/ctl_ci.py" collect-export "$RUNS_DIR" "$COLLECT" "$ENVN" "$PROJECT"
+  fi
+  exec "$MESH_RUN" --collect "$COLLECT" --jobs-dir "$MESH_JOBS"
+fi
+
 TOKEN_FILE="$SECRETS_DIR/$ENVN.token"
 REQUIRE_SYNC=$(efield require_sync)
 case "$REQUIRE_SYNC" in ''|True|False) ;; *) die "require_sync must be a YAML boolean";; esac
@@ -230,7 +234,7 @@ PY
       *)  unresolved="$unresolved $job($s)";;
     esac
   done
-  [ -z "$unresolved" ] || die "unresolved mesh job(s):$unresolved — recover first (ctl-run --collect <uuid>; for submit-ambiguous follow the operator procedure in mesh/RUNBOOK.md 'Resolve an ambiguous submission'); refusing to dispatch"
+  [ -z "$unresolved" ] || die "unresolved mesh job(s):$unresolved — recover first (ctl-run --env '$ENVN' --project '$PROJECT' --collect <uuid>; for submit-ambiguous follow the operator procedure in mesh/RUNBOOK.md 'Resolve an ambiguous submission'); refusing to dispatch"
 fi
 
 # ---- reuse a reviewed, verified snapshot without another Git fetch -------------
@@ -365,8 +369,11 @@ if [ "$MODE" = standalone ]; then
   # explicitly overrides (e.g. a lab whose targets regenerate host keys) —
   # ctl-run never weakens a hardened configuration on its own
   [ -n "$HOSTKEY_CHECKING" ] && export ANSIBLE_HOST_KEY_CHECKING="$HOSTKEY_CHECKING"
-  # sudo strips the entrypoint's ANSIBLE_CONFIG. Restore the fixed site path
-  # when no explicit administrator configuration was provided.
+  # Restore administrator startup settings after sudo strips SSH's environment.
+  if [ -f /etc/profile.d/ansible-controller.sh ]; then
+    . /etc/profile.d/ansible-controller.sh
+  fi
+  # Compatibility with controller images predating persisted settings.
   if [ -z "${ANSIBLE_CONFIG:-}" ] && [ -f /configs/ansible.cfg ]; then
     export ANSIBLE_CONFIG=/configs/ansible.cfg
   fi

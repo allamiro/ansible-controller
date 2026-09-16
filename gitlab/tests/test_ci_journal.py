@@ -17,6 +17,24 @@ spec.loader.exec_module(ci)
 
 
 class JournalTests(unittest.TestCase):
+    def test_collection_requires_project_environment_and_original_record(self):
+        self.record.update(env='prod-mesh', project='group/project')
+        ci.atomic_json(self.root / 'records' / (self.run + '.json'), self.record)
+        ci.atomic_json(self.jobs / self.mesh / 'meta.json', {'status':'succeeded'})
+        record = ci.collection_record(self.root, self.mesh, 'prod-mesh', 'group/project')
+        self.assertEqual(record['mesh_job'], self.mesh)
+        self.assertEqual(record['rc'], '0')
+        ci.atomic_json(self.jobs / self.mesh / 'meta.json', {'status':'failed rc=7'})
+        self.assertEqual(ci.collection_record(self.root, self.mesh, 'prod-mesh', 'group/project')['rc'], '7')
+        for env, project in [('other', 'group/project'), ('prod-mesh', 'other/project')]:
+            with self.assertRaises(ValueError):
+                ci.collection_record(self.root, self.mesh, env, project)
+        self.record['mesh_job'] = ''
+        ci.atomic_json(self.root / 'records' / (self.run + '.json'), self.record)
+        (self.root / 'logs').mkdir()
+        (self.root / 'logs' / (self.run + '.log')).write_text('mesh-run: tracking job=' + self.mesh + '\n')
+        self.assertEqual(ci.collection_record(self.root, self.mesh, 'prod-mesh', 'group/project')['mesh_job'], self.mesh)
+
     def test_empty_mesh_jobs_uses_default(self):
         with patch.dict(os.environ, {'CTL_RUN_MESH_JOBS': ''}):
             fresh = importlib.util.module_from_spec(spec)

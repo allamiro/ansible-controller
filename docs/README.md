@@ -626,6 +626,35 @@ docker exec -it ansible-controller bash -lc 'ansible-playbook /configs/playbooks
 
 ---
 
+## Configuration selection and startup paths
+
+Set `ANSIBLE_CONFIG` in the container environment to an absolute configuration
+path. An explicit value is preserved at startup, in `docker exec`, SSH sessions,
+and the GitLab standalone wrapper after sudo. The image default is
+`/configs/ansible.cfg` (build override: `ANSIBLE_CONFIG_PATH`). If that path is
+absent, Ansible uses its normal working-directory, user and `/etc/ansible`
+discovery; mount the intended file consistently for repeatable execution.
+
+| Setting | Controls | Default |
+|---|---|---|
+| `ANSIBLE_CONFIG` | Ansible configuration selection | `/configs/ansible.cfg` |
+| `CONTROLLER_CONFIG_DIR` | Dependency requirements and Galaxy install/lock paths, also inspected by preflight | `/configs` |
+| `CONTROLLER_LOG_DIR` | Dependency logs and status records | `/var/log/ansible` |
+| `CONTROLLER_USER` / `CONTROLLER_HOME` | Dependency ownership / preflight account and home inspection | `ansible` / that account's home |
+
+Selecting `/site/ansible.cfg` does not relocate requirements automatically. Set
+`CONTROLLER_CONFIG_DIR=/site` as well if its requirements live there; update
+`roles_path` and `collections_path` in the configuration to match their install
+location. These public settings are persisted for SSH and login shells on startup.
+Use absolute paths without newlines, double quotes, backslashes, dollar signs or
+backticks so PAM and shell sessions interpret them consistently.
+
+Vault provisioning stays at `/configs/.vault_pass` (source) and
+`/home/ansible/.vault_pass` (private runtime copy), or reads
+`ANSIBLE_VAULT_PASSWORD`. The directory/account overrides above do not relocate
+Vault files or create a different SSH account. Configure an explicit Vault
+password-file path in Ansible when using a separately provisioned site credential.
+
 ## Preflight: is the controller ready?
 
 `make preflight` answers, from inside the running container, the question that
