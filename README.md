@@ -25,7 +25,7 @@ Ubuntu 26.04-based Docker image that packages Ansible, OpenSSH, and everything n
 - **Multi-platform** — ships `linux/amd64` and `linux/arm64` (Apple Silicon, AWS Graviton)
 - **Auto-versioned** — every push to `main` is automatically tagged via conventional commits
 - **Published to two registries** — Docker Hub and GitHub Container Registry (GHCR)
-- **Security hardened** — non-root `ansible` user, `PermitRootLogin no`, pip-upgraded CVE packages, unreachable vendored binaries stripped
+- **SSH access controls** — `ansible` login account, `PermitRootLogin no`, pip-upgraded CVE packages, unused vendored binaries stripped; container startup and `docker exec` run as root
 - **Distributed execution mesh (opt-in)** — dispatch playbooks over a mutually-authenticated [Receptor](https://github.com/ansible/receptor) mesh to execution nodes inside networks the controller cannot route to ([details](#distributed-execution-mesh))
 
 ---
@@ -48,6 +48,7 @@ Ubuntu 26.04-based Docker image that packages Ansible, OpenSSH, and everything n
 - [Cloud dynamic inventory (AWS / Azure / GCP)](#cloud-dynamic-inventory-aws--azure--gcp)
 - [Managing Windows hosts (WinRM)](#managing-windows-hosts-winrm)
 - [Ansible Vault](#ansible-vault)
+- [Controller preflight](#preflight-is-the-controller-ready)
 - [Linting playbooks](#linting-playbooks)
 - [Faster runs with Mitogen](#faster-runs-with-mitogen)
 - [SSH keys for managed hosts](#ssh-keys-for-managed-hosts)
@@ -79,15 +80,21 @@ You write and store your playbooks on your host machine. The container provides 
 Host machine                        Container
 ──────────────────────────────      ────────────────────────────────
 ~/my-project/
-  playbooks/        ──mount──→      /configs/
-    site.yml                          playbooks/site.yml
+  configs/          ──mount──→      /configs/
+    ansible.cfg                       ansible.cfg
+    inventory/hosts.ini               inventory/hosts.ini
+  playbooks/        ──mount──→      /configs/playbooks/
+    site.yml                          site.yml
     roles/                            roles/
-  inventory/        ──mount──→        inventory/hosts.ini
   ssh/              ──mount──→      /home/ansible/.ssh/
     id_ed25519                        id_ed25519  (used to reach remote hosts)
+  logs/             ──mount──→      /var/log/ansible/
 ```
 
-The `docker-compose.yml` included in the repo already has all four mounts configured. If you add playbooks outside the `playbooks/` directory, add an extra volume entry for that path.
+The `docker-compose.yml` included in the repo mounts `configs/` at `/configs`,
+`playbooks/` at `/configs/playbooks`, `ssh/` at `/home/ansible/.ssh`, and `logs/`
+at `/var/log/ansible`. A named volume also persists the controller's SSH host keys.
+If you add playbooks outside the `playbooks/` directory, add an extra volume entry for that path.
 
 ---
 
@@ -229,6 +236,7 @@ docker pull ghcr.io/allamiro/ansible-controller:latest
 | `make galaxy-force` | Re-install / update Galaxy content to the pinned versions |
 | `make pip` | Install extra Python packages from `configs/pip-requirements.txt` |
 | `make lint` | Lint everything under `playbooks/` with ansible-lint |
+| `make preflight` / `make preflight STRICT=1` | Check controller readiness; strict mode also fails on risks |
 | `make mesh-up` / `mesh-down` | Start/stop the [distributed execution mesh](mesh/README.md) control plane |
 | `make mesh-status` / `mesh-ping NODE=x` | Mesh health from both ingresses / round-trip one node |
 | `make mesh-run NODE=x PLAYBOOK=y.yml` | Dispatch a playbook to a mesh node (or `POOL=` / `ZONE=`) |
@@ -680,15 +688,34 @@ It reports the startup dependency installs (Galaxy and pip content is installed 
 the **background**, so a play dispatched immediately after `make up` can outrun it),
 whether managed-host SSH key verification is on, the Vault password file and its
 permissions, whether the configured inventory parses and resolves hosts, and the
-mode of any target SSH private key. Every location is derived from the running
-configuration rather than assumed, so it stays correct if you mount your
-configuration or logs elsewhere; `CONTROLLER_CONFIG_DIR`, `CONTROLLER_LOG_DIR`,
-`CONTROLLER_USER` and `CONTROLLER_HOME` override the derivation.
+mode and readability of target SSH private keys for the controller login account.
+It checks the configured Vault password file and SSH connection options as well
+as global host-key checking. Configuration errors and unparseable or missing
+inventory sources fail the check, even when another source provides hosts. A
+valid inventory that currently resolves no hosts is a risk (fatal in strict mode).
+
+`CONTROLLER_CONFIG_DIR` overrides the configuration directory used for dependency
+status checks; `CONTROLLER_LOG_DIR` selects their logs (default `/var/log/ansible`).
+These overrides must match the dependency installer's settings. They do not move
+the entrypoint's Vault files or change its configuration selection.
+`CONTROLLER_USER` (default `ansible`) and `CONTROLLER_HOME` select the local
+account and home inspected by preflight. Run as root or that account to check key
+readability. Preflight checks controller configuration; it does not connect to
+targets or validate per-host credential and SSH-option overrides in inventory.
 
 Startup installs no longer fail silently: a failure is recorded beside its log and
 announced in `docker logs`, and `make preflight` reports it afterwards. The
 controller also warns at every start when managed-host key verification is
 disabled, naming the file that decided it.
+
+The isolated regression suite runs in both architecture builds in CI. To run it
+against an existing local controller image without starting services:
+
+```bash
+docker run --rm -v "$PWD":/repo:ro -w /repo -e PYTHONDONTWRITEBYTECODE=1 \
+  --entrypoint python3 ansible-controller:local \
+  -m unittest discover -s docker/tests -v
+```
 
 ## Linting playbooks
 
@@ -994,12 +1021,12 @@ This project is licensed under the [Apache License 2.0](LICENSE).
 ## Notes
 
 - **Base image:** Ubuntu 26.04 LTS — standard security support until 2031, extended further with Ubuntu Pro.
-- **CVE surface:** the build strips two sources of findings that `apt-get upgrade` cannot reach, and the image scans clean at CRITICAL/HIGH.
+- **CVE surface:** the build strips two sources of findings that `apt-get upgrade` cannot reach. CI rejects fixable CRITICAL/HIGH findings, subject to the repository's documented scan exceptions; vulnerability status depends on the image digest and scan date.
   - Canonical drops `/usr/bin/pebble` into the OCI rootfs outside dpkg, so no package owns it and it can never be patched in place. This image runs `entrypoint.sh` + sshd as PID 1 and never invokes pebble, so it is deleted along with `/var/lib/pebble` — taking eight Go stdlib CVEs with it.
   - pip bundles its own pinned copies of a few libraries under `pip/_vendor` and advertises them in `vendor.txt` and `bom.cdx.json`, which scanners read independently of what is actually installed. `docker/patch-pip-vendor.py` re-vendors msgpack from the patched release installed alongside it and deletes the vendored `pkg_resources` tree (dead code — pip declares that metadata backend unusable on Python 3.14+), updating both manifests to match. The script asserts its own result, so a future pip release that reshapes `_vendor` fails the build rather than silently reintroducing the findings. The redundant apt `python3-pip`, fully shadowed by the pip in `/usr/local`, is purged.
 - **Ansible:** the image ships the current `ansible-core` (via pip) plus the `ansible.posix` and `community.general` collections — not the ~280 MiB `ansible` community bundle. Declare any additional collections or roles in `configs/requirements.yml`; they are installed automatically at container start (or on demand with `make galaxy`) into the host-persisted `configs/.galaxy/` directory, no rebuild needed.
 - If `configs/ansible.cfg` exists on the host it is used automatically; otherwise the image default applies.
-- The `ansible` user (uid 1000) is the only user inside the container. `PermitRootLogin no` is enforced.
+- The `ansible` user (uid 1000) is the intended SSH login account. `PermitRootLogin no` is enforced. Root and system accounts also exist; container startup and the documented `docker exec` commands run as root.
 - SSH host keys are generated on first container start (not baked into the image, so every deployment gets unique keys). Keys live in `/etc/ssh/host_keys`, and the compose file persists that directory in the `ssh-host-keys` volume so they survive container recreation (only the keys are persisted — `sshd_config` and `moduli` keep tracking the image). Without a volume on `/etc/ssh/host_keys`, recreating the container generates new keys and SSH clients will warn about a changed host key.
 - A `HEALTHCHECK` verifies sshd is listening on port 22. Check container health with `docker ps`.
 

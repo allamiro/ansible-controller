@@ -12,7 +12,11 @@
 #   --strict also fails on risky-but-deliberate settings, for production gating
 set -u
 strict=0
-[ "${1:-}" = "--strict" ] && strict=1
+case "$*" in
+  '') ;;
+  --strict) strict=1;;
+  *) echo 'usage: preflight.sh [--strict]' >&2; exit 2;;
+esac
 
 # Nothing below is baked in. Every location is derived from the environment the
 # controller actually runs with, so a site that mounts its configuration
@@ -20,7 +24,16 @@ strict=0
 # gets a correct report instead of one about paths it does not use. Each can
 # still be overridden explicitly.
 nocolor() { sed "s/$(printf '\033')\[[0-9;]*m//g"; }
-dump() { ansible-config dump 2>/dev/null | nocolor; }
+read_config() {
+  # Capture before filtering: a pipeline would hide ansible-config's failure.
+  if ! config_dump=$(ansible-config dump 2>/dev/null); then
+    echo 'preflight: FAILED — cannot read Ansible configuration' >&2
+    exit 1
+  fi
+  config_dump=$(printf '%s\n' "$config_dump" | nocolor)
+}
+dump() { printf '%s\n' "$config_dump"; }
+read_config
 
 CONFIG_FILE="${ANSIBLE_CONFIG:-}"
 if [ -z "$CONFIG_FILE" ]; then
@@ -39,6 +52,7 @@ if [ -z "$CONFIG_FILE" ] && [ -f "$CONFIG_DIR/ansible.cfg" ]; then
   export ANSIBLE_CONFIG
   CONFIG_FILE="$ANSIBLE_CONFIG"
   echo "    (using $CONFIG_FILE; this container's image does not set ANSIBLE_CONFIG)"
+  read_config
 fi
 
 # Deriving this from ansible's log_path was wrong: the entrypoint writes the
@@ -93,19 +107,29 @@ case "$hk" in
   False*) risk "host_key_checking" "DISABLED by ${hk#False } — any host key is accepted";;
   *)      note "host_key_checking" "could not be determined";;
 esac
-if dump | grep -q "StrictHostKeyChecking=no"; then
-  risk "ssh_args" "carries StrictHostKeyChecking=no, which overrides the above per connection"
+if ssh_config=$(ansible-config dump -t connection ssh 2>/dev/null); then
+  if printf '%s\n' "$ssh_config" | nocolor | grep -Ei "^ssh_(args|common_args|extra_args)\(.*StrictHostKeyChecking[=[:space:]]+(no|off|false)($|[[:space:]\"'])" >/dev/null; then
+    risk "SSH options" "disable StrictHostKeyChecking, overriding the global host-key policy"
+  fi
+else
+  bad "SSH options" "could not read SSH connection configuration"
 fi
 
 # ---- Ansible Vault ---------------------------------------------------------
 say "Ansible Vault password"
-vp="${ANSIBLE_VAULT_PASSWORD_FILE:-$RUN_HOME/.vault_pass}"
+vp=$(dump | sed -n 's/^DEFAULT_VAULT_PASSWORD_FILE(.*) = \(.*\)/\1/p' | head -1)
+case "$vp" in None) vp="";; esac
+vp="${ANSIBLE_VAULT_PASSWORD_FILE:-$vp}"
+vault_configured="$vp"
+vp="${vp:-$RUN_HOME/.vault_pass}"
 if [ -f "$vp" ]; then
   mode=$(stat -c %a "$vp" 2>/dev/null)
   case "$mode" in
     600|400) ok "$vp" "mode $mode";;
     *)       risk "$vp" "mode $mode — should be 600, readable only by its owner";;
   esac
+elif [ -n "$vault_configured" ]; then
+  bad "$vp" "configured Vault password file does not exist"
 else
   note "vault password" "not configured (set ANSIBLE_VAULT_PASSWORD or $CONFIG_DIR/.vault_pass)"
 fi
@@ -127,24 +151,49 @@ print("\n".join(str(x) for x in (v if isinstance(v, (list, tuple)) else [v])))
 PY
 )
 [ -n "$inv_list" ] || inv_list="$CONFIG_DIR/inventory/hosts.ini"
-missing=""
-for src in $inv_list; do [ -e "$src" ] || missing="$missing $src"; done
 label=$(printf '%s' "$inv_list" | tr '\n' ' ')
-if hosts=$(ansible-inventory --list 2>/dev/null | python3 -c 'import json,sys; print(len(json.load(sys.stdin).get("_meta",{}).get("hostvars",{})))' 2>/dev/null); then
+# Ansible normally warns and skips invalid sources, even if another source
+# works. A readiness check must reject that partial inventory. Preserve the
+# command's exit code separately from JSON parsing, and never print hostvars.
+if inventory_json=$(ANSIBLE_INVENTORY_ANY_UNPARSED_IS_FAILED=True ansible-inventory --list 2>/dev/null) &&
+   hosts=$(printf '%s\n' "$inventory_json" | python3 -c '
+import json, sys
+inventory = json.load(sys.stdin)
+hosts = set(inventory.get("_meta", {}).get("hostvars", {}))
+for name, group in inventory.items():
+    if name != "_meta":
+        hosts.update(group.get("hosts", []))
+print(len(hosts))
+' 2>/dev/null); then
   if [ "${hosts:-0}" -gt 0 ]; then
     ok "$label" "$hosts host(s)"
-    [ -z "$missing" ] || note "absent source(s)" "$missing"
   else
-    risk "$label" "parses, but resolves 0 hosts${missing:+ (absent:$missing)}"
+    risk "$label" "parses, but resolves 0 hosts"
   fi
 else
-  bad "$label" "configured inventory does not parse${missing:+ (absent:$missing)}"
+  bad "$label" "configured inventory does not parse completely"
 fi
 
 # ---- target SSH credentials ------------------------------------------------
 say "target SSH credentials"
 check_key() { # path label
   if [ ! -f "$1" ]; then bad "$1" "$2 does not exist"; return; fi
+  # docker exec runs as root, but SSH sessions use the controller account.
+  # A restrictive mode alone says nothing about access through a bind mount.
+  if [ "$(id -un)" = "$RUN_USER" ]; then
+    readable=0
+    [ -r "$1" ] && readable=1
+  elif [ "$(id -u)" = 0 ]; then
+    readable=0
+    runuser -u "$RUN_USER" -- test -r "$1" 2>/dev/null && readable=1
+  else
+    bad "$1" "cannot verify readability as $RUN_USER; run preflight as root or $RUN_USER"
+    return
+  fi
+  if [ "$readable" = 0 ]; then
+    bad "$1" "$2 is not readable by $RUN_USER"
+    return
+  fi
   mode=$(stat -c %a "$1" 2>/dev/null)
   case "$mode" in
     600|400) ok "$1" "$2, mode $mode";;
