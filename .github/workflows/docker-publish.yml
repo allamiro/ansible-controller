@@ -395,11 +395,10 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
-    # Two main pushes in quick succession run this job twice, and nothing in
-    # the Hub API orders them: the run that finishes LAST wins, which can be
-    # the older commit's overview. One group per image serialises the pushes;
-    # cancel-in-progress stays off so a run that already holds the API call
-    # completes, and a newer pending run then overwrites it in order.
+      actions: read
+    # Serialize each page's uploads, then reject stale commits inside the lock.
+    # Concurrency alone does not order runs: an older build can finish later.
+    # Keep in-flight API writes intact; a newer eligible run updates them next.
     concurrency:
       group: hub-overview-${{ matrix.image }}
       cancel-in-progress: false
@@ -417,7 +416,43 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Reject stale overview revisions
+        id: overview-revision
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # A newer commit must not block this upload until its images publish.
+          # Include prior attempts: retrying failed overview jobs can reuse a
+          # successful merge job from an earlier attempt of the same run.
+          runs=$(gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/docker-publish.yml/runs?branch=main&per_page=100" \
+            --jq '.workflow_runs[] | select(.event == "push" or .event == "workflow_dispatch") | [.run_number, .id, .head_sha] | @tsv')
+          runs=$(sort -k1,1nr <<< "$runs")
+          latest_published=""
+          while read -r number run_id revision; do
+            [ -n "$run_id" ] || continue
+            published=$(gh api --paginate \
+              "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs?filter=all&per_page=100" \
+              --jq '.jobs[] | select(.name == "merge" and .conclusion == "success") | .id')
+            if [ -n "$published" ]; then
+              latest_published="$revision"
+              break
+            fi
+          done <<< "$runs"
+          if [ -z "$latest_published" ]; then
+            echo "::error::Cannot identify the latest published main revision."
+            exit 1
+          fi
+          if [ "$(git rev-parse HEAD)" = "$latest_published" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping an older overview revision; newer main images have already published."
+          fi
+
       - name: Push overview to Docker Hub
+        if: steps.overview-revision.outputs.publish == 'true'
         uses: peter-evans/dockerhub-description@v5
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
