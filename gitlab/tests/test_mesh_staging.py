@@ -96,6 +96,21 @@ print('fixture payload')
         self.assertEqual(capture['playbook'], 'site.yml')
         self.assertEqual(set(capture['files']), {'site.yml'})
 
+    def test_inventory_alias_retains_plugin_suffix_and_adjacent_variables(self):
+        (self.project / 'shared').mkdir()
+        (self.project / 'shared/config.yml').write_text('plugin: amazon.aws.aws_ec2\n')
+        (self.project / 'inventory').mkdir()
+        alias = self.project / 'inventory/prod.aws_ec2.yml'
+        alias.symlink_to('../shared/config.yml')
+        (alias.parent / 'group_vars').mkdir()
+        (alias.parent / 'group_vars/all.yml').write_text('marker: beside-alias\n')
+        self.run_fixture(self.project / 'playbooks/site.yml', '--project-dir', str(self.project),
+                         '--inventory', str(alias))
+        capture = json.loads(self.capture.read_text())
+        self.assertEqual(capture['env'], {'ANSIBLE_INVENTORY':'inventory/prod.aws_ec2.yml'})
+        self.assertIn('inventory/group_vars/all.yml', capture['files'])
+        self.assertIn('shared/config.yml', capture['files'])
+
     def test_outside_project_playbook_is_refused_before_transmit(self):
         outside = self.base / 'outside.yml'
         outside.write_text('[]\n')

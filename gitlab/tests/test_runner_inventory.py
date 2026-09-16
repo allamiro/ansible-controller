@@ -11,6 +11,12 @@ import unittest
 @unittest.skipUnless(shutil.which('ansible-runner'), 'requires mesh image runtime')
 class RunnerInventoryTests(unittest.TestCase):
     def test_project_file_keeps_variables_and_excludes_other_inventory(self):
+        self.run_inventory(False)
+
+    def test_inventory_alias_keeps_adjacent_variables(self):
+        self.run_inventory(True)
+
+    def run_inventory(self, alias):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source = root / 'source'
@@ -19,6 +25,10 @@ class RunnerInventoryTests(unittest.TestCase):
             (source / 'project/playbooks').mkdir()
             (source / 'env').mkdir()
             (inventory / 'prod.ini').write_text('[deployment]\nlocalhost ansible_connection=local\n')
+            if alias:
+                (source / 'project/shared').mkdir()
+                (inventory / 'prod.ini').rename(source / 'project/shared/hosts')
+                (inventory / 'prod.ini').symlink_to('../shared/hosts')
             (inventory / 'other.ini').write_text('[deployment]\nmust-not-run.example.invalid\n')
             (inventory / 'group_vars/all.yml').write_text('inventory_marker: adjacent\n')
             (source / 'project/playbooks/site.yml').write_text('''- hosts: deployment

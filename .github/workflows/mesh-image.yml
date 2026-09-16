@@ -34,6 +34,7 @@ on:
       - ".dockerignore"
       - ".trivyignore"
       - ".github/workflows/mesh-image.yml"
+      - "gitlab/tests/test_runner_inventory.py"
       - "!docker/**/*.md"
       - "!mesh/**/*.md"
   push:
@@ -44,6 +45,7 @@ on:
       - ".dockerignore"
       - ".trivyignore"
       - ".github/workflows/mesh-image.yml"
+      - "gitlab/tests/test_runner_inventory.py"
       - "!docker/**/*.md"
       - "!mesh/**/*.md"
 

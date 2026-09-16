@@ -831,13 +831,20 @@ cp -a "$PROJECT_REAL/." "$PDD/project/"
 # files (like configs/inventory/inventory.py loading its neighbours) must be
 # passed as its DIRECTORY, which is staged whole.
 INVENTORY_REAL=$(readlink -f "$INVENTORY")
-if [ -n "$PROJECT_DIR" ] && [[ "$INVENTORY_REAL" == "$PROJECT_REAL/"* ]]; then
+INVENTORY_REL=""
+if [ -n "$PROJECT_DIR" ]; then
+  INVENTORY_REL=$(realpath -s --relative-to="$(realpath -s "$PROJECT_DIR")" "$INVENTORY")
+  case "$INVENTORY_REL" in ../*|..|/*) INVENTORY_REL="";; esac
+fi
+if [ -n "$INVENTORY_REL" ] && [[ "$INVENTORY_REAL" == "$PROJECT_REAL/"* ]]; then
   # Keep the exact project source and siblings together. Runner's CLI turns
   # --inventory into a controller-absolute path, which cannot survive transport.
   # With no detached inventory directory, Ansible resolves this relative source
   # from Runner's project working directory on the node.
   rmdir "$PDD/inventory"
-  python3 - "${INVENTORY_REAL#"$PROJECT_REAL/"}" > "$PDD/env/envvars" <<'PYINVENTORY'
+  # Validate the resolved target, but retain the configured symlink name:
+  # inventory plugin suffixes and adjacent vars belong to that source path.
+  python3 - "$INVENTORY_REL" > "$PDD/env/envvars" <<'PYINVENTORY'
 import json, sys
 print(json.dumps({'ANSIBLE_INVENTORY': sys.argv[1]}))
 PYINVENTORY
