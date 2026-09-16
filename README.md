@@ -11,6 +11,9 @@
   [![Image Size](https://img.shields.io/docker/image-size/allamiro1/ansible-controller/latest)](https://hub.docker.com/r/allamiro1/ansible-controller)
   [![License](https://img.shields.io/github/license/allamiro/ansible-controller)](LICENSE)
   [![Latest Tag](https://img.shields.io/github/v/tag/allamiro/ansible-controller?label=version)](https://github.com/allamiro/ansible-controller/releases)
+
+  [![GitHub Sponsors](https://img.shields.io/badge/Sponsor-on%20GitHub-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/allamiro)
+  [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/pcileky2q)
 </div>
 
 ---
@@ -56,6 +59,7 @@ Ubuntu 26.04-based Docker image that packages Ansible, OpenSSH, and everything n
 - [Logs](#logs)
 - [Versioning and releases](#versioning-and-releases)
 - [Contributing](#contributing)
+- [Support this project](#support-this-project)
 - [License](#license)
 - [Notes](#notes)
 
@@ -1014,6 +1018,17 @@ Contributions are welcome. Please open an issue before submitting a pull request
 4. Push and open a pull request against `main`
 
 Bug reports, feature requests, and documentation improvements are all appreciated.
+
+---
+
+## Support this project
+
+If Ansible Controller helps you automate your infrastructure, consider supporting
+its maintenance, testing, and documentation through
+[GitHub Sponsors](https://github.com/sponsors/allamiro) or
+[Buy Me a Coffee](https://buymeacoffee.com/pcileky2q).
+
+You can also help by reporting bugs, improving the docs, or contributing fixes.
 
 ---
 
