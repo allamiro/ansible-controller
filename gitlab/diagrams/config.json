@@ -1,14 +1,35 @@
 {
-  "theme": "neutral",
+  "theme": "base",
   "securityLevel": "strict",
   "fontFamily": "Arial, sans-serif",
+  "themeVariables": {
+    "fontSize": "16px",
+    "primaryColor": "#eef4ff",
+    "primaryTextColor": "#172b4d",
+    "primaryBorderColor": "#4972a7",
+    "lineColor": "#506580",
+    "secondaryColor": "#edf8f2",
+    "tertiaryColor": "#f8fafc",
+    "clusterBkg": "#f8fafc",
+    "clusterBorder": "#cbd5e1",
+    "edgeLabelBackground": "#ffffff"
+  },
   "flowchart": {
     "htmlLabels": false,
     "curve": "linear",
+    "nodeSpacing": 32,
+    "rankSpacing": 52,
+    "padding": 18,
     "useMaxWidth": false
   },
   "sequence": {
     "useMaxWidth": false,
-    "wrap": true
-  }
+    "wrap": true,
+    "actorMargin": 35,
+    "messageMargin": 28,
+    "noteMargin": 12,
+    "width": 140,
+    "mirrorActors": false
+  },
+  "themeCSS": ".edgeLabel rect { opacity: 1 !important; }"
 }

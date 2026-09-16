@@ -1,4 +1,6 @@
 flowchart TB
+    accTitle: GitLab and execution components
+    accDescr: The Runner polls GitLab and starts CI jobs. Jobs reach the controller over restricted SSH. The controller fetches Git and either runs directly or submits mesh work. Execution nodes initiate outbound mTLS and reach their own targets.
     G["GitLab CE<br/>Projects and pipelines"]
     R["Runner manager"]
     J["Deployment job"]

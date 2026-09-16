@@ -39,6 +39,9 @@ Deployment jobs receive no mesh TLS keys, signing keys, mesh sockets or target k
 
 ## Standalone execution
 
+The sequence below shows the bootstrap seed's manual `deploy-direct` route.
+The reusable project template instead separates sync and execution in either mode.
+
 ![Standalone request, fetch, execution and artifact return](diagrams/standalone.svg)
 
 The controller uses its administrator-owned environment mapping to choose the
@@ -54,6 +57,10 @@ Execution nodes initiate outbound mTLS connections to the ingress. Signed work
 travels back over those established connections. The CI job connects only to
 the controller, which submits through its local Unix socket.
 
+The mesh sync job fetches and records the exact commit without executing it.
+After manual release, deployment verifies that staged snapshot and its environment
+mapping, then submits it without another fetch. Sync can also require manual release.
+
 The entire fetched project is staged for mesh execution, including root-level
 roles, collections and configuration. Repository paths referenced by Ansible
 configuration must still be valid in the executing runtime.
@@ -61,6 +68,9 @@ configuration must still be valid in the executing runtime.
 ## Review and manual release in CE
 
 ![Community Edition review and deployment workflow](diagrams/workflow.svg)
+
+This flow applies to mesh and the reusable template. The bootstrap standalone
+route combines fetch and execution in one manual deployment job.
 
 Bootstrap protects `main` with push disabled and merge allowed for Maintainers,
 requires a successful validation pipeline, and configures protected deployment

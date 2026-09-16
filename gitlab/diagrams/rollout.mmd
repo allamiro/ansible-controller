@@ -1,0 +1,16 @@
+flowchart TB
+    accTitle: Canary and larger fleet rollout
+    accDescr: Release a small canary environment and verify application health. Only then release the wider environment in deliberate batches. A failed health check or unknown outcome stops promotion and requires investigation.
+    S["Reviewed commit<br/>Environment-specific inventory"] --> C["Sync and release canary"]
+    C --> H{"Application healthy?"}
+    H -->|Yes| A["Sync and approve wider environment"]
+    A --> B["Execute deliberate host batches<br/>Ansible serial and health checks"]
+    B --> V{"Batch verified?"}
+    V -->|Yes| N["Continue batches<br/>Record final outcome"]
+    H -->|No or unknown| X["Stop promotion<br/>Investigate or collect original job"]
+    V -->|No or unknown| X
+    X --> R["Review recovery action<br/>No automatic redispatch"]
+    classDef approved fill:#edf8f2,stroke:#3d8164,color:#143b2b
+    classDef stop fill:#fff5df,stroke:#a77822,color:#533a0b
+    class A,N approved
+    class X,R stop

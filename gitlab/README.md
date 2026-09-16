@@ -1,8 +1,8 @@
 # GitLab CE alongside the Ansible controller
 
-For the reviewed sync → manual execution flow, separate sync approvals, 100+
-system rollout batches and enhanced results, see [Mesh rollouts](MESH-ROLLOUTS.md).
-
+Start with the [project lifecycle and use cases](../docs/LIFECYCLE.md) for project
+creation, Git sync, both approval gates, rollout batches, results and upgrades.
+The [mesh rollout contract](MESH-ROLLOUTS.md) documents the exact sync and execution behavior.
 
 For a screen-by-screen walkthrough, start with [GitLab CE: from first login to Ansible results](STEP-BY-STEP.md).
 
@@ -12,6 +12,9 @@ updates and recovery. **The standard workflow uses GitLab Community Edition
 and requires no Premium license.**
 
 ![GitLab Community Edition deployment workflow](diagrams/workflow.svg)
+
+This diagram shows mesh and the reusable project template. The bootstrap seed's
+standalone `deploy-direct` job combines fetch and execution in one manual job.
 
 Current test results and known limits: [VERIFICATION.md](VERIFICATION.md).
 The isolated audit suite is in [tests/README.md](tests/README.md).

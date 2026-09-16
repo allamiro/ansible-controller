@@ -1,12 +1,21 @@
 sequenceDiagram
-    participant J as Deployment job
+    accTitle: GitLab sync and mesh execution
+    accDescr: CI requests sync over SSH. The controller fetches once and returns a receipt. After manual release it verifies the staged project and dispatches signed work over the node's established outbound mTLS connection.
+    participant J as GitLab CI jobs
     participant C as Controller
+    participant G as Git repository
     participant I as Mesh ingress
     participant N as Execution node
     participant T as Target
     N->>I: Open outbound mTLS connection
-    J->>C: Request reviewed commit over SSH
-    C->>C: Fetch project and claim request
+    J->>C: Sync exact commit over pinned SSH
+    C->>G: Fetch using read-only token
+    G-->>C: Project at requested SHA
+    C->>C: Stage project and record receipt
+    C-->>J: Sync receipt and status
+    Note over J,C: Operator reviews receipt and releases deploy
+    J->>C: Execute synced request over SSH
+    C->>C: Verify snapshot and claim execution
     C->>I: Submit signed work through local socket
     I-->>N: Deliver work over established connection
     N->>T: Run Ansible over SSH or WinRM

@@ -1,0 +1,15 @@
+flowchart TB
+    accTitle: Platform and project lifecycle
+    accDescr: Administrators prepare runtime, trust and environment permissions. Project authors then create and validate content, obtain review, sync a fixed commit, release execution and inspect results. Runtime changes follow a separate tested upgrade path.
+    P["Platform administrator<br/>Runtime, network and trust"] --> E["Connect project<br/>Runners, credentials and environment"]
+    E --> A["Author project<br/>Playbooks, inventory and tests"]
+    A --> R["Validate and review changes"]
+    R --> S["Sync fixed commit<br/>Review staging receipt"]
+    S --> D["Approve execution<br/>Verify targets and reports"]
+    D -->|Next reviewed change| A
+    P --> U["Runtime change<br/>Test image and upgrade nodes"]
+    U --> E
+    classDef platform fill:#eef4ff,stroke:#4972a7,color:#172b4d
+    classDef project fill:#edf8f2,stroke:#3d8164,color:#143b2b
+    class P,E,U platform
+    class A,R,S,D project

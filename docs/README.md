@@ -14,13 +14,14 @@ Commands in this guide run from the **repository root**, even though this file l
 | Targets | [Dynamic inventory](#dynamic-inventory) · [Cloud inventory](#cloud-dynamic-inventory-aws--azure--gcp) · [Windows / WinRM](#managing-windows-hosts-winrm) · [Mesh](#distributed-execution-mesh) |
 | Credentials and readiness | [SSH keys](#ssh-keys-for-managed-hosts) · [Host-key checking](#ssh-host-key-checking) · [Agent forwarding](#ssh-agent-forwarding-optional) · [Vault](#ansible-vault) · [Preflight](#preflight-is-the-controller-ready) |
 | Maintenance | [Source builds](#build-from-source) · [Manual Docker setup](#run-with-docker-manual) · [Linting](#linting-playbooks) · [Releases and signatures](#versioning-and-releases) · [Image notes](#notes) |
+| Team automation | [Project lifecycle](LIFECYCLE.md) · [GitLab sync and approvals](LIFECYCLE.md#review-approve-sync-approve-execution) · [Fleet rollouts](LIFECYCLE.md#roll-out-to-100-or-more-systems) |
 
 ## Prerequisites
 
 | Requirement | Minimum version | Notes |
 |-------------|----------------|-------|
 | Docker Engine | 20.10+ | [Install guide](https://docs.docker.com/engine/install/) |
-| Docker Compose | V2 (`docker compose`) | Included with Docker Desktop |
+| Docker Compose | 2.17+ (`docker compose`) | Quick start uses `up --wait`; included with current Docker Desktop |
 | Host utilities | Git and OpenSSH tools | Used by the clone and SSH-key setup examples |
 | GNU Make | Optional | Convenience targets; equivalent Docker commands are shown |
 
@@ -287,13 +288,15 @@ placed inside segmented networks, and the playbook runs there.
 
 Key properties:
 
-- **Opt-in and non-disruptive** — the mesh is profile-gated
-  (`--profile mesh`); `make up` / `make run` and the published
-  `ansible-controller` image are byte-identical with or without it.
+- **Opt-in** — plain `make up` and `make run` use the standalone Compose file.
+  `make mesh-up` adds the mesh overlay and profile. The profile gates ingress
+  services; loading the overlay also adds controller mounts.
 - **Mandatory mutual TLS** — every mesh hop authenticates both sides; node
   identity is bound to its certificate, and the CA private key stays offline.
-- **HA built in** — redundant receptor ingress sidecars with dispatcher
-  failover (Tier 1), designed for active/active orchestrators later.
+- **Redundant ingress** — the dispatcher can select another ingress before
+  submission. This does not provide orchestrator-host HA or migrate running jobs.
+  Recover interrupted results from the original tracked job; never assume failure
+  to receive a reply means the playbook did not execute.
 - **Same supply chain** — the `ansible-orchestrator` and
   `ansible-execution-node` images build `FROM` the controller's digest and are
   published by the same release pipeline: multi-arch manifests, cosign

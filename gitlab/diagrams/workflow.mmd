@@ -1,7 +1,14 @@
 flowchart TB
-    B["Developer creates a branch"] --> V["Syntax and lint validation"]
-    V --> R["Maintainer reviews the merge request"]
-    R --> M["Merge into protected main"]
-    M --> P["Maintainer manually releases deployment"]
-    P --> X["Controller executes the reviewed commit"]
-    X --> A["GitLab shows result and downloadable artifacts"]
+    accTitle: Reviewed sync and execution
+    accDescr: For mesh and the reusable project template, review and merge precede sync. Sync can require its own manual release. Execution always has a separate manual release and verifies the staged snapshot.
+    B["Branch and merge request"] --> V["Validate without deployment credentials"]
+    V --> R["Maintainer reviews and merges"]
+    R --> S["Sync exact commit<br/>Automatic or separately released"]
+    S --> H["Review staged receipt<br/>Commit, inventory and destination"]
+    H --> P["Manually release deployment"]
+    P --> X["Verify snapshot and execute<br/>No second Git fetch"]
+    X --> A["Inspect reports and target health"]
+    classDef approval fill:#fff5df,stroke:#a77822,color:#533a0b
+    classDef result fill:#edf8f2,stroke:#3d8164,color:#143b2b
+    class R,P approval
+    class H,A result

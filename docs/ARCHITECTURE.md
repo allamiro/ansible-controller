@@ -52,7 +52,9 @@ The work-signing key is separate from the CA key: its private half is installed 
 
 ## Optional GitLab integration
 
-GitLab stores projects and provides review and manual deployment jobs. A CI job contacts the controller over restricted SSH; the controller fetches the selected commit and chooses direct or mesh execution. CI jobs do not connect directly to execution nodes or receive mesh private keys.
+GitLab stores projects and provides review and manual deployment jobs. A CI job contacts the controller over restricted SSH. For mesh and the reusable project template, sync stages the selected commit; a separate manual execution verifies that snapshot without fetching Git again. Sync can have its own manual release. CI jobs do not connect directly to execution nodes or receive mesh private keys.
+
+The [project lifecycle guide](LIFECYCLE.md) covers project creation, both approval gates, canary/batch rollouts, reports, recovery and runtime upgrades.
 
 Native `make run`, `make mesh-run`, and `make mesh-collect` continue to work with local project files without GitLab. The [GitLab architecture guide](../gitlab/ARCHITECTURE.md) contains the detailed request, deployment, and recovery diagrams.
 
