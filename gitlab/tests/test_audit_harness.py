@@ -16,6 +16,15 @@ def load(name):
 
 
 class AuditHarnessTests(unittest.TestCase):
+    def test_recovery_passes_recorded_project_and_environment(self):
+        module = load('recovery')
+        with tempfile.TemporaryDirectory() as directory, patch.object(module.b, 'STATE', Path(directory)), patch.object(module.b, 'docker') as docker:
+            (Path(directory) / 'project.json').write_text('{"path":"isolated/audit-project"}')
+            module.collect('00000000-0000-0000-0000-000000000001')
+            docker.assert_called_once_with('exec', 'gitlab-audit-controller-1', '/usr/local/lab-bin/ctl-run',
+                '--env', 'audit-mesh', '--project', 'isolated/audit-project',
+                '--collect', '00000000-0000-0000-0000-000000000001')
+
     def test_failed_deployment_cannot_report_lifecycle_success(self):
         module = load('lifecycle')
         with tempfile.TemporaryDirectory() as directory, patch.object(module.b, 'STATE', Path(directory)), patch.object(module.b, 'api', return_value=[{'id': 1, 'name': 'deploy-mesh', 'status': 'failed'}]):

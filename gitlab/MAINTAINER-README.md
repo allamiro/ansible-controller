@@ -282,7 +282,8 @@ UUID from its log and inspect the controller's lifecycle state before retrying.
 
 For recovery, open the manual **collect** job on `main`, set `JOB_ID` to the
 original mesh UUID in the manual job's variable form, and run it. This calls
-`ctl-run --collect` through the same restricted SSH connection. A
+`ctl-run --collect` with the original `--env` and `--project` through the same
+restricted SSH connection. Update older collection jobs to pass both fields. A
 `submit-ambiguous` record has no unit to re-attach to: the host administrator
 resolves it on the controller with
 [Resolve an ambiguous submission](../mesh/RUNBOOK.md#resolve-an-ambiguous-submission)

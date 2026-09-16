@@ -3,9 +3,9 @@
 #
 #   ctl-run --env <name> --project <group/path> --sha <40-hex> \
 #           --playbook <relative.yml> [--pipeline N --job N] [--wait N]
-#   ctl-run --collect <mesh-job-uuid>            # pass-through recovery
+#   ctl-run --env <name> --project <group/path> --collect <mesh-job-uuid>
 #   ctl-run --artifacts <same request arguments> # tar stream of result files
-#   ctl-run --collect <mesh-job-uuid> --artifacts # tar stream after recovery
+#   ctl-run --env <name> --project <group/path> --collect <mesh-job-uuid> --artifacts
 #   ctl-run --sync-only <request arguments>     # stage only, no execution
 #   ctl-run --execute-synced <request arguments> # verify and execute staged bytes
 #
@@ -234,7 +234,7 @@ PY
       *)  unresolved="$unresolved $job($s)";;
     esac
   done
-  [ -z "$unresolved" ] || die "unresolved mesh job(s):$unresolved — recover first (ctl-run --collect <uuid>; for submit-ambiguous follow the operator procedure in mesh/RUNBOOK.md 'Resolve an ambiguous submission'); refusing to dispatch"
+  [ -z "$unresolved" ] || die "unresolved mesh job(s):$unresolved — recover first (ctl-run --env '$ENVN' --project '$PROJECT' --collect <uuid>; for submit-ambiguous follow the operator procedure in mesh/RUNBOOK.md 'Resolve an ambiguous submission'); refusing to dispatch"
 fi
 
 # ---- reuse a reviewed, verified snapshot without another Git fetch -------------
