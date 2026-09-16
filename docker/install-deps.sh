@@ -46,6 +46,12 @@ esac
 # the container log); otherwise stderr, so a manual run still says what happened.
 exec 3>&2 2>/dev/null || true
 run() {
+  # Invalidate the previous result before doing work: an interrupted retry must
+  # not leave an earlier success looking current. Fingerprint before installing
+  # so edits made during installation cannot certify the new requirements.
+  rm -f "$status" || return 1
+  checksum=$(sha256sum "$req") || return 1
+  checksum=${checksum%% *}
   rc=0
   case "$what" in
     galaxy)
@@ -57,10 +63,14 @@ run() {
       pip3 install --no-cache-dir --break-system-packages -r "$req" || rc=$?
       ;;
   esac
-  printf 'rc=%s finished=%s\n' "$rc" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$status" || true
+  temporary=$(mktemp "$status.XXXXXX") || return 1
+  if ! { printf 'rc=%s finished=%s sha256=%s\n' "$rc" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$checksum" > "$temporary" && mv "$temporary" "$status"; }; then
+    rm -f "$temporary"
+    return 1
+  fi
   [ "$rc" -eq 0 ] \
     || echo "install-deps: WARNING $what install failed (rc=$rc) — see $log; 'make preflight' reports this" >&3
   return "$rc"
 }
 
-( flock 9; run ) 9>>"$lock" >>"$log" 2>&1
+( flock 9 || exit 1; run ) 9>>"$lock" >>"$log" 2>&1

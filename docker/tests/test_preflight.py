@@ -125,6 +125,48 @@ exit "$INVENTORY_RC"
         (logs / "galaxy-install.status").write_text("rc=1 finished=test\n")
         self.assertIn("install rc=1", self.run_preflight(expected=1))
 
+    def install_pip(self, body="exit 0\n"):
+        self.stub("pip3", body)
+        return subprocess.run(
+            ["sh", str(SCRIPT.with_name("install-deps.sh")), "pip"],
+            env=self.env, text=True, capture_output=True, timeout=15,
+        )
+
+    def test_install_fingerprint_detects_changed_requirements(self):
+        requirements = self.root / "pip-requirements.txt"
+        requirements.write_text("first-package\n")
+        self.assertEqual(self.install_pip().returncode, 0)
+        self.run_preflight("--strict")
+        original = requirements.stat()
+        requirements.write_text("other-package\n")
+        os.utime(requirements, ns=(original.st_atime_ns, original.st_mtime_ns))
+        self.assertIn("requirements changed", self.run_preflight("--strict", expected=1))
+        self.assertEqual(self.install_pip().returncode, 0)
+        self.run_preflight("--strict")
+
+    def test_edit_during_install_cannot_certify_new_requirements(self):
+        (self.root / "pip-requirements.txt").write_text("first-package\n")
+        self.assertEqual(self.install_pip(
+            'printf "other-package\\n" > "$TEST_ROOT/pip-requirements.txt"\n'
+        ).returncode, 0)
+        self.assertIn("requirements changed", self.run_preflight("--strict", expected=1))
+
+    def test_retry_invalidates_previous_status_and_records_failure(self):
+        (self.root / "pip-requirements.txt").write_text("first-package\n")
+        self.assertEqual(self.install_pip().returncode, 0)
+        result = self.install_pip(
+            '[ ! -e "$TEST_ROOT/logs/pip-install.status" ] || exit 99\nexit 7\n'
+        )
+        self.assertEqual(result.returncode, 7, result.stderr)
+        self.assertIn("install rc=7", self.run_preflight(expected=1))
+
+    def test_legacy_success_status_requires_reinstall(self):
+        (self.root / "pip-requirements.txt").touch()
+        logs = self.root / "logs"
+        logs.mkdir()
+        (logs / "pip-install.status").write_text("rc=0 finished=test\n")
+        self.assertIn("predates fingerprinting", self.run_preflight("--strict", expected=1))
+
     def test_unknown_argument_is_rejected(self):
         self.assertIn("usage:", self.run_preflight("--strcit", expected=2))
 
@@ -143,6 +185,19 @@ exit "$INVENTORY_RC"
         self.run_preflight("--strict")
         vault.unlink()
         self.assertIn("configured Vault password file does not exist", self.run_preflight(expected=1))
+
+    @unittest.skipUnless(os.getuid() == 0, "requires root to switch controller account")
+    def test_vault_readability_is_checked_as_controller_account(self):
+        vault = self.root / "custom-vault"
+        vault.write_text("secret-vault-value")
+        vault.chmod(0o600)
+        self.root.chmod(0o755)
+        self.env["CONTROLLER_USER"] = "nobody"
+        self.env["ANSIBLE_VAULT_PASSWORD_FILE"] = str(vault)
+        self.assertIn("Vault password file is not readable by nobody", self.run_preflight(expected=1))
+        account = pwd.getpwnam("nobody")
+        os.chown(vault, account.pw_uid, account.pw_gid)
+        self.assertNotIn("secret-vault-value", self.run_preflight("--strict"))
 
     @unittest.skipUnless(os.getuid() == 0, "requires root to switch controller account")
     def test_root_owned_key_is_not_usable_by_controller_account(self):

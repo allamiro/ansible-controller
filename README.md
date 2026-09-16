@@ -708,6 +708,11 @@ announced in `docker logs`, and `make preflight` reports it afterwards. The
 controller also warns at every start when managed-host key verification is
 disabled, naming the file that decided it.
 
+Install status includes a fingerprint of the requirements file. Changed requirements
+or older status records without a fingerprint are reported as risks until you run
+`make galaxy` or `make pip` again; strict mode rejects them. The fingerprint covers
+the top-level requirements file, not included files or changes to remote packages.
+
 The isolated regression suite runs in both architecture builds in CI. To run it
 against an existing local controller image without starting services:
 

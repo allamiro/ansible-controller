@@ -76,6 +76,15 @@ ok()   { printf '    %-46s %s\n' "$1" "ok${2:+ — $2}"; }
 risk() { printf '    %-46s %s\n' "$1" "RISK — $2"; risks=$((risks + 1)); }
 bad()  { printf '    %-46s %s\n' "$1" "FAILED — $2"; fails=$((fails + 1)); }
 note() { printf '    %-46s %s\n' "$1" "$2"; }
+readable_by_controller() {
+  if [ "$(id -un)" = "$RUN_USER" ]; then
+    [ -r "$1" ]
+  elif [ "$(id -u)" = 0 ]; then
+    runuser -u "$RUN_USER" -- test -r "$1" 2>/dev/null
+  else
+    return 1
+  fi
+}
 
 # ---- startup dependency installs ------------------------------------------
 # The entrypoint installs declared Galaxy and pip content in the BACKGROUND, so
@@ -92,7 +101,16 @@ check_install() { # label requirements-file status-file lock-file log-file
   if [ ! -f "$3" ]; then risk "$1" "declared, but no install recorded yet ($3)"; return; fi
   rc=$(sed -n 's/^rc=\([0-9]*\).*/\1/p' "$3")
   fin=$(sed -n 's/.*finished=\([^ ]*\).*/\1/p' "$3")
-  if [ "${rc:-1}" = 0 ]; then ok "$1" "installed ${fin:-}"; else bad "$1" "install rc=$rc — see $5"; fi
+  if [ "${rc:-1}" != 0 ]; then bad "$1" "install rc=$rc — see $5"; return; fi
+  recorded=$(sed -n 's/.*sha256=\([0-9a-f]*\).*/\1/p' "$3")
+  if ! current=$(sha256sum "$2" 2>/dev/null); then
+    bad "$1" "cannot read requirements"; return
+  fi
+  if [ "$recorded" != "${current%% *}" ]; then
+    risk "$1" "requirements changed or status predates fingerprinting — rerun the dependency installer"
+    return
+  fi
+  ok "$1" "installed ${fin:-}"
 }
 check_install "Galaxy content (requirements.yml)" "$CONFIG_DIR/requirements.yml" \
   "$LOG_DIR/galaxy-install.status" "$CONFIG_DIR/.galaxy/.install.lock" "$LOG_DIR/galaxy-install.log"
@@ -123,11 +141,15 @@ vp="${ANSIBLE_VAULT_PASSWORD_FILE:-$vp}"
 vault_configured="$vp"
 vp="${vp:-$RUN_HOME/.vault_pass}"
 if [ -f "$vp" ]; then
-  mode=$(stat -c %a "$vp" 2>/dev/null)
-  case "$mode" in
-    600|400) ok "$vp" "mode $mode";;
-    *)       risk "$vp" "mode $mode — should be 600, readable only by its owner";;
-  esac
+  if readable_by_controller "$vp"; then
+    mode=$(stat -c %a "$vp" 2>/dev/null)
+    case "$mode" in
+      600|400) ok "$vp" "mode $mode";;
+      *)       risk "$vp" "mode $mode — should be 600, readable only by its owner";;
+    esac
+  else
+    bad "$vp" "Vault password file is not readable by $RUN_USER (check as root or $RUN_USER)"
+  fi
 elif [ -n "$vault_configured" ]; then
   bad "$vp" "configured Vault password file does not exist"
 else
@@ -180,18 +202,8 @@ check_key() { # path label
   if [ ! -f "$1" ]; then bad "$1" "$2 does not exist"; return; fi
   # docker exec runs as root, but SSH sessions use the controller account.
   # A restrictive mode alone says nothing about access through a bind mount.
-  if [ "$(id -un)" = "$RUN_USER" ]; then
-    readable=0
-    [ -r "$1" ] && readable=1
-  elif [ "$(id -u)" = 0 ]; then
-    readable=0
-    runuser -u "$RUN_USER" -- test -r "$1" 2>/dev/null && readable=1
-  else
-    bad "$1" "cannot verify readability as $RUN_USER; run preflight as root or $RUN_USER"
-    return
-  fi
-  if [ "$readable" = 0 ]; then
-    bad "$1" "$2 is not readable by $RUN_USER"
+  if ! readable_by_controller "$1"; then
+    bad "$1" "$2 is not readable by $RUN_USER (check as root or $RUN_USER)"
     return
   fi
   mode=$(stat -c %a "$1" 2>/dev/null)
