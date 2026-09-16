@@ -21,6 +21,14 @@ if "${channel[@]}" ctl-run --artifacts "$@" > "$archive"; then
 else
   artifact_rc=$?
 fi
+# Keep execution/transport and artifact-transfer outcomes separate for reports.
+python3 - "$rc" "$artifact_rc" <<'PYCHANNEL' || { [ "$rc" -ne 0 ] || rc=2; }
+import json, sys
+from pathlib import Path
+Path('mesh-artifacts/channel.json').write_text(json.dumps({
+    'execution_channel_rc': int(sys.argv[1]), 'artifact_rc': int(sys.argv[2]),
+}) + '\n')
+PYCHANNEL
 if [ "$artifact_rc" -ne 0 ]; then
   echo "ctl-ci: artifact transfer failed; original execution rc=$rc. Retry uses the same request; it does not dispatch again." >&2
 fi

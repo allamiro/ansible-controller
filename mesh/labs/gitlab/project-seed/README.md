@@ -15,7 +15,7 @@ controller or mesh. No Premium subscription is needed.
 | `scripts/ctl-ci.sh` | Restricted SSH invocation and result download |
 
 Other scripts in `scripts/` support historical lab experiments. The current
-pipeline uses `ctl-ci.sh`; it does not give jobs direct mesh socket access.
+pipeline uses `deploy.sh` for reports and `ctl-ci.sh` for transport; it does not give jobs direct mesh socket access.
 
 ## Change, review and deploy
 
@@ -23,8 +23,9 @@ pipeline uses `ctl-ci.sh`; it does not give jobs direct mesh socket access.
 2. Push the branch and open a merge request.
 3. Wait for `validate` to pass, then ask a Maintainer to review and merge.
 4. Open **Build → Pipelines** for the merged commit.
-5. Manually run `deploy-mesh` or `deploy-direct` for the intended environment.
-6. Read the job trace and open **Browse artifacts → mesh-artifacts/**.
+5. For mesh, review the matching completed `sync-*` receipt first. Manually run `deploy-mesh` or `deploy-direct` for the intended environment.
+6. Read the job trace and open **Browse artifacts → reports/** for commit, outcome
+   and final recap summaries; **mesh-artifacts/** contains the execution evidence.
 
 Select only the deployment mode you intend to run. An unplayed blocking manual
 job can leave the overall pipeline blocked even after the selected job succeeds.
@@ -55,7 +56,7 @@ controller map, CI environment names and protected file-variable scopes must
 agree. Ask the host administrator to configure `CTL_HOST`, `CTL_SSH_KEY` and
 `CTL_KNOWN_HOSTS`; keep mesh and target credentials on the executing runtime.
 
-For an existing project, update both `.gitlab-ci.yml` and `scripts/ctl-ci.sh`
+For an existing project, update `.gitlab-ci.yml`, `scripts/ctl-ci.sh`, `scripts/deploy.sh` and `scripts/report.py`
 through a merge request. Bootstrap preserves populated repositories. Include
 new playbook entry points in the validation job when adding them.
 
@@ -75,3 +76,10 @@ request even if that commit was already deployed from `main`.
 For the complete setup, see **Save deployment credentials and release a version**
 in `gitlab/MAINTAINER-README.md` of the controller repository. Provisioning secrets
 and protecting tags are administrator steps, not effects of pushing this README.
+
+Mesh sync stages the reviewed commit without executing it. Deployment verifies
+and reuses that snapshot. To require a second human button before sync, add
+`when: manual` and `allow_failure: false` to each sync job rule. Update the complete
+controller `gitlab/bin/` first and enable `require_sync: true` in its mesh environment.
+See `gitlab/MESH-ROLLOUTS.md` in the controller repository for the contract and
+100+ system rollout guidance.

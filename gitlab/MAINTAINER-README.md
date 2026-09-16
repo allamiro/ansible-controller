@@ -1,5 +1,9 @@
 # GitLab operator and Maintainer walkthrough
 
+For the reviewed sync → manual execution flow, separate sync approvals, 100+
+system rollout batches and enhanced results, see [Mesh rollouts](MESH-ROLLOUTS.md).
+
+
 For a screen-by-screen walkthrough, start with [GitLab CE: from first login to Ansible results](STEP-BY-STEP.md).
 
 Use GitLab to store Ansible automation, review changes, and request execution
@@ -225,12 +229,14 @@ controls. See [GitLab approvals](https://docs.gitlab.com/user/project/merge_requ
 ## 6. Release the reviewed commit
 
 1. Open **Build → Pipelines**, then the pipeline for the merged `main` commit.
-2. Confirm its commit SHA and validation result.
+2. Confirm its commit SHA and validation result. For mesh, wait for the matching
+   `sync-*` job and review its receipt (inventory, destination and commit).
 3. Open the desired manual job: **deploy-direct** for standalone execution or
    **deploy-mesh** for mesh execution. Select **Run/Play** for that job only.
 4. Watch its job log. The job sends the actual checked-out commit SHA to
-   `ctl-run`; the controller fetches that commit and uses its own environment
-   map to select inventory, execution mode and credentials.
+   `ctl-run`; mesh execution verifies and reuses the synced tree. Standalone
+   deployment fetches the commit at release time. The controller environment
+   map selects inventory, execution mode and credentials.
 5. Check the job result and target state. The seed's `site.yml` writes commit
    provenance to `/home/ansible/lab-deployed.txt` on the demo target.
 

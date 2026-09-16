@@ -6,6 +6,8 @@
 #   ctl-run --collect <mesh-job-uuid>            # pass-through recovery
 #   ctl-run --artifacts <same request arguments> # tar stream of result files
 #   ctl-run --collect <mesh-job-uuid> --artifacts # tar stream after recovery
+#   ctl-run --sync-only <request arguments>     # stage only, no execution
+#   ctl-run --execute-synced <request arguments> # verify and execute staged bytes
 #
 # This is the ONE integration point between GitLab and the controller: a CI
 # job (or an operator) invokes it over authenticated SSH; it fetches the
@@ -62,7 +64,7 @@ MESH_RUN=/usr/local/mesh/bin/mesh-run
 
 die() { echo "ctl-run: ERROR: $*" >&2; exit 2; }
 
-ENVN='' PROJECT='' SHA='' PLAYBOOK='' PIPELINE='' JOB='' WAIT=120 COLLECT='' ARTIFACTS=0
+ENVN='' PROJECT='' SHA='' PLAYBOOK='' PIPELINE='' JOB='' WAIT=120 COLLECT='' ARTIFACTS=0 SYNC_ONLY=0 EXECUTE_SYNCED=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --env)      ENVN="${2:?}"; shift 2;;
@@ -74,6 +76,8 @@ while [ $# -gt 0 ]; do
     --wait)     WAIT="${2:?}"; shift 2;;
     --collect)  COLLECT="${2:?}"; shift 2;;
     --artifacts) ARTIFACTS=1; shift;;
+    --sync-only) SYNC_ONLY=1; shift;;
+    --execute-synced) EXECUTE_SYNCED=1; shift;;
     *) die "unknown argument: $1";;
   esac
 done
@@ -86,6 +90,11 @@ done
 # third would report a missing record for work the guard is still blocking on.
 MESH_JOBS="${CTL_RUN_MESH_JOBS:-/var/lib/mesh/jobs}"
 export CTL_RUN_MESH_JOBS="$MESH_JOBS"
+
+[ "$SYNC_ONLY$EXECUTE_SYNCED" != 11 ] || die "--sync-only and --execute-synced are mutually exclusive"
+if [ "$SYNC_ONLY$EXECUTE_SYNCED" != 00 ]; then
+  [ -n "$PIPELINE" ] && [ -z "$COLLECT" ] || die "sync phases require --pipeline and cannot use --collect"
+fi
 
 # ---- recovery pass-through ---------------------------------------------------
 if [ -n "$COLLECT" ]; then
@@ -133,7 +142,7 @@ MODE=$(efield mode); GITLAB_URL=$(efield gitlab_url); INV_REL=$(efield inventory
 SSH_KEY=$(efield ssh_key); NODE=$(efield node); POOL=$(efield pool); ZONE=$(efield zone)
 GALAXY=$(efield galaxy_dir); HOSTKEY_CHECKING=$(efield hostkey_checking)
 GIT_CA=$(efield git_ca_file)
-if [ -n "$GIT_CA" ]; then
+if [ -n "$GIT_CA" ] && [ "$EXECUTE_SYNCED" = 0 ] && [ "$ARTIFACTS" = 0 ]; then
   [ -r "$GIT_CA" ] || die "environment Git CA file is unreadable"
   export GIT_SSL_CAINFO="$GIT_CA"
 fi
@@ -143,7 +152,11 @@ case "$MODE" in standalone|mesh) ;; *) die "environment '$ENVN' has invalid mode
 case "$INV_REL" in /*|*..*) die "environment inventory path must be project-relative";; esac
 eallowed || die "project '$PROJECT' is not allowed in environment '$ENVN'"
 TOKEN_FILE="$SECRETS_DIR/$ENVN.token"
-[ -r "$TOKEN_FILE" ] || die "no fetch credential for environment '$ENVN' (expected $TOKEN_FILE on the controller)"
+REQUIRE_SYNC=$(efield require_sync)
+case "$REQUIRE_SYNC" in ''|True|False) ;; *) die "require_sync must be a YAML boolean";; esac
+if [ "$REQUIRE_SYNC" = True ] && [ "$SYNC_ONLY$EXECUTE_SYNCED$ARTIFACTS" = 000 ]; then
+  die "environment requires separate sync and execution; use --sync-only then --execute-synced"
+fi
 
 # ---- per-environment serialization + CI-retry guard ---------------------------
 mkdir -p "$RUNS_DIR/locks" "$RUNS_DIR/records"
@@ -153,7 +166,7 @@ journal() {
 if [ "$ARTIFACTS" = 1 ]; then
   # Read a specific durable request without contending with another dispatch.
   # Journal references and records are atomically replaced, never edited in place.
-  journal export
+  if [ "$SYNC_ONLY" = 1 ]; then journal sync-export "$envjson"; else journal export; fi
   exit
 fi
 exec 9>"$RUNS_DIR/locks/$ENVN"
@@ -166,7 +179,7 @@ if [ -n "$PIPELINE" ]; then
     exit "$prior_rc"
   fi
 fi
-if [ "$MODE" = mesh ]; then
+if [ "$MODE" = mesh ] && [ "$SYNC_ONLY" = 0 ]; then
   # Fail CLOSED. This guard is what stops a retry from dispatching while an
   # earlier job's outcome is unknown, and it can only see jobs it can read: with
   # the mesh state volume unmounted or relocated, the glob below matches nothing
@@ -220,11 +233,33 @@ PY
   [ -z "$unresolved" ] || die "unresolved mesh job(s):$unresolved — recover first (ctl-run --collect <uuid>; for submit-ambiguous follow the operator procedure in mesh/RUNBOOK.md 'Resolve an ambiguous submission'); refusing to dispatch"
 fi
 
+# ---- reuse a reviewed, verified snapshot without another Git fetch -------------
+SYNC_RECORD=''
+cleanup_stage_on_refusal() {
+  # A synced tree is retained as approval evidence, including on refusal.
+  if [ -z "$SYNC_RECORD" ]; then rm -rf "$STAGE"; fi
+}
+if [ "$EXECUTE_SYNCED" = 1 ] || [ "$SYNC_ONLY" = 1 ]; then
+  SYNC_RECORD=$(journal sync-load "$envjson") || die "cannot use synced snapshot; review the sync error above"
+  if [ "$SYNC_ONLY" = 1 ] && [ -n "$SYNC_RECORD" ]; then
+    echo "ctl-run: sync already verified sha=$SHA; no execution"
+    exit 0
+  fi
+fi
+[ "$EXECUTE_SYNCED" = 0 ] || [ -n "$SYNC_RECORD" ] || die "no approved sync for this request; run --sync-only for the same pipeline and commit first"
+if [ -n "$SYNC_RECORD" ]; then
+  SYNC_RUN_ID=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["run_id"])' "$SYNC_RECORD")
+  STAGE="$RUNS_DIR/$ENVN/$SHA/$SYNC_RUN_ID"
+  # Fresh execution identity: prior pre-submit logs must never be mistaken for
+  # tracking output from this attempt after a crash.
+  RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+  echo "ctl-run: using verified sync run=$SYNC_RUN_ID sha=$SHA (no Git fetch)"
+else
 # ---- fetch the exact requested commit ------------------------------------------
+[ -r "$TOKEN_FILE" ] || die "no fetch credential for environment '$ENVN' (expected $TOKEN_FILE on the controller)"
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 STAGE="$RUNS_DIR/$ENVN/$SHA/$RUN_ID"
 mkdir -p "$STAGE"
-cleanup_stage_on_refusal() { rm -rf "$STAGE"; }
 # token file format: <deploy-token-username>:<token> — deploy tokens
 # authenticate only with their generated username
 IFS=: read -r CTL_GIT_USER CTL_GIT_TOKEN < "$TOKEN_FILE"
@@ -236,9 +271,9 @@ git -C "$STAGE" init -q
 git -C "$STAGE" remote add origin "$proj_url"
 # credentials travel via a one-shot helper, never the URL/argv
 ghelper='!f() { echo "username=$CTL_GIT_USER"; echo "password=$CTL_GIT_TOKEN"; }; f'
-GIT_ASKPASS=/bin/true git -C "$STAGE" -c credential.helper="$ghelper" \
+GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/true git -C "$STAGE" -c credential.helper= -c credential.helper="$ghelper" \
   fetch -q --depth 1 origin "$SHA" 2>/dev/null \
-  || { GIT_ASKPASS=/bin/true git -C "$STAGE" -c credential.helper="$ghelper" \
+  || { GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/true git -C "$STAGE" -c credential.helper= -c credential.helper="$ghelper" \
          fetch -q origin '+refs/heads/*:refs/remotes/origin/*' 2>/dev/null \
        && git -C "$STAGE" cat-file -e "$SHA^{commit}" 2>/dev/null; } \
   || { cleanup_stage_on_refusal; die "cannot fetch commit $SHA from $PROJECT — wrong SHA, revoked token, or unreachable GitLab"; }
@@ -267,6 +302,8 @@ for path in root.rglob('*'):
         if 'filter=lfs' in path.read_text():
             sys.exit('project uses Git LFS — unsupported')
 PY
+COMMIT_SUBJECT=$(git -C "$STAGE" log -1 --format=%s | python3 -c 'import sys; print("".join(c for c in sys.stdin.read() if c.isprintable())[:160])')
+echo "ctl-run: synced project=$PROJECT sha=$SHA; project tree verified"
 rm -rf "$STAGE/.git"   # execution works from an immutable tree, not a repo
 
 # provenance convention: a project carrying playbooks/vars/commit.yml gets
@@ -277,30 +314,43 @@ if [ -f "$STAGE/playbooks/vars/commit.yml" ]; then
     > "$STAGE/playbooks/vars/commit.yml"
 fi
 
+fi # fetch or reuse the synced snapshot
+
 PB="$STAGE/$PLAYBOOK"; INV="$STAGE/$INV_REL"
 [ -f "$PB" ]  || { cleanup_stage_on_refusal; die "playbook '$PLAYBOOK' not in the fetched tree"; }
 [ -e "$INV" ] || { cleanup_stage_on_refusal; die "environment inventory '$INV_REL' not in the fetched tree"; }
 
 record() { # status rc [mesh_job]
-  python3 - "$RUNS_DIR/records/$RUN_ID.json" <<PY
-import json, sys, os, tempfile
-rec = {
-  "run_id": "$RUN_ID", "env": "$ENVN", "mode": "$MODE",
-  "project": "$PROJECT", "sha": "$SHA", "playbook": "$PLAYBOOK",
-  "gitlab_pipeline": "${PIPELINE:-}", "gitlab_job": "${JOB:-}",
-  "stage_dir": "$STAGE", "status": "$1", "rc": "$2", "mesh_job": "${3:-}",
+  python3 - "$(dirname "$0")" "$RUNS_DIR/records/$RUN_ID.json" "$RUN_ID" "$ENVN" "$MODE" \
+    "$PROJECT" "$SHA" "$PLAYBOOK" "$PIPELINE" "$JOB" "$STAGE" "$1" "$2" "${3:-}" \
+    "$SYNC_RECORD" "${COMMIT_SUBJECT:-}" "$INV_REL" "$NODE" "$POOL" "$ZONE" <<'PYRECORD'
+import json, sys
+from pathlib import Path
+from datetime import datetime, timezone
+sys.path.insert(0, sys.argv[1])
+from ctl_ci import atomic_json
+keys = ('run_id', 'env', 'mode', 'project', 'sha', 'playbook', 'gitlab_pipeline',
+        'gitlab_job', 'stage_dir', 'status', 'rc', 'mesh_job')
+rec = dict(zip(keys, sys.argv[3:15]))
+synced = json.loads(sys.argv[15]) if sys.argv[15] else {}
+rec['commit_subject'] = synced.get('commit_subject', sys.argv[16])
+rec['sync_job'] = synced.get('gitlab_job', '')
+rec['synced_at'] = synced.get('synced_at', '')
+rec['inventory'] = sys.argv[17]
+rec['destination'] = next((kind + ':' + value for kind, value in
+                           zip(('node', 'pool', 'zone'), sys.argv[18:21]) if value), 'direct')
+rec['updated_at'] = datetime.now(timezone.utc).isoformat()
+if rec['status'] == 'synced':
+    rec['synced_at'] = rec['updated_at']
+atomic_json(Path(sys.argv[2]), rec)
+PYRECORD
 }
-fd, tmp = tempfile.mkstemp(dir=os.path.dirname(sys.argv[1]))
-with os.fdopen(fd, "w") as f:
-    json.dump(rec, f)
-    f.flush()
-    os.fsync(f.fileno())
-os.replace(tmp, sys.argv[1])
-d = os.open(os.path.dirname(sys.argv[1]), os.O_DIRECTORY)
-try: os.fsync(d)
-finally: os.close(d)
-PY
-}
+if [ "$SYNC_ONLY" = 1 ]; then
+  record synced 0
+  journal sync-save "$envjson" "$RUN_ID"
+  echo "ctl-run: sync complete run=$RUN_ID sha=$SHA; awaiting execution approval (no playbook run)"
+  exit 0
+fi
 record started ""
 # Persist intent before either execution engine can submit work. A killed
 # dispatcher leaves a claim and retries fail closed instead of running twice.

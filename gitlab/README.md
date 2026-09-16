@@ -1,5 +1,9 @@
 # GitLab CE alongside the Ansible controller
 
+For the reviewed sync → manual execution flow, separate sync approvals, 100+
+system rollout batches and enhanced results, see [Mesh rollouts](MESH-ROLLOUTS.md).
+
+
 For a screen-by-screen walkthrough, start with [GitLab CE: from first login to Ansible results](STEP-BY-STEP.md).
 
 Start with the [operator and Maintainer walkthrough](MAINTAINER-README.md)
@@ -109,7 +113,8 @@ docker compose -f gitlab/node.local.yml up -d --wait
 docker exec ansible-controller receptorctl --socket /run/receptor/receptor.sock status | grep exec-local-a
 
 # 4. run through GitLab exactly as in case A, environment prod-mesh:
-#      ctl-run --env prod-mesh --project ... --sha ... --playbook playbooks/ping.yml
+#      ctl-run --sync-only --env prod-mesh --project ... --sha ... --pipeline ... --playbook playbooks/ping.yml
+#      ctl-run --execute-synced --env prod-mesh --project ... --sha ... --pipeline ... --playbook playbooks/ping.yml
 ```
 
 Execution path: CI job → SSH → `ctl-run` → fetch → `mesh-run` → ingress
@@ -123,6 +128,7 @@ non-final (the CI-retry guard).
 
 Branch → change playbooks/inventory → MR (validation pipeline: syntax +
 lint, no deploy authority) → review → Maintainer merges to protected main
+→ mesh `sync-*` stages the reviewed revision without execution
 → pipeline offers manual `deploy-*` jobs → a human releases one → the
 target records the deployed commit. Recovery (`collect`), schedules,
 API-triggered and tag-driven runs: see the pipeline templates in the seed

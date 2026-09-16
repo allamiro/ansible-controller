@@ -18,6 +18,7 @@ environments:
   # Test case B: mesh — dispatched to the single-box node exec-local-a.
   prod-mesh:
     mode: mesh
+    require_sync: true  # separate reviewed sync from manually approved execution
     gitlab_url: http://gitlab.lab.local:8929  # disposable lab only; use HTTPS outside it
     # git_ca_file: /etc/pki/gitlab-ca.pem  # mount private CA read-only on controller
     allowed_projects: [root/mesh-automation]

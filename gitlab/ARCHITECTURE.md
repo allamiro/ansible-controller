@@ -1,5 +1,9 @@
 # GitLab Community Edition architecture
 
+For the reviewed sync → manual execution flow, separate sync approvals, 100+
+system rollout batches and enhanced results, see [Mesh rollouts](MESH-ROLLOUTS.md).
+
+
 GitLab stores automation projects and coordinates review and manual release.
 The controller fetches the reviewed commit and runs Ansible directly or through
 its Receptor mesh. Start with the [Maintainer guide](MAINTAINER-README.md) for
