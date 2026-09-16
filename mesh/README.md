@@ -26,6 +26,35 @@ runs the playbook locally over SSH and streams the output back to you over an
 encrypted, certificate-authenticated channel. No inbound firewall holes, no
 VPN, no agent on the targets.
 
+## Controller, orchestrator and execution node
+
+<table>
+<tr>
+<td align="center" width="50%"><img src="../assets/ansible-controller.png" alt="Ansible controller and orchestrator logo" width="180"></td>
+<td align="center" width="50%"><img src="../assets/ansible-execution-node.png" alt="Ansible execution node logo" width="180"></td>
+</tr>
+<tr>
+<td valign="top">
+
+**Controller and orchestrator.** The octopus on a Docker container is the
+control host where you work. As `ansible-controller`, it runs playbooks
+directly against targets it can reach. As `ansible-orchestrator`, the same
+runtime adds the mesh dispatcher: it signs jobs and sends them through the two
+Receptor ingresses. It also handles the optional GitLab sync and approvals.
+
+</td>
+<td valign="top">
+
+**Execution node.** The octopus on a server, holding a playbook, is
+`ansible-execution-node`. One runs inside each network the control host cannot
+reach. It dials out to ports 27199 and 27200, verifies each job's signature,
+runs the playbook against local SSH or WinRM targets, and streams results back.
+It runs no SSH server and holds no Git credentials.
+
+</td>
+</tr>
+</table>
+
 ## Do you need it?
 
 | Your situation | What to use |
@@ -45,6 +74,10 @@ these optional links without waiting for input; commands, CI jobs, and worker
 protocol output stay silent. See [notice opt-outs](../SUPPORT.md#terminal-notice).
 
 ## How it works
+
+![Distributed deployment: execution nodes in remote networks connect outbound over mTLS to two Receptor ingresses on the orchestrator's control host and run playbooks against local targets](../assets/diagrams/distributed-deployment.png)
+
+<sub>The illustration simplifies controller paths: `playbooks/` (including roles) mounts at `/configs/playbooks`, SSH keys at `/home/ansible/.ssh`, logs at `/var/log/ansible`, and Receptor sockets are under `/run/receptor/`. The diagram below shows the connection details.</sub>
 
 ![Outbound node connections to two mesh ingress endpoints](../assets/diagrams/mesh-topology.svg)
 

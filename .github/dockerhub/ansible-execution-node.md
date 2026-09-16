@@ -4,6 +4,10 @@
 <a href="https://github.com/sponsors/allamiro"><img src="https://raw.githubusercontent.com/allamiro/ansible-controller/main/assets/support/github-sponsors.svg" alt="Sponsor on GitHub" height="56"></a>
 </p>
 
+<p align="center">
+<img src="https://raw.githubusercontent.com/allamiro/ansible-controller/main/assets/ansible-execution-node.png" alt="Ansible execution node logo" width="200">
+</p>
+
 # Ansible Execution Node
 
 [Project overview](https://github.com/allamiro/ansible-controller) · [Contact](mailto:tsuliman@linuxvaults.com?subject=Ansible%20Controller%20support%20enquiry) · [Support terms](https://github.com/allamiro/ansible-controller/blob/main/SUPPORT.md)
