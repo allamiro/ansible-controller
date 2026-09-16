@@ -1,4 +1,12 @@
+<p align="center">
+<a href="https://buymeacoffee.com/pcileky2q"><img src="https://raw.githubusercontent.com/allamiro/ansible-controller/main/assets/support/buy-me-a-coffee.svg" alt="Buy Me a Coffee" height="56"></a>
+&nbsp;&nbsp;
+<a href="https://github.com/sponsors/allamiro"><img src="https://raw.githubusercontent.com/allamiro/ansible-controller/main/assets/support/github-sponsors.svg" alt="Sponsor on GitHub" height="56"></a>
+</p>
+
 # Ansible Orchestrator
+
+[Project overview](https://github.com/allamiro/ansible-controller) · [Contact](mailto:tsuliman@linuxvaults.com?subject=Ansible%20Controller%20support%20enquiry) · [Support terms](https://github.com/allamiro/ansible-controller/blob/main/SUPPORT.md)
 
 The [Ansible Controller](https://hub.docker.com/r/allamiro1/ansible-controller) **plus the
 distributed-execution dispatcher**. Use it in place of the controller on your control host
@@ -13,6 +21,16 @@ same run, so `ansible-orchestrator:x.y.z` is provably the controller `x.y.z` wit
 dispatcher layered on — never whatever `latest` pointed at on build day.
 
 ---
+
+## Compare the images
+
+| Image on Docker Hub | Purpose and where it runs |
+|---|---|
+| [ansible-controller](https://hub.docker.com/r/allamiro1/ansible-controller) | Standalone control host. Runs playbooks directly against reachable SSH or WinRM targets. |
+| [ansible-orchestrator](https://hub.docker.com/r/allamiro1/ansible-orchestrator) | Mesh control host. Includes the controller runtime and dispatches signed jobs through Receptor ingress sidecars to execution nodes. |
+| [ansible-execution-node](https://hub.docker.com/r/allamiro1/ansible-execution-node) | Inside each target network. Runs mesh jobs against local targets and connects outbound to the control host; no running SSH server. |
+
+All three support `linux/amd64` and `linux/arm64`. Controller and mesh use the same release versions; choose the image for its role. GitLab integration is optional.
 
 ## Reviewed Git sync, execution approval and reports
 
@@ -49,7 +67,7 @@ command sessions, and does not enter worker protocol output. Set
 `ANSIBLE_CONTROLLER_SUPPORT_NOTICE=0` or create `~/.hushlogin` to hide it;
 `controller-support` displays it on demand in a terminal.
 
-- [Learn more: mesh deployment assistance and support enquiries](https://github.com/allamiro/ansible-controller/blob/main/SUPPORT.md)
+- [Contact Tamir Suliman for deployment assistance](mailto:tsuliman@linuxvaults.com?subject=Ansible%20Controller%20support%20enquiry) · [Support scope and terms](https://github.com/allamiro/ansible-controller/blob/main/SUPPORT.md)
 - [GitHub Sponsors](https://github.com/sponsors/allamiro)
 - [Buy Me a Coffee](https://buymeacoffee.com/pcileky2q)
 
@@ -161,7 +179,7 @@ as `make run`:
 ```bash
 make mesh-run NODE=exec-dmz-a PLAYBOOK=site.yml INVENTORY=inventory/dmz.ini
 make mesh-run ZONE=dmz PLAYBOOK=site.yml INVENTORY=inventory/dmz.ini WAIT=120
-make mesh-collect JOB=<job-id>   # recover a job reported results-incomplete
+make mesh-collect JOB="<job-id>"   # recover a job reported results-incomplete
 ```
 
 Or call the dispatcher directly inside the container for flags `make` doesn't surface:

@@ -149,6 +149,14 @@ docker exec -it ansible-controller bash
 
 ## Pull the image
 
+| Image on Docker Hub | Purpose and where it runs |
+|---|---|
+| [ansible-controller](https://hub.docker.com/r/allamiro1/ansible-controller) | Standalone control host. Runs playbooks directly against reachable SSH or WinRM targets. |
+| [ansible-orchestrator](https://hub.docker.com/r/allamiro1/ansible-orchestrator) | Mesh control host. Includes the controller runtime and dispatches signed jobs through Receptor ingress sidecars to execution nodes. |
+| [ansible-execution-node](https://hub.docker.com/r/allamiro1/ansible-execution-node) | Inside each target network. Runs mesh jobs against local targets and connects outbound to the control host; no running SSH server. |
+
+All three are also published under `ghcr.io/allamiro/<image-name>` for `linux/amd64` and `linux/arm64`. Use the controller commands below for standalone execution; follow the [mesh setup guide](../mesh/README.md) for the other two images.
+
 **Docker Hub**
 ```bash
 docker pull allamiro1/ansible-controller:latest

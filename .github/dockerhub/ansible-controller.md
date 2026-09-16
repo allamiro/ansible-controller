@@ -1,4 +1,12 @@
+<p align="center">
+<a href="https://buymeacoffee.com/pcileky2q"><img src="https://raw.githubusercontent.com/allamiro/ansible-controller/main/assets/support/buy-me-a-coffee.svg" alt="Buy Me a Coffee" height="56"></a>
+&nbsp;&nbsp;
+<a href="https://github.com/sponsors/allamiro"><img src="https://raw.githubusercontent.com/allamiro/ansible-controller/main/assets/support/github-sponsors.svg" alt="Sponsor on GitHub" height="56"></a>
+</p>
+
 # Ansible Controller
+
+[Project overview](https://github.com/allamiro/ansible-controller) · [Contact](mailto:tsuliman@linuxvaults.com?subject=Ansible%20Controller%20support%20enquiry) · [Support terms](https://github.com/allamiro/ansible-controller/blob/main/SUPPORT.md)
 
 A **community open-source Ansible control node** on Ubuntu 26.04, with an OpenSSH
 server and a host-mounted configuration. Run playbooks directly against reachable
@@ -10,9 +18,19 @@ support notice**. Sponsorship is voluntary. For targets in isolated networks, us
 [Ansible Orchestrator](https://hub.docker.com/r/allamiro1/ansible-orchestrator) with
 [Ansible Execution Node](https://hub.docker.com/r/allamiro1/ansible-execution-node).
 
+## Compare the images
+
+| Image on Docker Hub | Purpose and where it runs |
+|---|---|
+| [ansible-controller](https://hub.docker.com/r/allamiro1/ansible-controller) | Standalone control host. Runs playbooks directly against reachable SSH or WinRM targets. |
+| [ansible-orchestrator](https://hub.docker.com/r/allamiro1/ansible-orchestrator) | Mesh control host. Includes the controller runtime and dispatches signed jobs through Receptor ingress sidecars to execution nodes. |
+| [ansible-execution-node](https://hub.docker.com/r/allamiro1/ansible-execution-node) | Inside each target network. Runs mesh jobs against local targets and connects outbound to the control host; no running SSH server. |
+
+All three support `linux/amd64` and `linux/arm64`. Controller and mesh use the same release versions; choose the image for its role. GitLab integration is optional.
+
 ## Links and tags
 
-- [Source and full guide](https://github.com/allamiro/ansible-controller)
+- [Detailed controller guide](https://github.com/allamiro/ansible-controller/blob/main/docs/README.md)
 - [Releases](https://github.com/allamiro/ansible-controller/releases) and the Docker Hub **Tags** tab
 - [Dockerfile](https://github.com/allamiro/ansible-controller/blob/main/docker/Dockerfile)
 - [Issues](https://github.com/allamiro/ansible-controller/issues)
@@ -64,7 +82,7 @@ docker compose -f docker-compose.yml -f controller.override.yml up -d --no-build
 Before executing a playbook, configure `configs/inventory/hosts.ini`, target
 credentials and verified SSH host keys. The supplied `configs/ansible.cfg` has
 compatibility-oriented host-key defaults; follow the production SSH trust procedure
-in the [main guide](https://github.com/allamiro/ansible-controller#ssh-host-key-checking) rather than
+in the [detailed guide](https://github.com/allamiro/ansible-controller/blob/main/docs/README.md#ssh-host-key-checking) rather than
 assuming strict target verification is enabled.
 
 ```bash
@@ -98,7 +116,7 @@ share the startup lock and report install failures; `make preflight` inspects
 readiness. Pin your requirements and review failures before running automation.
 
 For Vault password provisioning, SSH trust, dynamic inventory and Windows
-configuration, use the maintained [controller guide](https://github.com/allamiro/ansible-controller).
+configuration, use the maintained [controller guide](https://github.com/allamiro/ansible-controller/blob/main/docs/README.md).
 Keep passwords and private keys out of Git, image layers and command examples.
 
 ## Optional GitLab workflow
@@ -114,6 +132,8 @@ and [sync, approvals, reporting and upgrades](https://github.com/allamiro/ansibl
 For distributed execution, follow the mesh image pages instead.
 
 ## Support and license
+
+For deployment assistance, [contact Tamir Suliman](mailto:tsuliman@linuxvaults.com?subject=Ansible%20Controller%20support%20enquiry). See [support scope and terms](https://github.com/allamiro/ansible-controller/blob/main/SUPPORT.md); sponsorship does not include a support contract or guaranteed response.
 
 Support maintenance through [GitHub Sponsors](https://github.com/sponsors/allamiro)
 or [Buy Me a Coffee](https://buymeacoffee.com/pcileky2q). Bug reports, documentation

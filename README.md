@@ -18,21 +18,23 @@
 [![Version](https://img.shields.io/github/v/tag/allamiro/ansible-controller?label=version)](https://github.com/allamiro/ansible-controller/releases)
 [![License](https://img.shields.io/github/license/allamiro/ansible-controller)](LICENSE)
 
-[Detailed guide](docs/README.md) · [Architecture](docs/ARCHITECTURE.md) · [Mesh](mesh/README.md) · [GitLab integration](gitlab/README.md) · [Support](SUPPORT.md)
+[Detailed guide](docs/README.md) · [Architecture](docs/ARCHITECTURE.md) · [Mesh](mesh/README.md) · [GitLab integration](gitlab/README.md) · [Support](SUPPORT.md) · [Contact](SUPPORT.md#learn-more)
 
 </div>
 
-An Ubuntu 26.04 container with Ansible, OpenSSH, and Windows/WinRM support. Keep playbooks, inventory, and credentials on your machine and mount them into the controller. No host Ansible installation is needed. Images are published for **amd64 and arm64** to [Docker Hub](https://hub.docker.com/r/allamiro1/ansible-controller) and [GHCR](https://github.com/allamiro/ansible-controller/pkgs/container/ansible-controller).
+An Ubuntu 26.04 container with Ansible, OpenSSH, and Windows/WinRM support. Keep playbooks, inventory, and credentials on your machine and mount them into the controller. No host Ansible installation is needed. All three images below are published for **amd64 and arm64** on Docker Hub and as `ghcr.io/allamiro/<image-name>`.
 
 ## Choose how to run
 
 ![Direct execution from the controller, or optional mesh execution inside a remote network](assets/diagrams/controller-overview.svg)
 
-| Your setup | Start here |
+| Image on Docker Hub | Purpose and where it runs |
 |---|---|
-| The controller can reach your servers | Use the standalone quick start below. |
-| Targets are inside a network the controller cannot reach | Deploy the optional [execution mesh](mesh/README.md). Nodes connect outbound using mutual TLS. |
-| You want GitLab review and manual deployment jobs | Add the optional [GitLab integration](gitlab/MAINTAINER-README.md). It calls the controller; it is not required for either execution mode. |
+| [ansible-controller](https://hub.docker.com/r/allamiro1/ansible-controller) | Standalone control host. Runs playbooks directly against reachable SSH or WinRM targets. |
+| [ansible-orchestrator](https://hub.docker.com/r/allamiro1/ansible-orchestrator) | Mesh control host. Includes the controller runtime and dispatches signed jobs through Receptor ingress sidecars to execution nodes. |
+| [ansible-execution-node](https://hub.docker.com/r/allamiro1/ansible-execution-node) | Inside each target network. Runs mesh jobs against local targets and connects outbound to the control host; no running SSH server. |
+
+Use the standalone quick start below for the controller, or the [mesh guide](mesh/README.md) for the orchestrator and execution nodes. [GitLab integration](gitlab/MAINTAINER-README.md) is optional for either mode.
 
 ## Quick start
 
@@ -87,7 +89,7 @@ The shipped configuration disables managed-host key verification for lab use. Be
 
 This project's source is licensed under the **[Apache License 2.0](LICENSE)**. Bundled third-party software retains its own licenses.
 
-The community controller and mesh are free to use with **no host limit or purchase requirement**. Sponsorship is voluntary. Deployment assistance is available by arrangement; see [SUPPORT.md](SUPPORT.md) for scope and contact details. Sponsorship alone does not include a support contract or guaranteed response.
+The community controller and mesh are free to use with **no host limit or purchase requirement**. Sponsorship is voluntary. For deployment assistance, [contact the maintainer](mailto:tsuliman@linuxvaults.com?subject=Ansible%20Controller%20support%20enquiry) and see [SUPPORT.md](SUPPORT.md) for scope and terms. Sponsorship alone does not include a support contract or guaranteed response.
 
 ## Contributing
 
