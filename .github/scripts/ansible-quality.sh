@@ -45,7 +45,21 @@ echo "collections: $(ansible-galaxy collection list 2>/dev/null | grep -cE '^[a-
 # Content declared in configs/requirements.yml is not baked into the image, so
 # a playbook may depend on it. Empty lists are the shipped default and install
 # nothing; a declared entry must resolve here as it would on the controller.
-if python3 -c "import sys,yaml; d=yaml.safe_load(open('configs/requirements.yml')) or {}; sys.exit(0 if (d.get('roles') or d.get('collections')) else 1)"; then
+declared=$(python3 - <<'PY'
+import yaml
+with open('configs/requirements.yml') as stream:
+    data = yaml.safe_load(stream)
+if data is None:
+    data = {}
+if not isinstance(data, dict):
+    raise ValueError('Galaxy requirements must be a mapping')
+for key in ('roles', 'collections'):
+    if key in data and not isinstance(data[key], list):
+        raise ValueError(f'Galaxy {key} must be a list')
+print('yes' if data.get('roles') or data.get('collections') else 'no')
+PY
+)
+if [ "$declared" = yes ]; then
   say "installing declared Galaxy content"
   # The same two commands and destinations docker/entrypoint.sh uses. A plain
   # `ansible-galaxy install -r` does install collections, but into

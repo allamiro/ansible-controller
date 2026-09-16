@@ -47,6 +47,11 @@ on:
       - "!docker/**/*.md"
       - "!mesh/**/*.md"
 
+# Supersede only revisions of the same PR. Every release run has its own group.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   lint:
     name: Lint mesh Dockerfile
@@ -134,6 +139,11 @@ jobs:
           docker run --rm --entrypoint receptor ansible-execution-node:ci --version
           docker run --rm --entrypoint ansible-runner ansible-execution-node:ci --version
 
+      - name: Runner project inventory regression
+        run: |
+          docker run --rm --network none -v "$PWD":/repo:ro -w /repo \
+            -e PYTHONDONTWRITEBYTECODE=1 --entrypoint python3 \
+            ansible-orchestrator:ci gitlab/tests/test_runner_inventory.py -v
       - name: Mesh support notice regressions
         run: |
           for image in ansible-orchestrator:ci ansible-execution-node:ci; do

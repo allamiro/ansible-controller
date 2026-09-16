@@ -168,7 +168,9 @@ list`/`status`) instead of inferred from a failed call.
 
 **In-flight failure posture (interim):** if an orchestrator dies mid-job, the job
 keeps running on the execution node (Receptor is store-and-forward); the live
-stream is lost; recovery is re-query artifacts or re-run (playbooks are idempotent).
+stream is lost. Collect the original tracked job or reconcile its outcome before
+considering another execution. Playbooks need not be idempotent; a disconnect
+does not prove work stopped, and the dispatcher never automatically resubmits.
 
 ---
 
@@ -479,9 +481,10 @@ Proves Receptor identity and target SSH identity are separate.
 - Assert unique PDDs, unique artifact dirs, no work-unit id collision.
 - Assert all N per-job meta.json files survive (one file per UUID; no shared-file
   corruption or lost entries).
-- Per-node cap is enforced by an ATOMIC reservation: select+submit hold a `flock`
-  on a per-node slot file (on shared storage), so the cap is not a check-then-act
-  race on `receptorctl work list`.
+- Per-node cap is enforced by a slot lock for the dispatcher lifetime plus a
+  persisted `.hold` written before submission. The hold survives a crashed
+  dispatcher and blocks reuse until outcome recovery releases it. Submission
+  completing alone does not release capacity.
 - Assert the cap holds under a burst where every dispatcher sees a "free" slot at
   once — the surplus queues on the lock; they do not all submit to the same node.
 ```

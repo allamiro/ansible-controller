@@ -117,6 +117,21 @@ sync and execution for either mode. GitLab remains optional.
 
 This project's source is licensed under the **[Apache License 2.0](LICENSE)**. Bundled third-party software retains its own licenses.
 
+| Capability or term | Community controller | Community mesh | Enterprise support services |
+|---|---|---|---|
+| Software | Standalone Ansible controller | Orchestrator and execution nodes | Uses the same community software |
+| Execution | Direct SSH / WinRM | Signed work over Receptor; nodes reach targets | Deployment planning and operational assistance by agreement |
+| GitLab sync, approval and reports | Optional integration | Optional integration | Integration/setup assistance by agreement |
+| Host limit / 100+ systems | Unlimited | Unlimited | Fleet size helps scope the work, not license enforcement |
+| Software license | Apache-2.0 project source | Apache-2.0 project source | No replacement software license; service terms agreed separately |
+| Payment / response commitments | Free; voluntary sponsorship | Free; voluntary sponsorship | Scope, fees and response commitments agreed before work starts |
+
+**EE status:** there is no separate Enterprise Edition or proprietary mesh license
+available today. Here, enterprise support means optional services. It does not
+unlock features or remove a host cap. “Execution environment” is a different
+Ansible term and does not indicate a paid license. See [support and licensing
+details](SUPPORT.md#enterprise-support-and-ee-status).
+
 The community controller and mesh are free to use with **no host limit or purchase requirement**. Sponsorship is voluntary. For deployment assistance, [contact the maintainer](mailto:tsuliman@linuxvaults.com?subject=Ansible%20Controller%20support%20enquiry) and see [SUPPORT.md](SUPPORT.md) for scope and terms. Sponsorship alone does not include a support contract or guaranteed response.
 
 ## Contributing

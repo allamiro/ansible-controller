@@ -1,0 +1,5 @@
+{
+  "ansible-controller": "Community Ansible controller on Ubuntu 26.04: SSH/WinRM, mounted configuration, amd64 and arm64.",
+  "ansible-orchestrator": "Ansible mesh orchestrator: signed dispatch, optional Git sync/approval workflow and result reports.",
+  "ansible-execution-node": "Ansible mesh execution node: signed jobs over outbound mTLS, SSH/WinRM targets, no running sshd."
+}

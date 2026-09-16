@@ -19,6 +19,20 @@ work starts. This project does not currently offer a published enterprise featur
 tier, a standard SLA, or an enterprise license that you must buy to continue.
 Sponsorship alone does not purchase a support contract or guarantee a response.
 
+## Enterprise support and EE status
+
+The project does not publish a separate Enterprise Edition (EE), activation key,
+or proprietary mesh feature tier. Optional enterprise services use the same free
+controller and mesh described in the [edition/support table](README.md#license-and-support).
+Contact the maintainer to agree deployment assistance, integration work or support
+scope; no fixed pricing or standard SLA is advertised.
+
+The [project license](LICENSE) remains Apache-2.0. Bundled components retain their
+own licenses, including [Ansible's GPL license](https://github.com/ansible/ansible/blob/devel/COPYING).
+A service agreement does not replace those software licenses. “Execution
+environment” is also abbreviated EE in the Ansible ecosystem; that term describes
+a runtime, not a purchase requirement.
+
 ## Sponsor
 
 - [GitHub Sponsors](https://github.com/sponsors/allamiro)

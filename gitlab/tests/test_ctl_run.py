@@ -362,13 +362,35 @@ print('mesh-run: tracking job=' + job)
         ))
         uuid = '00000000-0000-0000-0000-000000000001'
         jobs = self.base / "relocated/jobs"
+        (jobs / uuid).mkdir(parents=True)
+        (jobs / uuid / 'meta.json').write_text('{"status":"succeeded"}')
+        run = '20260916T120000Z-1'
+        records = self.base / 'runs/records'
+        records.mkdir(parents=True)
+        (records / (run + '.json')).write_text(json.dumps({
+            'run_id':run, 'env':'test', 'project':'group/project',
+            'mode':'mesh', 'mesh_job':uuid,
+        }))
+        config = json.loads(self.map.read_text())
+        config['environments']['test']['mode'] = 'mesh'
+        self.map.write_text(json.dumps(config))
+        (self.base / 'ctl_ci.py').write_text((ROOT / 'gitlab/bin/ctl_ci.py').read_text())
         result = subprocess.run(
-            ['bash', str(wrapper), '--collect', uuid],
+            ['bash', str(wrapper), '--collect', uuid, '--env', 'test', '--project', 'group/project'],
             env=dict(self.env, CTL_RUN_MESH_JOBS=str(jobs)),
             text=True, capture_output=True,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.splitlines(), ['--collect', uuid, '--jobs-dir', str(jobs)])
+        # Knowing a UUID is insufficient, even when the environment allows both projects.
+        config['environments']['test']['allowed_projects'].append('group/other')
+        self.map.write_text(json.dumps(config))
+        denied = subprocess.run(
+            ['bash', str(wrapper), '--collect', uuid, '--artifacts', '--env', 'test', '--project', 'group/other'],
+            env=dict(self.env, CTL_RUN_MESH_JOBS=str(jobs)), capture_output=True,
+        )
+        self.assertNotEqual(denied.returncode, 0)
+        self.assertEqual(denied.stdout, b'')
 
     def test_mesh_guard_fails_closed_when_job_records_are_unreadable(self):
         """With the state volume unmounted or relocated the guard can see nothing,

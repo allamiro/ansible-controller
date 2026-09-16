@@ -166,7 +166,10 @@ runner_registered() { # name expected-access-level required-tag
   det=$(glab GET "/runners/$rid" 2>/dev/null) || return 1
   # tag_list must still carry the tag the CI jobs select on — a tag renamed
   # in the UI leaves jobs pending forever with an otherwise-valid runner
-  jq -e ".paused == false and .access_level == \"$2\" and (.tag_list | index(\"$3\") != null)" <<<"$det" >/dev/null || return 1
+  jq -e --arg access "$2" --arg tag "$3" --argjson pid "$PID" \
+    '.paused == false and .access_level == $access and .locked == true
+     and .run_untagged == false and (.tag_list | index($tag) != null)
+     and (.projects | length == 1 and .[0].id == $pid)' <<<"$det" >/dev/null || return 1
 }
 drop_runner() { docker exec gitlab-lab-runner gitlab-runner unregister --name "$1" >/dev/null 2>&1 || true; }
 if ! runner_registered lab-validate not_protected mesh-validate; then

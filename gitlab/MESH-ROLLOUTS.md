@@ -115,3 +115,10 @@ are displayed with HTML escaping; keep sensitive content out of commit messages.
 Raw execution artifacts remain restricted to Maintainers and can contain secrets
 if a playbook logs them. Review them before sharing. CI cancellation before report
 creation can leave no report; absence is never proof of completion.
+
+
+For CI collection, update older seed jobs to pass `--collect "$JOB_ID" --env
+<mesh-environment> --project "$CI_PROJECT_PATH"`. The controller checks the current
+project allowlist and original execution provenance before either recovery or
+artifact export. Jobs with no controller-owned project record need host-operator
+recovery through the native mesh CLI; they cannot be exported by a CI caller.

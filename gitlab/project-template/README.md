@@ -89,15 +89,13 @@ touched nothing. `playbooks/site.yml` asserts the group is non-empty for that
 reason. An inventory named as an explicit single file, like the validation one, is
 never filtered this way.
 
-In mesh mode the directory choice also decides whether the credentials arrive at
-all: `mesh-run`
-copies a file inventory into the payload as that single file, so sibling
-`group_vars` stay behind in the staged project copy, where Ansible looks for
-neither inventory-adjacent nor playbook-adjacent variables, and the play then
-connects with no username or password instead of reporting a missing credential.
-A directory inventory is staged whole. Standalone execution runs in the fetched
-tree and resolves both layouts, so a file selection can look correct until the
-same project is dispatched through the mesh.
+Current GitLab mesh dispatch preserves inventory paths inside the complete staged
+project, including sibling variables and plugin data. Older controller/dispatcher
+versions copied single inventory files into a detached directory and could lose
+those siblings. The template's directory mapping works with both layouts; update
+the controller and mesh dispatcher together before relying on file preservation.
+Native dispatch without `--project-dir` still needs the directory form when
+inventory depends on adjacent files.
 
 In the Vault editor enter the real `ansible_user`, `ansible_password`, and only
 if needed `ansible_become_password`. Commit the encrypted file. The administrator
