@@ -100,6 +100,11 @@ export GITLAB_HOST=gitlab.lab.local GITLAB_PORT=8929
 export CTL_HOST=ctl.prod.local
 ```
 
+Bootstrap discovers the reused lab target's actual SSH bind mount and installs
+the generated controller public key there. For a custom demo target, set
+`DEMO_TARGET_SSH_DIR` to its absolute host-side SSH directory. This only provisions
+the demo target; fleet access remains an administrator-managed credential.
+
 For the **fresh `gitlab/compose.gitlab.yml` stack**, use its names instead:
 
 ```bash
