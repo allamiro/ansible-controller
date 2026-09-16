@@ -199,24 +199,21 @@ if [ "$MODE" = mesh ]; then
     if [ ! -r "$d" ] || [ ! -x "$d" ]; then unresolved="$unresolved $job(unreadable directory)"; continue; fi
     if [ ! -r "$d/meta.json" ]; then unresolved="$unresolved $job(no readable record)"; continue; fi
     s=$(python3 - "$d/meta.json" <<'PY'
-import json, sys
+import json, re, sys
 try:
     status = json.load(open(sys.argv[1]))['status']
-    if isinstance(status, str):
-        print(status)
+    # Validate before shell command substitution strips trailing newlines.
+    resolved = isinstance(status, str) and (
+        status in ('succeeded', 'submit-failed-pre')
+        or re.fullmatch(r'failed rc=[0-9]+', status)
+    )
+    print('resolved' if resolved else 'unresolved')
 except (OSError, ValueError, KeyError, TypeError):
-    pass
+    print('unparseable record')
 PY
     )
     case "$s" in
-      succeeded|submit-failed-pre) ;;
-      # [0-9]* is one digit followed by ANYTHING, so a record reading
-      # "failed rc=2 pending" would have counted as terminal. Require the whole
-      # suffix to be digits.
-      "failed rc="*)
-        rest=${s#"failed rc="}
-        case "$rest" in ''|*[!0-9]*) unresolved="$unresolved $job($s)";; esac;;
-      '') unresolved="$unresolved $job(unparseable record)";;
+      resolved) ;;
       *)  unresolved="$unresolved $job($s)";;
     esac
   done

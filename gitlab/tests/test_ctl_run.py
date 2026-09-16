@@ -175,6 +175,9 @@ class ControllerTests(unittest.TestCase):
             "ambiguous": '{"status":"submit-ambiguous"}',     # the classic case
             "truncated_success": '{"status":"succeeded"',
             "truncated_refusal": '{"status":"submit-failed-pre"',
+            "success_newline": json.dumps({"status": "succeeded\n"}),
+            "failure_newline": json.dumps({"status": "failed rc=2\n"}),
+            "refusal_newline": json.dumps({"status": "submit-failed-pre\n"}),
         }
         for name, body in cases.items():
             (jobs / name).mkdir(parents=True)
