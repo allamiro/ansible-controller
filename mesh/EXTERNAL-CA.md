@@ -99,7 +99,7 @@ manages Windows servers in its network over WinRM exactly as it manages
 Linux over SSH — the node is the WinRM client, dialing out to TCP
 5985/5986 on the target. Declare the connection in the inventory
 (`ansible_connection=winrm`, `ansible_winrm_transport=ntlm`, …) per the
-main README's [WinRM section](../README.md#managing-windows-hosts-winrm).
+detailed guide's [WinRM section](../docs/README.md#managing-windows-hosts-winrm).
 
 The **modules** are a separate step: `ansible.windows` (win_ping,
 win_copy, …) is Galaxy content, not part of ansible-core or the images.

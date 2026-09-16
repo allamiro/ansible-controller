@@ -1,0 +1,15 @@
+flowchart TB
+    accTitle: Where Ansible playbooks run
+    accDescr: Direct mode runs Ansible in the controller. Optional mesh mode dispatches signed work to an execution node that runs Ansible inside the target network.
+    subgraph direct["DIRECT · default"]
+        direction LR
+        C["Controller<br/>Runs Ansible"] -->|SSH or WinRM| T["Reachable<br/>managed hosts"]
+    end
+    subgraph mesh["MESH · optional"]
+        direction LR
+        O["Orchestrator<br/>Dispatches work"] -->|Signed work over Receptor| E["Execution node<br/>Runs Ansible"]
+        E -->|SSH or WinRM| R["Managed hosts<br/>in its local network"]
+    end
+    direct ~~~ mesh
+    classDef target fill:#edf8f2,stroke:#3d8164,color:#143b2b
+    class T,R target

@@ -1,0 +1,24 @@
+flowchart LR
+    accTitle: Default Compose mounts
+    accDescr: Host configuration and logs are mounted read-write. Playbooks and SSH keys are mounted read-only. A named volume persists the controller SSH server host keys.
+    subgraph host["HOST · your files"]
+        direction TB
+        HC["configs/"]
+        HP["playbooks/"]
+        HS["ssh/"]
+        HL["logs/"]
+        HK[("ssh-host-keys<br/>named volume")]
+    end
+    subgraph container["CONTROLLER · container paths"]
+        direction TB
+        CC["/configs<br/>Configuration and inventory"]
+        CP["/configs/playbooks<br/>Playbooks and local roles"]
+        CS["/home/ansible/.ssh<br/>Target keys and login access"]
+        CL["/var/log/ansible<br/>Ansible and installer logs"]
+        CK["/etc/ssh/host_keys<br/>SSH server identity"]
+    end
+    HC -->|read / write| CC
+    HP -->|read only| CP
+    HS -->|read only| CS
+    HL -->|read / write| CL
+    HK -->|read / write| CK
