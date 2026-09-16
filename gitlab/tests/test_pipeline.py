@@ -41,6 +41,7 @@ else:
             result = subprocess.run(['bash', '-euc', script], cwd=repo,
                 env=dict(os.environ, PATH=str(repo) + os.pathsep + os.environ['PATH'],
                          CTL_SSH_KEY=str(repo / 'key'), CTL_KNOWN_HOSTS='unused',
+                         CTL_HOST='ctl.test.invalid',
                          CI_COMMIT_SHA='a' * 40, CTL_COMMIT_SHA='b' * 40,
                          CI_PROJECT_DIR='/untrusted/override', CI_PROJECT_PATH='group/project',
                          CI_PIPELINE_ID='1', CI_JOB_ID='2', PLAYBOOK='playbooks/site.yml',
@@ -83,6 +84,7 @@ with tarfile.open(fileobj=sys.stdout.buffer, mode='w|') as archive:
                                              '--pipeline', '10'], cwd=repo, capture_output=True,
                         env=dict(os.environ, PATH=str(repo) + os.pathsep + os.environ['PATH'],
                                  CTL_SSH_KEY='fixture', CTL_KNOWN_HOSTS='fixture',
+                                 CTL_HOST='ctl.test.invalid',
                                  EXECUTION_RC=str(execution), EXPORT_RC=str(export)))
                     self.assertEqual(result.returncode, expected, result.stderr)
                     self.assertEqual((repo / 'mesh-artifacts/ctl-run.json').exists(), export == 0)

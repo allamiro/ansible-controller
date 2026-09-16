@@ -148,6 +148,121 @@ class ControllerTests(unittest.TestCase):
         self.assertIn('different commit', retry.stderr)
         self.assertFalse((self.base / 'executed').exists())
 
+    def _mesh_env(self, jobs_dir):
+        self.map.write_text(json.dumps({"environments": {"test": {
+            "mode": "mesh", "gitlab_url": (self.base / "repos").as_uri(),
+            "allowed_projects": ["group/project"], "inventory": "inventory.ini",
+            "node": "exec-a"}}}))
+        return dict(self.env, CTL_RUN_MESH_JOBS=str(jobs_dir))
+
+    def _dispatch(self, env):
+        self.git("add", "-A"); self.git("commit", "-qm", "fixture", "--allow-empty")
+        return subprocess.run(["bash", str(ROOT / "gitlab/bin/ctl-run"),
+                               "--env", "test", "--project", "group/project",
+                               "--sha", self.git("rev-parse", "HEAD"),
+                               "--playbook", "playbooks/site.yml"],
+                              env=env, text=True, capture_output=True)
+
+    def test_mesh_guard_refuses_every_unestablished_record(self):
+        """A record is resolved only when it says so. Anything the guard cannot
+        read or cannot understand means the outcome is not established, which is
+        precisely what it exists to refuse on."""
+        jobs = self.base / "state/jobs"
+        cases = {
+            "truncated": '{"node":"exec-a"',                 # no status at all
+            "empty": "",                                      # zero-length record
+            "future": '{"status":"quarantined"}',             # status this build predates
+            "ambiguous": '{"status":"submit-ambiguous"}',     # the classic case
+            "truncated_success": '{"status":"succeeded"',
+            "truncated_refusal": '{"status":"submit-failed-pre"',
+            "success_newline": json.dumps({"status": "succeeded\n"}),
+            "failure_newline": json.dumps({"status": "failed rc=2\n"}),
+            "refusal_newline": json.dumps({"status": "submit-failed-pre\n"}),
+        }
+        for name, body in cases.items():
+            (jobs / name).mkdir(parents=True)
+            (jobs / name / "meta.json").write_text(body)
+        (jobs / "norecord").mkdir()                           # job directory, no meta.json
+        out = self._dispatch(self._mesh_env(jobs))
+        self.assertNotEqual(out.returncode, 0)
+        for name in list(cases) + ["norecord"]:
+            self.assertIn(name, out.stderr, f"{name} was silently treated as finished")
+        self.assertFalse((self.base / "executed").exists())
+
+    def test_mesh_guard_bootstraps_a_fresh_state_volume(self):
+        """A fresh mesh-state volume has no jobs/ child — mesh-run creates it on
+        first dispatch — so requiring it would refuse the very first deployment."""
+        state = self.base / "state"
+        state.mkdir()
+        out = self._dispatch(self._mesh_env(state / "jobs"))
+        self.assertNotIn("retry guard cannot prove", out.stderr)
+        self.assertNotIn("unresolved mesh job", out.stderr)
+        self.assertTrue((state / "jobs").is_dir(), "the guard did not initialise the jobs directory")
+
+    def test_mesh_guard_rejects_a_partial_failed_status(self):
+        """failed rc=<n> is terminal; failed rc=<n> followed by anything else is a
+        record nobody has established the meaning of."""
+        jobs = self.base / "state/jobs"
+        (jobs / "partial").mkdir(parents=True)
+        (jobs / "partial" / "meta.json").write_text('{"status":"failed rc=2 pending"}')
+        out = self._dispatch(self._mesh_env(jobs))
+        self.assertNotEqual(out.returncode, 0)
+        self.assertIn("partial", out.stderr)
+        self.assertFalse((self.base / "executed").exists())
+
+    def test_mesh_guard_allows_dispatch_once_every_record_is_terminal(self):
+        """The mirror of the above: succeeded and failed rc=<n> are terminal, so
+        the guard must let those through — otherwise it would block forever."""
+        jobs = self.base / "state/jobs"
+        (jobs / "ok").mkdir(parents=True)
+        (jobs / "ok" / "meta.json").write_text('{"status":"succeeded"}')
+        (jobs / "bad").mkdir()
+        (jobs / "bad" / "meta.json").write_text('{"status":"failed rc=2"}')
+        (jobs / "refused").mkdir()
+        (jobs / "refused" / "meta.json").write_text('{"status":"submit-failed-pre"}')
+        out = self._dispatch(self._mesh_env(jobs))
+        self.assertNotIn("unresolved mesh job", out.stderr)
+
+    def test_collect_passes_relocated_jobs_directory(self):
+        # Copy only the wrapper and replace its fixed executable path with a
+        # harmless recorder; never write to the installed mesh dispatcher.
+        fake = self.bin / "mesh-run"
+        fake.write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n')
+        fake.chmod(0o755)
+        wrapper = self.base / "ctl-run"
+        wrapper.write_text((ROOT / "gitlab/bin/ctl-run").read_text().replace(
+            'MESH_RUN=/usr/local/mesh/bin/mesh-run', f'MESH_RUN="{fake}"',
+        ))
+        uuid = '00000000-0000-0000-0000-000000000001'
+        jobs = self.base / "relocated/jobs"
+        result = subprocess.run(
+            ['bash', str(wrapper), '--collect', uuid],
+            env=dict(self.env, CTL_RUN_MESH_JOBS=str(jobs)),
+            text=True, capture_output=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), ['--collect', uuid, '--jobs-dir', str(jobs)])
+
+    def test_mesh_guard_fails_closed_when_job_records_are_unreadable(self):
+        """With the state volume unmounted or relocated the guard can see nothing,
+        which is not the same as having nothing to see."""
+        out = self._dispatch(self._mesh_env(self.base / "absent-state/jobs"))
+        self.assertNotEqual(out.returncode, 0, "dispatch proceeded with unreadable job records")
+        self.assertIn("retry guard cannot prove", out.stderr)
+        self.assertFalse((self.base / "executed").exists(), "a playbook ran despite the blind guard")
+
+    @unittest.skipIf(os.getuid() == 0, "root bypasses directory permission bits")
+    def test_unwritable_jobs_directory_refuses_before_pipeline_claim(self):
+        jobs = self.base / "state/jobs"
+        jobs.mkdir(parents=True)
+        jobs.chmod(0o555)
+        self.addCleanup(jobs.chmod, 0o700)
+        self.env = self._mesh_env(jobs)
+        result = self.run_ctl('--pipeline', '10')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('unwritable', result.stderr)
+        self.assertEqual(list((self.base / 'runs/requests').glob('*.json')), [])
+
     def test_unresolved_request_refuses_second_execution(self):
         self.assertEqual(self.run_ctl('--pipeline', '10').returncode, 0)
         record = next((self.base / 'runs/records').glob('*.json'))

@@ -3,6 +3,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import tarfile
 import tempfile
@@ -16,6 +17,12 @@ spec.loader.exec_module(ci)
 
 
 class JournalTests(unittest.TestCase):
+    def test_empty_mesh_jobs_uses_default(self):
+        with patch.dict(os.environ, {'CTL_RUN_MESH_JOBS': ''}):
+            fresh = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(fresh)
+        self.assertEqual(fresh.MESH_JOBS, Path('/var/lib/mesh/jobs'))
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)

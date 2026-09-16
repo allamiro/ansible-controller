@@ -78,13 +78,22 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# One definition of where mesh job records live, ahead of every consumer: the
+# recovery pass-through below, the retry guard, the dispatch that writes the
+# records, and the outcome reads that follow. Exported so ctl_ci.py resolves the
+# same location. A guard scanning one directory while work is recorded in
+# another is the failure this guard exists to prevent, and recovery reading a
+# third would report a missing record for work the guard is still blocking on.
+MESH_JOBS="${CTL_RUN_MESH_JOBS:-/var/lib/mesh/jobs}"
+export CTL_RUN_MESH_JOBS="$MESH_JOBS"
+
 # ---- recovery pass-through ---------------------------------------------------
 if [ -n "$COLLECT" ]; then
   case "$COLLECT" in *[!0-9a-fA-F-]*|'') die "--collect takes a mesh job uuid";; esac
   if [ "$ARTIFACTS" = 1 ]; then
     exec python3 "$(dirname "$0")/ctl_ci.py" collect-export "$RUNS_DIR" "$COLLECT"
   fi
-  exec "$MESH_RUN" --collect "$COLLECT"
+  exec "$MESH_RUN" --collect "$COLLECT" --jobs-dir "$MESH_JOBS"
 fi
 
 # ---- strict input grammars (reject shell/path games at the boundary) ----------
@@ -158,12 +167,55 @@ if [ -n "$PIPELINE" ]; then
   fi
 fi
 if [ "$MODE" = mesh ]; then
+  # Fail CLOSED. This guard is what stops a retry from dispatching while an
+  # earlier job's outcome is unknown, and it can only see jobs it can read: with
+  # the mesh state volume unmounted or relocated, the glob below matches nothing
+  # and every dispatch would sail past a guard that is blind rather than clear.
+  # A controller that cannot read the job records has not proved anything.
+  # CTL_RUN_MESH_JOBS exists for tests and for relocated state; it is not
+  # reachable from CI, which arrives through sudo with the environment stripped
+  # (see the ANSIBLE_CONFIG restoration below for the same reason).
+  # Check the state DIRECTORY, not the jobs child: nothing pre-creates jobs/,
+  # mesh-run makes it on first dispatch, so requiring it would refuse the very
+  # first deployment onto a fresh mesh-state volume. An absent or read-only
+  # parent still fails closed — that is the unmounted volume this guards.
+  MESH_STATE=$(dirname "$MESH_JOBS")
+  [ -d "$MESH_STATE" ] && [ -w "$MESH_STATE" ] \
+    || die "mesh state directory $MESH_STATE is missing or not writable — the retry guard cannot prove earlier work finished; mount the mesh state volume before dispatching"
+  mkdir -p "$MESH_JOBS" 2>/dev/null || true
+  [ -d "$MESH_JOBS" ] && [ -r "$MESH_JOBS" ] && [ -w "$MESH_JOBS" ] && [ -x "$MESH_JOBS" ] \
+    || die "mesh job directory is unreadable or unwritable at $MESH_JOBS — the retry guard cannot prove earlier work finished"
+  # A record counts as resolved ONLY when it says so. Listing the non-final
+  # statuses instead let every other outcome through: a truncated or unreadable
+  # meta.json parsed to an empty status and was silently treated as finished,
+  # and a status added to the dispatcher later would have been too. Succeeded
+  # and failed rc=<n> establish completed execution. submit-failed-pre proves
+  # nothing was submitted, so it also permits a retry. Everything else means
+  # the outcome is not established, which is the situation this guard exists for.
   unresolved=""
-  for m in /var/lib/mesh/jobs/*/meta.json; do
-    [ -f "$m" ] || continue
-    s=$(sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$m" | tail -1)
-    case "$s" in created|submitting|running|submit-ambiguous|results-incomplete)
-      unresolved="$unresolved $(basename "$(dirname "$m")")($s)";; esac
+  for d in "$MESH_JOBS"/*/; do
+    [ -d "$d" ] || continue
+    job=$(basename "$d")
+    if [ ! -r "$d" ] || [ ! -x "$d" ]; then unresolved="$unresolved $job(unreadable directory)"; continue; fi
+    if [ ! -r "$d/meta.json" ]; then unresolved="$unresolved $job(no readable record)"; continue; fi
+    s=$(python3 - "$d/meta.json" <<'PY'
+import json, re, sys
+try:
+    status = json.load(open(sys.argv[1]))['status']
+    # Validate before shell command substitution strips trailing newlines.
+    resolved = isinstance(status, str) and (
+        status in ('succeeded', 'submit-failed-pre')
+        or re.fullmatch(r'failed rc=[0-9]+', status)
+    )
+    print('resolved' if resolved else 'unresolved')
+except (OSError, ValueError, KeyError, TypeError):
+    print('unparseable record')
+PY
+    )
+    case "$s" in
+      resolved) ;;
+      *)  unresolved="$unresolved $job($s)";;
+    esac
   done
   [ -z "$unresolved" ] || die "unresolved mesh job(s):$unresolved — recover first (ctl-run --collect <uuid>; for submit-ambiguous follow the operator procedure in mesh/RUNBOOK.md 'Resolve an ambiguous submission'); refusing to dispatch"
 fi
@@ -284,7 +336,7 @@ else
   [ -n "$POOL" ] && dest+=( --pool "$POOL" )
   [ -n "$ZONE" ] && dest+=( --zone "$ZONE" )
   [ "${#dest[@]}" = 2 ] || { record refused 2; die "environment '$ENVN' must define exactly one of node/pool/zone"; }
-  margs=( "${dest[@]}" --project-dir "$STAGE" --playbook "$PB" --inventory "$INV" --wait "$WAIT" )
+  margs=( "${dest[@]}" --project-dir "$STAGE" --playbook "$PB" --inventory "$INV" --wait "$WAIT" --jobs-dir "$MESH_JOBS" )
   [ -n "$SSH_KEY" ] && margs+=( --ssh-key "$SSH_KEY" )
   [ -n "$GALAXY" ]  && margs+=( --galaxy-dir "$GALAXY" )
   # Logs live outside the fetched tree, so a project symlink cannot redirect
@@ -305,13 +357,13 @@ else
   # A transport rc is not proof the remote play finished. Keep the wrapper
   # record consistent with the authoritative mesh state for recovery.
   outcome=unknown
-  if [ -n "$mesh_job" ] && [ -f "/var/lib/mesh/jobs/$mesh_job/meta.json" ]; then
-    outcome=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status", "unknown"))' "/var/lib/mesh/jobs/$mesh_job/meta.json") || outcome=unknown
+  if [ -n "$mesh_job" ] && [ -f "$MESH_JOBS/$mesh_job/meta.json" ]; then
+    outcome=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status", "unknown"))' "$MESH_JOBS/$mesh_job/meta.json") || outcome=unknown
   fi
   record "$outcome" "$rc" "${mesh_job:-}"
-  if [ -n "$mesh_job" ] && [ -f "/var/lib/mesh/jobs/$mesh_job/meta.json" ]; then
+  if [ -n "$mesh_job" ] && [ -f "$MESH_JOBS/$mesh_job/meta.json" ]; then
     # extend the mesh record with the GitLab linkage (new metadata, additive)
-    python3 - "/var/lib/mesh/jobs/$mesh_job/meta.json" <<PY || true
+    python3 - "$MESH_JOBS/$mesh_job/meta.json" <<PY || true
 import json, sys, os, tempfile
 p = sys.argv[1]
 with open(p) as f: m = json.load(f)
