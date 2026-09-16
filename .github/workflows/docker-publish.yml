@@ -10,9 +10,9 @@ name: Build & Publish (Docker Hub + GHCR)
 # `latest` happened to point at (mesh plan Phase 11 — extend the matrix, don't
 # fork it).
 #
-# The mesh images' Docker Hub overviews (the README tab on hub.docker.com) are
+# All three images' Docker Hub overviews (the README tab on hub.docker.com) are
 # tracked in .github/dockerhub/<image>.md and synced by the hub-overviews job
-# below on every non-PR run, so the Hub page can never lag the shipped image.
+# below after successful publication. Keep them current alongside product changes.
 
 on:
   push:
@@ -377,11 +377,10 @@ jobs:
               "ghcr.io/${{ github.repository_owner }}/${name}:${tag}"
           done
 
-  # ---- Docker Hub overviews for the mesh images (the README tab on Hub) ----
-  # Hub has no way to derive an overview from the image, and a repository with
-  # none shows "No overview available" — which is what both mesh images showed
-  # until this job. The controller's overview predates it and is still edited
-  # on Hub directly. Runs after merge so the overview never describes tags
+  # ---- Docker Hub overviews for all three images (the README tab on Hub) ----
+  # Hub cannot derive an overview from an image. Track every page in this repo
+  # so controller and mesh documentation follow the same reviewed release path.
+  # Runs after merge so the overview never describes tags
   # that have not been published yet; a failure here does not unpublish
   # anything, it only leaves the previous overview in place.
   #
@@ -409,10 +408,12 @@ jobs:
       matrix:
         include:
           # short: the one-liner under the repository name (Hub caps it at 100 bytes)
+          - image: ansible-controller
+            short: "Community Ansible controller on Ubuntu 26.04: SSH/WinRM, mounted configuration, amd64 and arm64."
           - image: ansible-orchestrator
-            short: "Ansible Controller + mesh dispatcher: run playbooks on execution nodes in networks you cannot reach"
+            short: "Ansible mesh orchestrator: signed dispatch, optional Git sync/approval workflow and result reports."
           - image: ansible-execution-node
-            short: "Mesh execution node: runs Ansible playbooks inside closed networks, dialing out over mTLS. No sshd."
+            short: "Ansible mesh execution node: signed jobs over outbound mTLS, SSH/WinRM targets, no running sshd."
     steps:
       - uses: actions/checkout@v7
 

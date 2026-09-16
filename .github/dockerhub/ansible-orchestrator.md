@@ -14,6 +14,49 @@ dispatcher layered on — never whatever `latest` pointed at on build day.
 
 ---
 
+## Reviewed Git sync, execution approval and reports
+
+GitLab is optional; native `make mesh-run` and `make mesh-collect` remain available.
+The repository's separately installed `ctl-run` integration supports:
+
+1. Review and merge the Git change, then sync the exact commit with `--sync-only`.
+   Sync stages and validates the project without running a playbook or inventory plugin.
+2. Review the receipt's commit, inventory and configured node/pool/zone. Manually
+   approve execution with `--execute-synced`; staged bytes and the environment
+   mapping are checked before dispatch, without another Git fetch.
+3. Inspect HTML, JSON and JUnit reports: commit provenance, operation and transfer
+   exit codes, controller state, and available final Ansible recap totals. Missing
+   evidence or unresolved outcomes do not report success.
+
+The administrator can require this flow with `require_sync: true`. Sync can also
+have its own manual approval. In GitLab CE these are protected-ref, trusted-review
+and manual-job controls, not an enforced independent reviewer count. A job Retry
+reuses the recorded request; a new pipeline is a new request. Recover ambiguous
+or incomplete work before releasing another execution.
+
+**Upgrade the complete controller `gitlab/bin/` integration and the project's CI
+scripts/templates. Pulling this image alone does not update an existing GitLab
+installation.** See [setup](https://github.com/allamiro/ansible-controller/blob/main/gitlab/MAINTAINER-README.md)
+and [sync, approvals, reporting, upgrades and 100+ system rollouts](https://github.com/allamiro/ansible-controller/blob/main/gitlab/MESH-ROLLOUTS.md).
+Use canaries and Ansible `serial` batches; a mesh pool selects a node, rather than
+partitioning inventory automatically across network zones.
+
+## Voluntary support — continue free
+
+Interactive Bash shells in mesh images show **Learn more**, **Sponsor**, and
+**Continue free** links. The notice never waits for input, stays silent in CI and
+command sessions, and does not enter worker protocol output. Set
+`ANSIBLE_CONTROLLER_SUPPORT_NOTICE=0` or create `~/.hushlogin` to hide it;
+`controller-support` displays it on demand in a terminal.
+
+- [Learn more: mesh deployment assistance and support enquiries](https://github.com/allamiro/ansible-controller/blob/main/SUPPORT.md)
+- [GitHub Sponsors](https://github.com/sponsors/allamiro)
+- [Buy Me a Coffee](https://buymeacoffee.com/pcileky2q)
+
+Contributions and paid assistance are optional. Both controller and mesh remain
+open source with **no host limit or purchase requirement**, including fleets
+larger than 100 systems. The standalone controller has no automatic notice.
+
 ## Supported tags
 
 Versions are cut automatically on every merge to `main`
@@ -22,13 +65,14 @@ execution node, and controller always share the same version number.
 
 | Tag | Meaning | Use it when |
 |-----|---------|-------------|
-| `x.y.z` (e.g. `0.23.1`) | Immutable release | **Production** — pin the full version |
+| `x.y.z` (e.g. `0.29.0`) | Versioned release | **Production** — use a tested version; pin its digest for fixed content |
 | `x.y`, `x` | Rolling within minor / major | You want patch/minor updates automatically |
 | `latest` | Last successful build of `main` | Trying things out |
 | `main` | Same as `latest` | — |
 | `sha-<shortsha>` | Exact commit build | Audits, reproducible pipelines, rollback |
 
-See the **Tags** tab for the current version list.
+See the **Tags** tab for the current version list. Commands below use `0.29.0`
+as a published example; choose your tested release and keep the three images aligned.
 
 ## Quick reference
 
@@ -57,8 +101,8 @@ completely unchanged, plus:
 
 The build **asserts** at image-build time that no controller package pin moved and that the
 added set is exactly the pinned closure above, so the orchestrator is reproducible for a given
-controller digest. One deliberate, documented exception: `click` is pinned to 8.3.3 (the
-controller ships 8.4.2) because `receptorctl` 1.6.7 caps it below 8.4.0. The controller's
+controller digest. One deliberate, documented exception: `click` is pinned to 8.3.3
+because `receptorctl` 1.6.7 caps it below 8.4.0. The controller's
 only `click` consumer is `black` (via `ansible-lint`), which 8.3.3 satisfies, and `pip check`
 re-verifies the whole dependency graph after the downgrade.
 
@@ -93,7 +137,7 @@ cd ansible-controller
 cat > orchestrator.override.yml <<'YML'
 services:
   ansible:
-    image: allamiro1/ansible-orchestrator:0.23.1
+    image: allamiro1/ansible-orchestrator:0.29.0
 YML
 
 docker compose -f docker-compose.yml -f mesh/compose.mesh.yml \
@@ -140,7 +184,7 @@ the execution node's page).
 |------|---------|
 | `--node <id>` / `--pool <name>` / `--zone <name>` | Where to run — exactly one. Pools and zones pick a healthy node with a free slot |
 | `--playbook <file>` / `--inventory <file>` | Container paths under `/configs` |
-| `--ssh-key <file>` | Private key for the node to reach its targets; travels only inside the encrypted stream, never logged, destroyed on both sides when the job ends |
+| `--ssh-key <file>` | Private key for the node to reach its targets; travels only inside the encrypted stream, never logged, cleaned up at job exit; abrupt failures require operator cleanup |
 | `--ansible-cfg <file>` | Ship an `ansible.cfg` with the job (e.g. `/configs/ansible.cfg`). The node runs the playbook with **its own** defaults otherwise. Refused if the playbook directory already ships one |
 | `--galaxy-dir <dir>` | Ship Galaxy content with the job: the directory's `roles/` and `collections/` are merged next to the playbook (the controller installs to `/configs/.galaxy`). A same-name clash with the playbook's own roles is refused rather than silently shadowed |
 | `--wait <seconds>` | Block until a slot frees instead of refusing pre-submit (default `0`, fail fast) |
@@ -152,9 +196,10 @@ per-job directory under `/var/lib/mesh/jobs/<uuid>/` (stdout, per-task events,
 `meta.json` with timestamped status transitions), and the operator-facing artifacts copied
 to `/var/log/ansible/runner/<uuid>/` — on the host as `logs/runner/<uuid>/`.
 
-**A job never runs twice.** Failover between candidate nodes happens only *before*
-submission. Once a node has (or even may have) accepted a job, it is never re-sent; an
-ambiguous outcome is reported as such for you to `--collect`.
+**No automatic resubmission after an attempted dispatch.** Candidate failover happens
+only before submission. An unknown outcome requires recovery: use `--collect` when
+a tracked unit exists; for an unknown unit, follow the runbook's ambiguous-submission
+procedure. This is not a guarantee of exactly-once execution across new requests.
 
 ---
 
@@ -192,7 +237,8 @@ The controller's mounts (`/configs`, `/configs/playbooks`, `/home/ansible/.ssh`,
   exists only on the control host; nodes refuse unsigned work before executing anything.
   Joining the mesh and submitting work are separate authorities.
 - **Credential hygiene per job** — an SSH key passed with `--ssh-key` is never logged or
-  placed in an environment variable, and every transient copy is removed when the job ends.
+  placed in an environment variable, and cleanup runs at job exit. Abrupt host/process failure can retain data;
+  follow the runbook for recovery and cleanup.
 - **Inherits the controller's hardening** — key-only SSH, `PermitRootLogin no`, non-root
   `ansible` user, no secrets in the image, CVE-patched base — and the build fails if the
   dispatcher layer would move any controller dependency.
@@ -206,11 +252,11 @@ cosign verify \
   docker.io/allamiro1/ansible-orchestrator:latest
 ```
 
-## Try the whole mesh in ten minutes
+## Try the disposable mesh test environment
 
 Stand up the complete system on one machine — orchestrator, both ingresses, an execution
 node, and a target the control plane genuinely cannot route to — and watch a playbook cross
-the wall while a 29-check suite proves every guarantee above (including that missing,
+the wall while the disposable regression suite exercises mesh behavior (including that missing,
 expired, wrong-identity, and wrong-CA certificates are refused):
 
 ```bash

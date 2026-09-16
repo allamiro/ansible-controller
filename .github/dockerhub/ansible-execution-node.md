@@ -4,14 +4,49 @@ The mesh peer that **runs playbooks inside networks your controller can't reach*
 one in each closed network — a DMZ, an OT segment, an isolated VLAN, a remote site. It dials
 *out* to your control host over mutually-authenticated TLS, receives signed jobs from the
 [orchestrator](https://hub.docker.com/r/allamiro1/ansible-orchestrator), runs them locally
-over plain SSH against the targets it can see, and streams the output back. No inbound
+against reachable SSH or configured Windows/WinRM targets, and streams the output back. No inbound
 firewall holes, no VPN, no agent on the targets.
 
 It is the [Ansible Controller](https://hub.docker.com/r/allamiro1/ansible-controller)'s
-full Ansible runtime plus [receptor](https://github.com/ansible/receptor) — and **no SSH
-server**: nothing ever connects *into* a node.
+full Ansible runtime plus [receptor](https://github.com/ansible/receptor). The inherited
+SSH server is **not started**; mesh connections originate from the node.
 
 ---
+
+## Git approvals and execution results
+
+The **controller/orchestrator** handles the optional GitLab workflow: reviewed
+exact-commit sync, snapshot verification and manual execution approval. Nodes
+receive signed job payloads; they do not clone repositories or hold Git fetch
+credentials. GitLab is not required for native mesh jobs.
+
+Results return to the orchestrator for collection. The GitLab integration produces
+HTML, JSON and JUnit reports with provenance, distinct execution/transfer outcomes
+and available final Ansible recap totals. Unknown outcomes remain unresolved;
+collection retrieves an existing job without submitting it again.
+
+The integration scripts and CI templates need a separate upgrade on the control
+side; pulling a node image alone does not install them. See
+[sync, approvals, reports and upgrades](https://github.com/allamiro/ansible-controller/blob/main/gitlab/MESH-ROLLOUTS.md).
+For 100+ systems, use reviewed canaries and Ansible batches, and size each node
+for its target connectivity and resource capacity. Inventory host counts in
+reports are not license or billing metrics.
+
+## Voluntary support — continue free
+
+Interactive Bash shells in mesh images show **Learn more**, **Sponsor**, and
+**Continue free** links. The notice never waits for input, stays silent in CI and
+command sessions, and does not enter worker protocol output. Set
+`ANSIBLE_CONTROLLER_SUPPORT_NOTICE=0` or create `~/.hushlogin` to hide it;
+`controller-support` displays it on demand in a terminal.
+
+- [Learn more: mesh deployment assistance and support enquiries](https://github.com/allamiro/ansible-controller/blob/main/SUPPORT.md)
+- [GitHub Sponsors](https://github.com/sponsors/allamiro)
+- [Buy Me a Coffee](https://buymeacoffee.com/pcileky2q)
+
+Contributions and paid assistance are optional. Both controller and mesh remain
+open source with **no host limit or purchase requirement**, including fleets
+larger than 100 systems. The standalone controller has no automatic notice.
 
 ## Supported tags
 
@@ -22,13 +57,14 @@ this image is built `FROM` the exact controller digest published by the same run
 
 | Tag | Meaning | Use it when |
 |-----|---------|-------------|
-| `x.y.z` (e.g. `0.23.1`) | Immutable release | **Production** — pin the full version |
+| `x.y.z` (e.g. `0.29.0`) | Versioned release | **Production** — use a tested version; pin its digest for fixed content |
 | `x.y`, `x` | Rolling within minor / major | You want patch/minor updates automatically |
 | `latest` | Last successful build of `main` | Trying things out |
 | `main` | Same as `latest` | — |
 | `sha-<shortsha>` | Exact commit build | Audits, reproducible pipelines, rollback |
 
-See the **Tags** tab for the current version list.
+See the **Tags** tab for the current version list. Commands below use `0.29.0`
+as a published example; choose your tested release and keep the three images aligned.
 
 ## Quick reference
 
@@ -51,7 +87,7 @@ See the **Tags** tab for the current version list.
 
 - The controller's complete Ansible runtime — current `ansible-core`, `ansible.posix`,
   `community.general`, `pywinrm` + NTLM, and the controller-side Python libraries their
-  plugins need — so a playbook behaves on the node exactly as it does on the controller.
+  plugins need — with per-job content and node-local dependencies provisioned for your playbooks.
 - **`receptor` 1.6.7** — the mesh agent, a static binary **rebuilt from the exact upstream
   release commit** with its Go module dependencies (`x/crypto`, `x/net`, `x/text`) bumped to
   CVE-fixed versions, because the upstream binary fails this project's scanner gate.
@@ -98,7 +134,7 @@ to the node host — no checkout needed — and put the bundle beside them:
 # .env
 RECEPTOR_NODE_ID=exec-dmz-a
 RECEPTOR_PEERS=ctrl.example.com:27199,ctrl.example.com:27200
-MESH_NODE_IMAGE=allamiro1/ansible-execution-node:0.23.1
+MESH_NODE_IMAGE=allamiro1/ansible-execution-node:0.29.0
 ```
 
 ```bash
@@ -122,7 +158,7 @@ docker run -d --name mesh-node-exec-dmz-a --restart unless-stopped \
   -e RECEPTOR_TLS_KEY=/etc/receptor/tls/tls.key \
   -e RECEPTOR_TLS_CA=/etc/receptor/tls/ca.crt \
   -e RECEPTOR_WORK_PUBKEY=/etc/receptor/signing/work-public.pem \
-  allamiro1/ansible-execution-node:0.23.1
+  allamiro1/ansible-execution-node:0.29.0
 ```
 
 No `-p` flags: nothing listens in a node (the inherited `EXPOSE 22` is metadata only). It
@@ -171,7 +207,7 @@ like `boto3` are the classic case — need them **on the node**, since that is w
 playbook runs. Extend the image once, exactly as the controller does:
 
 ```dockerfile
-FROM allamiro1/ansible-execution-node:0.23.1
+FROM allamiro1/ansible-execution-node:0.29.0
 USER root
 COPY node-requirements.txt /tmp/node-requirements.txt
 RUN pip3 install --no-cache-dir --break-system-packages -r /tmp/node-requirements.txt \
@@ -208,7 +244,8 @@ Pin the versions in `node-requirements.txt`, build it as your site tag, and set
 - **Unprivileged.** receptor runs as PID 1 under uid 1000; the control socket is owner-only
   and lives on tmpfs.
 - **Per-job credential hygiene** — an SSH key that arrives with a job is destroyed by the
-  worker the moment execution finishes, even if the control plane never reconnects.
+  worker on exit, even without a control-plane connection. Abrupt process or host
+  failure can retain data; inspect and clean up according to the runbook.
 - **Every published image is Trivy-scanned** (fails on fixable CRITICAL/HIGH — which is why
   receptor is rebuilt from source with patched dependencies) and **cosign-signed** keylessly
   via GitHub OIDC. Verify before you run:
