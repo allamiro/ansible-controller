@@ -26,17 +26,7 @@ An Ubuntu 26.04 container with Ansible, OpenSSH, and Windows/WinRM support. Keep
 
 ## Choose how to run
 
-**Single deployment.** The controller runs playbooks directly against the targets it can reach.
-
-![Single deployment: an operator runs playbooks in the ansible-controller container, which connects to Linux hosts over SSH and Windows hosts over WinRM](assets/diagrams/single-deployment.png)
-
-You run playbooks with `make run`, `docker exec`, or SSH on host port 2222. Your configuration, playbooks, SSH keys and logs stay on the host and are mounted into the container. GitLab is optional: a CI job calls the controller over restricted SSH, and the controller fetches the reviewed commit.
-
-**Distributed deployment (mesh).** The orchestrator dispatches signed work to execution nodes inside networks it cannot reach.
-
-![Distributed deployment: execution nodes in remote networks connect outbound over mTLS to two Receptor ingresses on the orchestrator's control host and run playbooks against local targets](assets/diagrams/distributed-deployment.png)
-
-Each execution node opens outbound mTLS connections to two Receptor ingresses on the control host (ports 27199 and 27200). The ingresses sign each job before sending it over those connections, and results return the same way. Nothing connects into the remote networks, and GitLab never contacts execution nodes.
+There are two ways to run it, using three published images. Start with a single deployment if the controller can reach all your targets, and add the mesh only for networks it cannot reach. [GitLab integration](gitlab/MAINTAINER-README.md) is optional for either mode.
 
 | Image on Docker Hub | Purpose and where it runs |
 |---|---|
@@ -44,7 +34,31 @@ Each execution node opens outbound mTLS connections to two Receptor ingresses on
 | [ansible-orchestrator](https://hub.docker.com/r/allamiro1/ansible-orchestrator) | Mesh control host. Includes the controller runtime and dispatches signed jobs through Receptor ingress sidecars to execution nodes. |
 | [ansible-execution-node](https://hub.docker.com/r/allamiro1/ansible-execution-node) | Inside each target network. Runs mesh jobs against local targets and connects outbound to the control host; no running SSH server. |
 
-Use the standalone quick start below for the controller, or the [mesh guide](mesh/README.md) for the orchestrator and execution nodes. [GitLab integration](gitlab/MAINTAINER-README.md) is optional for either mode.
+### Single deployment
+
+Use this when the controller has a network route to every target: a lab, a small environment, or a management network. One `ansible-controller` container runs the playbooks itself.
+
+![Single deployment: an operator runs playbooks in the ansible-controller container, which connects to Linux hosts over SSH and Windows hosts over WinRM](assets/diagrams/single-deployment.png)
+
+- **Run playbooks** with `make run`, `docker exec`, or SSH on host port 2222.
+- **Keep your files on the host.** Configuration, playbooks, SSH keys and logs are mounted into the container.
+- **Reach targets directly:** Linux over SSH and Windows over WinRM.
+- **GitLab is optional.** A CI job calls the controller over restricted SSH, and the controller fetches the reviewed commit.
+
+To set it up, follow the [quick start](#quick-start) below.
+
+### Distributed deployment (mesh)
+
+Use this when some targets sit in networks the control host cannot reach, such as a DMZ, an OT segment or a remote site. The `ansible-orchestrator` sends signed work to an `ansible-execution-node` placed inside each of those networks.
+
+![Distributed deployment: execution nodes in remote networks connect outbound over mTLS to two Receptor ingresses on the orchestrator's control host and run playbooks against local targets](assets/diagrams/distributed-deployment.png)
+
+- **Nodes connect out.** Each execution node opens mTLS connections to two Receptor ingresses on the control host (ports 27199 and 27200). Nothing connects into the remote networks.
+- **Every job is signed.** The ingresses sign each job before sending it over those connections, and nodes refuse unsigned work.
+- **Targets stay local.** Each node runs playbooks against hosts in its own network and returns the results.
+- **GitLab stays on the control side.** It never contacts execution nodes.
+
+To set it up, follow the [mesh guide](mesh/README.md).
 
 ## Quick start
 
