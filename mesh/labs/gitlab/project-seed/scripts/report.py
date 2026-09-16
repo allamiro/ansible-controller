@@ -53,20 +53,27 @@ def write_report(rc, directory, artifacts='mesh-artifacts', phase='execute'):
     state = record.get('status', 'unavailable')
     known = state in ('finished', 'succeeded') or (
         isinstance(state, str) and state.startswith('failed rc=') and state[10:].isdigit())
-    execution_rc = ('0' if state == 'succeeded' else state[10:]
-                    if known and state.startswith('failed rc=') else record.get('rc') if known else None)
+    execution_rc = None
+    if state == 'succeeded':
+        execution_rc = '0'
+    elif known and state.startswith('failed rc='):
+        execution_rc = state[10:]
+    elif state == 'finished':
+        execution_rc = record.get('rc')
     # A successful channel with an unresolved controller outcome is not success.
-    failed = rc != 0 or not (known and execution_rc == '0' if phase != 'sync' else state == 'synced')
+    confirmed = state == 'synced' if phase == 'sync' else known and execution_rc == '0'
+    failed = rc != 0 or not confirmed
     status = 'FAILED' if failed else 'SUCCEEDED'
     summary = {
-        'phase': phase, 'result': status, 'channel_rc': rc,
+        'phase': phase, 'result': status, 'operation_rc': rc,
+        'execution_channel_rc': channel.get('execution_channel_rc'),
         'controller_status': state,
         'execution_rc': execution_rc,
         'transfer_rc': channel.get('artifact_rc'),
         'metadata': {key: record[key] for key in FIELDS if isinstance(record.get(key), str)},
         'recap': recap(artifacts) if phase != 'sync' else None,
     }
-    message = (f'{phase.capitalize()} channel returned exit code {rc}; controller status: {state}. '
+    message = (f'{phase.capitalize()} operation returned exit code {rc}; controller status: {state}. '
                'Inspect restricted artifacts for details. Missing evidence does not prove success.')
     suite = ET.Element('testsuite', name='Ansible sync' if phase == 'sync' else 'Ansible deployment',
                        tests='1', failures=str(int(failed)), errors='0')
@@ -77,13 +84,17 @@ def write_report(rc, directory, artifacts='mesh-artifacts', phase='execute'):
     ET.ElementTree(suite).write(directory / 'deployment.xml', encoding='utf-8', xml_declaration=True)
     rows = ''.join(f'<tr><th>{html.escape(key)}</th><td>{html.escape(value)}</td></tr>'
                    for key, value in summary['metadata'].items())
+    outcomes = ''.join(f'<tr><th>{label}</th><td>{html.escape(str(summary[key])) if summary[key] is not None else "Unavailable"}</td></tr>'
+                       for key, label in (('execution_rc', 'Playbook exit code'),
+                                          ('execution_channel_rc', 'SSH operation exit code'),
+                                          ('transfer_rc', 'Artifact transfer exit code')))
     counts = (html.escape(json.dumps(summary['recap'], sort_keys=True))
               if summary['recap'] is not None else 'No final Ansible recap available.')
     (directory / 'summary.html').write_text(
         '<!doctype html><html lang="en"><meta charset="utf-8">'
         '<title>Ansible operation result</title><body>'
         f'<h1>{phase.capitalize()} {status}</h1><p>{html.escape(message)}</p>'
-        f'<table>{rows}</table><h2>Execution recap</h2><pre>{counts}</pre>'
+        f'<table>{outcomes}{rows}</table><h2>Execution recap</h2><pre>{counts}</pre>'
         '<p>Counts describe inventory host names, not unique machines or license usage. '
         'JUnit contains one aggregate operation check.</p></body></html>', encoding='utf-8')
     (directory / 'summary.json').write_text(json.dumps(summary, indent=2) + '\n', encoding='utf-8')

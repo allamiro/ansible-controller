@@ -53,7 +53,8 @@ sync:
   rules:
     - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_TAG =~ /^v/'
   script:
-    - bash scripts/deploy.sh --sync-only --env prod-direct --project "$CI_PROJECT_PATH" --sha "$CTL_COMMIT_SHA" --playbook playbooks/site.yml --pipeline "$CI_PIPELINE_ID" --job "$CI_JOB_ID" --wait 120
+    - bash scripts/deploy.sh --sync-only --env prod-direct --project "$CI_PROJECT_PATH" --sha "$CTL_COMMIT_SHA"
+        --playbook playbooks/site.yml --pipeline "$CI_PIPELINE_ID" --job "$CI_JOB_ID" --wait 120
 
 deploy:
   extends: .controller-job
@@ -66,4 +67,5 @@ deploy:
       when: manual
       allow_failure: false
   script:
-    - bash scripts/deploy.sh --execute-synced --env prod-direct --project "$CI_PROJECT_PATH" --sha "$CTL_COMMIT_SHA" --playbook playbooks/site.yml --pipeline "$CI_PIPELINE_ID" --job "$CI_JOB_ID" --wait 120
+    - bash scripts/deploy.sh --execute-synced --env prod-direct --project "$CI_PROJECT_PATH" --sha "$CTL_COMMIT_SHA"
+        --playbook playbooks/site.yml --pipeline "$CI_PIPELINE_ID" --job "$CI_JOB_ID" --wait 120

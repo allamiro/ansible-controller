@@ -118,6 +118,7 @@ class ControllerTests(unittest.TestCase):
         # A disappeared Git server cannot force a refetch or a different revision.
         sha = self.git('rev-parse', 'HEAD')
         self.repo.rename(self.repo.with_name('offline.git'))
+        (self.secrets / 'test.token').unlink()
         args = ['bash', str(ROOT / 'gitlab/bin/ctl-run'), '--env', 'test',
                 '--project', 'group/project', '--sha', sha, '--playbook',
                 'playbooks/site.yml', '--pipeline', '10', '--job', '21', '--execute-synced']
