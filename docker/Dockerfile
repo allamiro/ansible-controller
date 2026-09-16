@@ -138,10 +138,7 @@ RUN mkdir -p /etc/ssh/host_keys /etc/ssh/sshd_config.d \
       > /etc/ssh/sshd_config.d/10-host-keys.conf
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY docker/install-deps.sh /usr/local/bin/install-deps.sh
-COPY docker/support-notice.sh /usr/local/bin/controller-support
-COPY docker/support-shell.bash /usr/local/share/ansible-controller/support-shell.bash
-RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/install-deps.sh /usr/local/bin/controller-support \
- && printf '\n. /usr/local/share/ansible-controller/support-shell.bash\n' >> /etc/bash.bashrc
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/install-deps.sh
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD bash -c 'exec 6<>/dev/tcp/127.0.0.1/22'
 

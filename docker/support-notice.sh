@@ -4,11 +4,12 @@
 [ -t 0 ] && [ -t 1 ] && [ -t 2 ] || exit 0
 [ -z "${CI:-}${GITHUB_ACTIONS:-}${GITLAB_CI:-}${TF_BUILD:-}${JENKINS_URL:-}${BUILDKITE:-}${CIRCLECI:-}${TEAMCITY_VERSION:-}" ] || exit 0
 [ "${ANSIBLE_CONTROLLER_SUPPORT_NOTICE:-1}" != 0 ] || exit 0
+if [ -n "${HOME:-}" ] && [ -e "$HOME/.hushlogin" ]; then exit 0; fi
 
 printf '%s\n' \
   '' \
-  'Ansible Controller — optional support' \
-  '  Learn more: deployment assistance and support enquiries' \
+  'Ansible Controller mesh — optional support' \
+  '  Learn more: mesh deployment assistance and support enquiries' \
   '    https://github.com/allamiro/ansible-controller/blob/main/SUPPORT.md' \
   '  Sponsor: https://github.com/sponsors/allamiro' \
   '    or https://buymeacoffee.com/pcileky2q' \

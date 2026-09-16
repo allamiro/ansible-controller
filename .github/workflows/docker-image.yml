@@ -91,7 +91,7 @@ jobs:
       - name: Controller preflight regressions
         run: |
           docker run --rm -v "$PWD":/repo:ro -w /repo \
-            -e PYTHONDONTWRITEBYTECODE=1 --entrypoint python3 \
+            -e PYTHONDONTWRITEBYTECODE=1 -e SUPPORT_NOTICE_IMAGE=standalone --entrypoint python3 \
             ansible-controller:ci -m unittest discover -s docker/tests -v
       # Validate the shipped Ansible content against the image built from THIS
       # commit, not a released tag: the Dockerfile resolves its Ansible tools

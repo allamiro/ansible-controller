@@ -1,4 +1,4 @@
-# Support and deployment assistance
+# Mesh support and deployment assistance
 
 Ansible Controller is available under [Apache-2.0](LICENSE). The community
 controller and mesh have no host limit or purchase requirement. Sponsorship,
@@ -6,11 +6,11 @@ paid services, and contributions are optional.
 
 ## Learn more
 
-For deployment assistance or paid support enquiries, contact the maintainer at
+For mesh deployment assistance or paid support enquiries, contact the maintainer at
 [tsuliman@linuxvaults.com](mailto:tsuliman@linuxvaults.com?subject=Ansible%20Controller%20support%20enquiry).
 
-Possible scopes include initial controller setup, mesh deployment planning,
-GitLab integration, upgrades, and troubleshooting. Describe the work you need,
+Possible scopes include mesh deployment planning, orchestrator and execution-node
+setup, GitLab integration, upgrades, and troubleshooting. Describe the work you need,
 your approximate fleet size, deployment mode, and timeline. Do not send private
 keys, passwords, tokens, or confidential inventories.
 
@@ -42,9 +42,11 @@ does not collect or transmit these counts.
 
 ## Terminal notice
 
-New images show the optional links once per interactive Bash session, including
-`make shell`, `docker exec -it ansible-controller bash`, and interactive SSH
-logins. Nested shells inherit the notice marker. The notice immediately returns
+New mesh orchestrator and execution-node images show the optional links once
+per interactive Bash session, including `docker exec -it <mesh-container> bash`
+and interactive SSH logins to the orchestrator. The standalone community
+controller has no automatic notice. Nested shells inherit the notice marker.
+The notice immediately returns
 control; it never reads input or launches a browser. Follow a link yourself if
 you want to learn more or sponsor the project.
 
@@ -52,7 +54,7 @@ To display it on demand from a terminal:
 
 ```bash
 make support                    # on the host, from the repository checkout
-controller-support              # inside a new controller image
+controller-support              # inside a new mesh image
 ```
 
 To disable it for the current shell and its children:
@@ -63,12 +65,12 @@ export ANSIBLE_CONTROLLER_SUPPORT_NOTICE=0
 
 For Docker-exec shells, set that variable in the container environment (for
 example in Compose), or pass `-e ANSIBLE_CONTROLLER_SUPPORT_NOTICE=0` to
-`docker exec`. For SSH logins, put the export in the controller user's
-`~/.ssh/environment` only if your site's SSH policy permits it; otherwise create
-`~/.hushlogin` as described below.
+`docker exec`. For an account-level opt-out that also works on SSH logins, run
+`touch ~/.hushlogin` inside the container as that account. This file also
+suppresses standard SSH login notices. Remove it to restore those notices.
 
 The notice requires terminal stdin, stdout, and stderr. It stays silent for
-noninteractive sessions and when a standard CI indicator is set (`CI`,
+noninteractive sessions and when a standard CI indicator is nonempty (`CI`,
 `GITHUB_ACTIONS`, `GITLAB_CI`, `TF_BUILD`, `JENKINS_URL`, `BUILDKITE`, `CIRCLECI`,
 or `TEAMCITY_VERSION`). It is not called by the entrypoint, playbook commands,
 GitLab execution wrappers, or mesh workers, and never writes to stdout.

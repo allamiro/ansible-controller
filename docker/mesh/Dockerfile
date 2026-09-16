@@ -135,6 +135,13 @@ RUN set -eux; \
 # working tree's dispatcher while the shipped image stays self-contained.
 COPY --chmod=0755 mesh/bin/mesh-run /usr/local/mesh/bin/mesh-run
 
+# Optional links only in interactive mesh shells; never in the standalone base.
+# The execution-node stage inherits this hook, but workers never invoke it.
+COPY --chmod=0755 docker/support-notice.sh /usr/local/bin/controller-support
+COPY --chmod=0644 docker/support-shell.bash /usr/local/share/ansible-controller/support-shell.bash
+RUN chmod 0755 /usr/local/share/ansible-controller \
+ && printf '\n. /usr/local/share/ansible-controller/support-shell.bash\n' >> /etc/bash.bashrc
+
 # Record what this image was actually built on, so a running orchestrator can be
 # traced back to its controller even when BASE was a mutable reference.
 LABEL org.opencontainers.image.base.name="${BASE}"

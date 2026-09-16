@@ -1031,9 +1031,12 @@ its maintenance, testing, and documentation through
 
 You can also help by reporting bugs, improving the docs, or contributing fixes.
 
-For deployment assistance and support enquiries, see [Support](SUPPORT.md).
-The community controller and mesh remain free to use with no host limit.
-Interactive controller shells show a brief notice with **Learn more**, **Sponsor**,
+The standalone controller remains community open source, with voluntary
+sponsorship and no automatic support notice. Both controller and mesh remain
+free to use with no host limit. For mesh deployment assistance and support
+enquiries, see [Support](SUPPORT.md).
+
+Interactive mesh shells show a brief notice with **Learn more**, **Sponsor**,
 and **Continue free** options; it never waits for input. Set
 `ANSIBLE_CONTROLLER_SUPPORT_NOTICE=0` to hide it, or run `make support` to show the
 links on demand. The notice is silent in noninteractive and CI sessions.

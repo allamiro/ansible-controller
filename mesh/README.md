@@ -36,6 +36,14 @@ VPN, no agent on the targets.
 The mesh is strictly **opt-in**: `make up` never starts any part of it, and
 enabling it changes nothing about how direct runs behave.
 
+## Optional deployment support
+
+For mesh deployment assistance, see [Learn more](../SUPPORT.md). You can also
+[Sponsor](https://github.com/sponsors/allamiro) or **Continue free**: the mesh
+has no host limit or purchase requirement. Interactive mesh shells display
+these optional links without waiting for input; commands, CI jobs, and worker
+protocol output stay silent. See [notice opt-outs](../SUPPORT.md#terminal-notice).
+
 ## How it works
 
 ```mermaid
