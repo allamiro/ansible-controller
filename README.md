@@ -28,11 +28,15 @@ An Ubuntu 26.04 container with Ansible, OpenSSH, and Windows/WinRM support. Keep
 
 **Single deployment.** The controller runs playbooks directly against the targets it can reach.
 
-![Single deployment: an operator runs playbooks in the ansible-controller container, which connects to Linux, Windows and network targets](assets/diagrams/single-deployment.png)
+![Single deployment: an operator runs playbooks in the ansible-controller container, which connects to Linux hosts over SSH and Windows hosts over WinRM](assets/diagrams/single-deployment.png)
+
+You run playbooks with `make run`, `docker exec`, or SSH on host port 2222. Your configuration, playbooks, SSH keys and logs stay on the host and are mounted into the container. GitLab is optional: a CI job calls the controller over restricted SSH, and the controller fetches the reviewed commit.
 
 **Distributed deployment (mesh).** The orchestrator dispatches signed work to execution nodes inside networks it cannot reach.
 
 ![Distributed deployment: execution nodes in remote networks connect outbound over mTLS to two Receptor ingresses on the orchestrator's control host and run playbooks against local targets](assets/diagrams/distributed-deployment.png)
+
+Each execution node opens outbound mTLS connections to two Receptor ingresses on the control host (ports 27199 and 27200). The ingresses sign each job before sending it over those connections, and results return the same way. Nothing connects into the remote networks, and GitLab never contacts execution nodes.
 
 | Image on Docker Hub | Purpose and where it runs |
 |---|---|

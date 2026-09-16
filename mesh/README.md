@@ -39,8 +39,9 @@ VPN, no agent on the targets.
 **Controller and orchestrator.** The octopus on a Docker container is the
 control host where you work. As `ansible-controller`, it runs playbooks
 directly against targets it can reach. As `ansible-orchestrator`, the same
-runtime adds the mesh dispatcher: it signs jobs and sends them through the two
-Receptor ingresses. It also handles the optional GitLab sync and approvals.
+runtime adds the mesh dispatcher: it submits jobs to two Receptor ingress
+sidecars on the control host, which sign them and send them to execution nodes.
+It also handles the optional GitLab sync and approvals.
 
 </td>
 <td valign="top">
@@ -77,9 +78,25 @@ protocol output stay silent. See [notice opt-outs](../SUPPORT.md#terminal-notice
 
 ![Distributed deployment: execution nodes in remote networks connect outbound over mTLS to two Receptor ingresses on the orchestrator's control host and run playbooks against local targets](../assets/diagrams/distributed-deployment.png)
 
+- **You work on the control host.** Run `make mesh-run` to dispatch a playbook and
+  `make mesh-collect JOB=<job-id>` to recover results. The orchestrator uses the
+  controller's host mounts, plus `/var/lib/mesh` for job state and admission holds.
+- **Two ingress sidecars take the work.** The orchestrator submits through local
+  Unix sockets (`/run/receptor/receptor.sock` and `receptor-b.sock`). Ingress A
+  listens on host port 27199 and B on 27200, and both sign every job.
+- **Nodes connect out.** Each execution node opens mTLS connections to both
+  ingresses. Signed work arrives over those connections and results return the
+  same way. Nodes publish no ports and run no SSH server.
+- **Nodes reach local targets.** Linux hosts over SSH and Windows hosts over WinRM,
+  inside the node's own network.
+- **GitLab stays on the control side.** CI calls the orchestrator over restricted
+  SSH, and GitLab never contacts execution nodes.
+
+The connection view below shows the same flow in detail:
+
 ![Outbound node connections to two mesh ingress endpoints](../assets/diagrams/mesh-topology.svg)
 
-Arrows show connection initiation. Signed work and results use those established connections. See the [architecture guide](../docs/ARCHITECTURE.md#mesh-connections-and-work-delivery) for the component and network boundaries.
+Arrows in this connection view show who opens each connection. Signed work and results use those established connections. See the [architecture guide](../docs/ARCHITECTURE.md#mesh-connections-and-work-delivery) for the component and network boundaries.
 
 Five properties you can rely on (each one is re-proven automatically by the
 project's test suite on every change):
@@ -114,8 +131,8 @@ project's test suite on every change):
    submitting work are separate authorities — even a compromised (or
    partner-operated) node can *run* jobs, never *inject* them.
 
-Targets need nothing installed — the execution node reaches them over plain
-SSH, exactly the way the controller does on the direct path.
+Targets need nothing installed — the execution node reaches them over SSH or
+WinRM, exactly the way the controller does on the direct path.
 
 ## Try it in ten minutes
 

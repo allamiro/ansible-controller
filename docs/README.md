@@ -46,7 +46,14 @@ If you add playbooks outside the `playbooks/` directory, add an extra volume ent
 
 These steps set up a single deployment: one controller running playbooks directly against targets it can reach.
 
-![Single deployment: an operator runs playbooks in the ansible-controller container, which connects to Linux, Windows and network targets](../assets/diagrams/single-deployment.png)
+![Single deployment: an operator runs playbooks in the ansible-controller container, which connects to Linux hosts over SSH and Windows hosts over WinRM](../assets/diagrams/single-deployment.png)
+
+Reading the diagram:
+
+- **Operator entry:** `make run`, `docker exec`, or SSH to the container on host port 2222 ([Makefile targets](#makefile-targets)).
+- **Host mounts:** `configs/` → `/configs`, `playbooks/` (including roles) → `/configs/playbooks`, `ssh/` → `/home/ansible/.ssh`, `logs/` → `/var/log/ansible`, and a named volume for `/etc/ssh/host_keys`. Inventory is `configs/inventory/`.
+- **Targets:** Linux/Unix hosts over SSH port 22 and Windows hosts over WinRM HTTPS port 5986 (HTTP 5985 optional); see [Windows / WinRM](#managing-windows-hosts-winrm).
+- **GitLab (optional):** a CI job connects to the controller over SSH with a restricted command, and the controller fetches the reviewed commit over HTTPS with a read-only token. See the [GitLab integration](../gitlab/README.md).
 
 ### 1 — Clone the repo
 
@@ -289,6 +296,14 @@ execution mesh** removes that requirement: the controller becomes an
 placed inside segmented networks, and the playbook runs there.
 
 ![Distributed deployment: execution nodes in remote networks connect outbound over mTLS to two Receptor ingresses on the orchestrator's control host and run playbooks against local targets](../assets/diagrams/distributed-deployment.png)
+
+Reading the diagram:
+
+- **Control host:** the `ansible-orchestrator` container has the same host mounts as the controller, plus a `/var/lib/mesh` volume for job state and admission holds. It submits work through local Unix sockets, `/run/receptor/receptor.sock` (ingress A) and `/run/receptor/receptor-b.sock` (ingress B).
+- **Ingress sidecars:** Receptor ingress A listens on host port 27199 and B on 27200. Both hold the work-signing private key and sign every job.
+- **Execution nodes:** each node opens outbound mTLS connections to both ingresses, receives signed work over them, and returns results and status. It publishes no ports, runs no SSH server, and refuses unsigned work.
+- **Targets:** each node runs playbooks against Linux hosts in its own network over SSH and Windows hosts over WinRM.
+- **GitLab (optional):** CI calls the orchestrator over restricted SSH and the orchestrator fetches the reviewed commit. GitLab never contacts execution nodes. The CA private key stays offline.
 
 Key properties:
 
