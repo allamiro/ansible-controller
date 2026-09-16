@@ -235,6 +235,7 @@ docker pull ghcr.io/allamiro/ansible-controller:latest
 | `make up` | Start the container in the background |
 | `make down` | Stop and remove the container |
 | `make shell` | Open an interactive bash shell inside the container |
+| `make support` | Show optional support and sponsorship links in a terminal |
 | `make run PLAYBOOK=site.yml` | Run an Ansible playbook |
 | `make galaxy` | Install roles and collections from `configs/requirements.yml` |
 | `make galaxy-force` | Re-install / update Galaxy content to the pinned versions |
@@ -1029,6 +1030,16 @@ its maintenance, testing, and documentation through
 [Buy Me a Coffee](https://buymeacoffee.com/pcileky2q).
 
 You can also help by reporting bugs, improving the docs, or contributing fixes.
+
+The standalone controller remains community open source, with voluntary
+sponsorship and no automatic support notice. Both controller and mesh remain
+free to use with no host limit. For mesh deployment assistance and support
+enquiries, see [Support](SUPPORT.md).
+
+Interactive mesh shells show a brief notice with **Learn more**, **Sponsor**,
+and **Continue free** options; it never waits for input. Set
+`ANSIBLE_CONTROLLER_SUPPORT_NOTICE=0` to hide it, or run `make support` to show the
+links on demand. The notice is silent in noninteractive and CI sessions.
 
 ---
 

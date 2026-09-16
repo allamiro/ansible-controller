@@ -134,6 +134,15 @@ jobs:
           docker run --rm --entrypoint receptor ansible-execution-node:ci --version
           docker run --rm --entrypoint ansible-runner ansible-execution-node:ci --version
 
+      - name: Mesh support notice regressions
+        run: |
+          for image in ansible-orchestrator:ci ansible-execution-node:ci; do
+            docker run --rm -v "$PWD":/repo:ro -w /repo \
+              -e PYTHONDONTWRITEBYTECODE=1 -e SUPPORT_NOTICE_IMAGE=mesh \
+              --entrypoint python3 "$image" \
+              -m unittest discover -s docker/tests -p 'test_support_notice.py' -v
+          done
+
       - uses: ./.github/actions/install-trivy
 
       # Same gate as the controller CI. The orchestrator inherits the controller's

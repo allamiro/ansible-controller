@@ -16,6 +16,11 @@ shell:
 # Drop into the container (alias kept for backward compat)
 sh: shell
 
+.PHONY: support
+# Runs on the host; terminal-only and safe without a running controller.
+support:
+	@sh docker/support-notice.sh
+
 run:
 	docker exec -it ansible-controller ansible-playbook /configs/playbooks/$(PLAYBOOK)
 
