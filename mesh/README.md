@@ -77,8 +77,6 @@ protocol output stay silent. See [notice opt-outs](../SUPPORT.md#terminal-notice
 
 ![Distributed deployment: execution nodes in remote networks connect outbound over mTLS to two Receptor ingresses on the orchestrator's control host and run playbooks against local targets](../assets/diagrams/distributed-deployment.png)
 
-<sub>The illustration simplifies controller paths: `playbooks/` (including roles) mounts at `/configs/playbooks`, SSH keys at `/home/ansible/.ssh`, logs at `/var/log/ansible`, and Receptor sockets are under `/run/receptor/`. The diagram below shows the connection details.</sub>
-
 ![Outbound node connections to two mesh ingress endpoints](../assets/diagrams/mesh-topology.svg)
 
 Arrows show connection initiation. Signed work and results use those established connections. See the [architecture guide](../docs/ARCHITECTURE.md#mesh-connections-and-work-delivery) for the component and network boundaries.
