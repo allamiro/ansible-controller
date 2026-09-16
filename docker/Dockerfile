@@ -111,6 +111,20 @@ RUN userdel -r ubuntu \
  && mkdir -p /home/ansible/.ssh /configs /var/log/ansible /var/run/sshd \
  && chown -R ansible:ansible /home/ansible /configs /var/log/ansible
 
+# Ansible discovers a config from ANSIBLE_CONFIG, then ./ansible.cfg, then
+# ~/.ansible.cfg, then /etc/ansible/ansible.cfg — it never walks up from the
+# working directory. `docker exec` runs with cwd / and does not inherit the
+# entrypoint's exports, so without this the shipped /configs/ansible.cfg was
+# silently ignored by `make run`, by the README's ad-hoc examples and by SSH
+# sessions: the configured inventory, roles_path, collections_path, forks and
+# callbacks all fell back to Ansible's defaults.
+#
+# Safe where /configs is not mounted, such as an execution node: a path that
+# does not exist is ignored and discovery falls back to the working directory,
+# so a payload staged by mesh-run still uses its own ansible.cfg.
+ARG ANSIBLE_CONFIG_PATH=/configs/ansible.cfg
+ENV ANSIBLE_CONFIG=${ANSIBLE_CONFIG_PATH}
+
 RUN printf 'Defaults:ansible !requiretty\nansible ALL=(ALL) NOPASSWD: ALL\n' > /etc/sudoers.d/99-ansible \
  && chmod 440 /etc/sudoers.d/99-ansible
 
@@ -123,7 +137,8 @@ RUN mkdir -p /etc/ssh/host_keys /etc/ssh/sshd_config.d \
  && printf 'HostKey /etc/ssh/host_keys/ssh_host_rsa_key\nHostKey /etc/ssh/host_keys/ssh_host_ecdsa_key\nHostKey /etc/ssh/host_keys/ssh_host_ed25519_key\n' \
       > /etc/ssh/sshd_config.d/10-host-keys.conf
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
+COPY docker/install-deps.sh /usr/local/bin/install-deps.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/install-deps.sh
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD bash -c 'exec 6<>/dev/tcp/127.0.0.1/22'
 

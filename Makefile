@@ -25,19 +25,17 @@ run:
 # avoids racing it and blocks until any in-flight startup install completes —
 # run `make galaxy` after `make up` to guarantee content is ready.
 galaxy:
-	docker exec -i ansible-controller sh -c 'mkdir -p /configs/.galaxy && flock /configs/.galaxy/.install.lock ansible-galaxy install -r /configs/requirements.yml --roles-path /configs/.galaxy/roles'
-	docker exec -i ansible-controller sh -c 'mkdir -p /configs/.galaxy && flock /configs/.galaxy/.install.lock ansible-galaxy collection install -r /configs/requirements.yml -p /configs/.galaxy/collections'
+	@docker exec -i ansible-controller sh -s -- galaxy < docker/install-deps.sh
 
 # Install extra Python packages declared in configs/pip-requirements.txt.
 # Shares a lock with the startup auto-install, so it also waits for an
 # in-flight startup install to finish.
 pip:
-	docker exec -i ansible-controller sh -c 'flock /configs/.pip-install.lock pip3 install --no-cache-dir --break-system-packages -r /configs/pip-requirements.txt'
+	@docker exec -i ansible-controller sh -s -- pip < docker/install-deps.sh
 
 # Force re-install / update Galaxy content to the versions in requirements.yml
 galaxy-force:
-	docker exec -i ansible-controller sh -c 'mkdir -p /configs/.galaxy && flock /configs/.galaxy/.install.lock ansible-galaxy install -r /configs/requirements.yml --roles-path /configs/.galaxy/roles --force'
-	docker exec -i ansible-controller sh -c 'mkdir -p /configs/.galaxy && flock /configs/.galaxy/.install.lock ansible-galaxy collection install -r /configs/requirements.yml -p /configs/.galaxy/collections --force'
+	@docker exec -i ansible-controller sh -s -- galaxy --force < docker/install-deps.sh
 
 # Lint playbooks with ansible-lint (baked into the image).
 # Runs from /configs/playbooks so a .ansible-lint config there is discovered.
@@ -95,6 +93,14 @@ mesh-run:
 		--playbook /configs/playbooks/$(PLAYBOOK) \
 		--inventory /configs/$(or $(INVENTORY),$(MESH_INVENTORY)) \
 		$(if $(SSH_KEY),--ssh-key $(SSH_KEY),) $(if $(WAIT),--wait $(WAIT),)
+
+# Is this controller ready, and configured the way you think it is? Reports the
+# background dependency installs (which a play dispatched right after `make up`
+# can outrun), managed-host key verification, the Vault password, the inventory
+# and target key permissions. Piped in, so it works against a published image
+# without rebuilding.  make preflight [STRICT=1]
+preflight:
+	@docker exec -i ansible-controller sh -s -- $(if $(STRICT),--strict,) < docker/preflight.sh
 
 # Recover a job whose results stream broke after submit (status
 # results-incomplete): re-attach to its still-tracked unit, record the real rc,
